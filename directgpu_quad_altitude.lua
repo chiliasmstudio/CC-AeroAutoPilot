@@ -126,6 +126,11 @@ scanQuadTurtles()
 
 local outputSides = {"bottom", "top", "left", "right", "back"}
 
+local masterModem = peripheral.find("modem")
+if masterModem then
+    pcall(function() masterModem.open(101) end)
+end
+
 local function outputToEngine(node, signal)
     if not node or not node.p then return end
     signal = math.max(0, math.min(15, math.floor(signal + 0.5)))
@@ -149,10 +154,26 @@ local function applyQuadThrust(baseThrust, deltaAlt, deltaPitch, deltaRoll)
     engineOutputs.BL = math.max(0, math.min(15, math.floor(outBL + 0.5)))
     engineOutputs.BR = math.max(0, math.min(15, math.floor(outBR + 0.5)))
 
+    -- 1. 雙重輸出 A：透過有線網路向 Turtle/Relay 周邊呼叫
     outputToEngine(engines.FL, engineOutputs.FL)
     outputToEngine(engines.FR, engineOutputs.FR)
     outputToEngine(engines.BL, engineOutputs.BL)
     outputToEngine(engines.BR, engineOutputs.BR)
+
+    -- 2. 雙重輸出 B：透過 Modem 廣播 (頻道 100) 給運行 turtle_startup 的烏龜
+    if not masterModem then
+        masterModem = peripheral.find("modem")
+    end
+    if masterModem then
+        pcall(function()
+            masterModem.transmit(100, 101, {
+                FL = engineOutputs.FL,
+                FR = engineOutputs.FR,
+                BL = engineOutputs.BL,
+                BR = engineOutputs.BR
+            })
+        end)
+    end
 end
 
 -- ========================================================

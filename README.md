@@ -47,14 +47,35 @@
 
 ## ⚙️ 快速安裝與使用步驟
 
-### 步驟 1：放置與命名 4 隻烏龜
+### 步驟 1：放置與配置 4 隻烏龜 (執行 startup.lua)
 1. 在飛艇四個角落的升降動力機構（變速箱/離合器）正上方或側面，各放置 1 隻普通 Turtle。
-2. 進入每隻烏龜的終端機，為牠們打上位置標籤（設定一次即可，之後無需再開機）：
-   * **左前烏龜**：輸入 `label set FL`
-   * **右前烏龜**：輸入 `label set FR`
-   * **左後烏龜**：輸入 `label set BL`
-   * **右後烏龜**：輸入 `label set BR`
-3. 在每隻烏龜側面貼上 **Wired Modem**，並**右鍵點擊數據機**（周圍亮起紅圈代表已聯網）。
+2. 在每隻烏龜側面貼上 **Wired Modem**，並**右鍵點擊數據機**（周圍亮起紅圈代表已聯網）。
+3. 進入每隻烏龜的終端機，為牠們打上位置標籤並下載/建立 `startup.lua`：
+   * **左前烏龜**：
+     ```bash
+     label set FL
+     edit startup.lua   <-- 將本專案的 turtle_startup.lua 貼入儲存
+     reboot
+     ```
+   * **右前烏龜**：
+     ```bash
+     label set FR
+     edit startup.lua   <-- 貼入 turtle_startup.lua
+     reboot
+     ```
+   * **左後烏龜**：
+     ```bash
+     label set BL
+     edit startup.lua   <-- 貼入 turtle_startup.lua
+     reboot
+     ```
+   * **右後烏龜**：
+     ```bash
+     label set BR
+     edit startup.lua   <-- 貼入 turtle_startup.lua
+     reboot
+     ```
+   *(註：烏龜啟動後會顯示當前角色與推力，開機後永不需再觸碰！)*
 
 ### 步驟 2：連接網路纜線
 * 使用 **Networking Cable** 將 4 隻烏龜的 Wired Modem 全部拉線連接到駕駛艙的 **主電腦 (Advanced Computer)**。
