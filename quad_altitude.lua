@@ -203,7 +203,11 @@ local state = {
     baseThrottle = 7,
     autoLevel = true,
     statusMsg = "System Ready",
-    stableTimer = 0      -- 穩定計時器 (秒)
+    stableTimer = 0,     -- 穩定計時器 (秒)
+    calibStartAlt = 0,   -- 校正啟動高度
+    calibTargetAlt = 0,  -- 校正目標高度 (啟動高度 + 30m)
+    calibPhase = "RAMP", -- "RAMP" (緩慢加力起飛), "STABILIZE" (保持+30m定高自穩)
+    calibThrottle = 1.0  -- 校正時微調浮點油門
 }
 
 local altPID   = PID.new(0.6, 0.05, 0.8, -8, 8)
@@ -325,13 +329,18 @@ local function drawQuadUI()
     end)
     addButton(5 + bW2*3, bY2, bW2, 2, "CALIBRATE", "a", "0", function()
         scanQuadTurtles()
-        state.targetAlt = 200.0 -- 校準高度鎖定 200m
+        local cur = altiSensor and altiSensor.getHeight() or 100
+        state.calibStartAlt = cur
+        state.calibTargetAlt = cur + 30.0 -- 上升超過 30m 即鎖定高度自穩
+        state.calibPhase = "RAMP"
+        state.calibThrottle = 1.0
+        state.baseThrottle = 1
         state.mode = "CALIBRATING"
         state.stableTimer = 0
         altPID:reset()
         pitchPID:reset()
         rollPID:reset()
-        state.statusMsg = "Auto-calibrating to 200m..."
+        state.statusMsg = "Calib: Gently ramping up thrust..."
     end)
 
     local bY3 = 18
@@ -380,7 +389,7 @@ local function flightControlLoop()
         local angles = (gimbalSensor and gimbalSensor.getAngles()) or {0, 0}
         local currPitch, currRoll = angles[1] or 0, angles[2] or 0
 
-        if state.mode == "HOLD_ALT" or state.mode == "CALIBRATING" then
+        if state.mode == "HOLD_ALT" then
             local altError = state.targetAlt - currAlt
             local deltaAlt = altPID:update(altError)
 
@@ -393,37 +402,71 @@ local function flightControlLoop()
 
             applyQuadThrust(state.baseThrottle, deltaAlt, deltaPitch, deltaRoll)
 
-            -- 智慧校準判定: 在 200m 維持水平穩定
-            if state.mode == "CALIBRATING" then
+        elseif state.mode == "CALIBRATING" then
+            -- 姿態水平微調 (隨時保持飛艇平衡)
+            local deltaPitch = 0
+            local deltaRoll = 0
+            if state.autoLevel and gimbalSensor then
+                deltaPitch = pitchPID:update(-currPitch)
+                deltaRoll  = rollPID:update(-currRoll)
+            end
+
+            local climbDist = currAlt - state.calibStartAlt
+
+            if state.calibPhase == "RAMP" then
+                -- 階段 1: 緩慢增加推力功率 (每 0.5s 增加 0.1 檔位)
+                state.calibThrottle = math.min(15.0, state.calibThrottle + 0.01)
+                state.baseThrottle = math.floor(state.calibThrottle + 0.5)
+
+                -- 輸出四軸推力 (此時不加 deltaAlt，純靠平穩緩慢加力)
+                applyQuadThrust(state.baseThrottle, 0, deltaPitch, deltaRoll)
+
+                state.statusMsg = string.format("Ramping Power: %2d/15 (+%.1fm)", state.baseThrottle, climbDist)
+
+                -- 判定起飛上升超過 30m: 立即停止提高推力，切入定高自穩判定階段！
+                if climbDist >= 30.0 or (climbDist >= 2.0 and currVspeed > 1.2) then
+                    state.calibPhase = "STABILIZE"
+                    state.targetAlt = currAlt -- 鎖定當前高度 (不再往上衝)
+                    state.stableTimer = 0
+                    altPID:reset()
+                    state.statusMsg = string.format("Lift-off detected! Holding at %.1fm", currAlt)
+                end
+
+            elseif state.calibPhase == "STABILIZE" then
+                -- 階段 2: 保持在當前定高 (不再繼續往上衝)，PID 介入維持水平與懸停
+                local altError = state.targetAlt - currAlt
+                local deltaAlt = altPID:update(altError)
+
+                applyQuadThrust(state.baseThrottle, deltaAlt, deltaPitch, deltaRoll)
+
                 local altDiff = math.abs(altError)
                 local vDiff = math.abs(currVspeed)
                 local attDiff = math.max(math.abs(currPitch), math.abs(currRoll))
 
-                -- 判定標準: 高度誤差 < 0.8m, 垂直速度 < 0.2m/s, 姿態傾斜 < 1.5°
+                -- 穩定標準: 高度誤差 < 0.8m, 垂直速度 < 0.2m/s, 姿態傾斜 < 1.5°
                 if altDiff < 0.8 and vDiff < 0.2 and attDiff < 1.5 then
                     state.stableTimer = state.stableTimer + 0.05
-                    state.statusMsg = string.format("Stabilizing at 200m... (%.1f/5.0s)", state.stableTimer)
-                    
-                    -- 連續穩定 5 秒，宣告校準成功！
+                    state.statusMsg = string.format("Holding & Stabilizing... (%.1f/5.0s)", state.stableTimer)
+
                     if state.stableTimer >= 5.0 then
-                        -- 自動以當前平均推力作為基準懸停推力
+                        -- 連續 5 秒平穩懸停，鎖定平均推力作為基準檔位！
                         local avgThrust = (engineOutputs.FL + engineOutputs.FR + engineOutputs.BL + engineOutputs.BR) / 4
                         state.baseThrottle = math.max(1, math.min(15, math.floor(avgThrust + 0.5)))
                         state.mode = "HOLD_ALT"
-                        state.statusMsg = string.format("Calibration Done! Base: %d", state.baseThrottle)
+                        state.statusMsg = string.format("Calibrated! Hover Base: %d", state.baseThrottle)
                     end
                 else
-                    -- 若尚未穩定，慢速自動調整基準推力幫助爬升或下降
                     state.stableTimer = 0
-                    if altError > 2.0 and state.baseThrottle < 14 and currVspeed < 0.5 then
+                    -- 若微幅掉高或過衝，小幅度修正基準
+                    if altError > 1.5 and state.baseThrottle < 14 and currVspeed < 0.3 then
                         state.baseThrottle = state.baseThrottle + 0.01
-                    elseif altError < -2.0 and state.baseThrottle > 1 and currVspeed > -0.5 then
+                    elseif altError < -1.5 and state.baseThrottle > 1 and currVspeed > -0.3 then
                         state.baseThrottle = state.baseThrottle - 0.01
                     end
-                    state.statusMsg = string.format("Reaching 200m (Current: %.1fm)", currAlt)
+                    state.statusMsg = string.format("Stabilizing at %.1fm (V: %+.1f)", state.targetAlt, currVspeed)
                 end
             end
-            
+
         elseif state.mode == "IDLE" then
             applyQuadThrust(0, 0, 0, 0)
         end

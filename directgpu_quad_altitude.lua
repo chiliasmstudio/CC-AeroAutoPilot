@@ -184,8 +184,12 @@ local state = {
     targetAlt = 200.0,   -- 預設目標 200m
     baseThrottle = 7,
     autoLevel = true,
-    statusMsg = "DirectGPU Quad Engine Ready",
-    stableTimer = 0
+    statusMsg = "System Ready",
+    stableTimer = 0,     -- 穩定計時器 (秒)
+    calibStartAlt = 0,   -- 校正啟動高度
+    calibTargetAlt = 0,  -- 校正目標高度 (啟動高度 + 30m)
+    calibPhase = "RAMP", -- "RAMP" (緩慢加力起飛), "STABILIZE" (保持+30m定高自穩)
+    calibThrottle = 1.0  -- 校正時微調浮點油門
 }
 
 local altPID   = PID.new(0.6, 0.05, 0.8, -8, 8)
@@ -293,13 +297,18 @@ local function drawDirectGPU_UI()
     end)
     addButton(23 + btnW2*3, btnY2, btnW2, btnH1, "CALIBRATE", {120, 60, 160}, {255, 255, 255}, function()
         scanQuadTurtles()
-        state.targetAlt = 200.0
+        local cur = altiSensor and altiSensor.getHeight() or 100
+        state.calibStartAlt = cur
+        state.calibTargetAlt = cur + 30.0
+        state.calibPhase = "RAMP"
+        state.calibThrottle = 1.0
+        state.baseThrottle = 1
         state.mode = "CALIBRATING"
         state.stableTimer = 0
         altPID:reset()
         pitchPID:reset()
         rollPID:reset()
-        state.statusMsg = "Auto-calibrating to 200m..."
+        state.statusMsg = "Calib: Gently ramping up thrust..."
     end)
 
     local btnY3 = 194
@@ -350,7 +359,7 @@ local function flightControlLoop()
         local angles = (gimbalSensor and gimbalSensor.getAngles()) or {0, 0}
         local currPitch, currRoll = angles[1] or 0, angles[2] or 0
 
-        if state.mode == "HOLD_ALT" or state.mode == "CALIBRATING" then
+        if state.mode == "HOLD_ALT" then
             local altError = state.targetAlt - currAlt
             local deltaAlt = altPID:update(altError)
 
@@ -363,29 +372,60 @@ local function flightControlLoop()
 
             applyQuadThrust(state.baseThrottle, deltaAlt, deltaPitch, deltaRoll)
 
-            if state.mode == "CALIBRATING" then
+        elseif state.mode == "CALIBRATING" then
+            local deltaPitch = 0
+            local deltaRoll = 0
+            if state.autoLevel and gimbalSensor then
+                deltaPitch = pitchPID:update(-currPitch)
+                deltaRoll  = rollPID:update(-currRoll)
+            end
+
+            local climbDist = currAlt - state.calibStartAlt
+
+            if state.calibPhase == "RAMP" then
+                state.calibThrottle = math.min(15.0, state.calibThrottle + 0.01)
+                state.baseThrottle = math.floor(state.calibThrottle + 0.5)
+
+                applyQuadThrust(state.baseThrottle, 0, deltaPitch, deltaRoll)
+
+                state.statusMsg = string.format("Ramping Power: %2d/15 (+%.1fm)", state.baseThrottle, climbDist)
+
+                if climbDist >= 30.0 or (climbDist >= 2.0 and currVspeed > 1.2) then
+                    state.calibPhase = "STABILIZE"
+                    state.targetAlt = currAlt
+                    state.stableTimer = 0
+                    altPID:reset()
+                    state.statusMsg = string.format("Lift-off detected! Holding at %.1fm", currAlt)
+                end
+
+            elseif state.calibPhase == "STABILIZE" then
+                local altError = state.targetAlt - currAlt
+                local deltaAlt = altPID:update(altError)
+
+                applyQuadThrust(state.baseThrottle, deltaAlt, deltaPitch, deltaRoll)
+
                 local altDiff = math.abs(altError)
                 local vDiff = math.abs(currVspeed)
                 local attDiff = math.max(math.abs(currPitch), math.abs(currRoll))
 
                 if altDiff < 0.8 and vDiff < 0.2 and attDiff < 1.5 then
                     state.stableTimer = state.stableTimer + 0.05
-                    state.statusMsg = string.format("Stabilizing at 200m (%.1f/5.0s)", state.stableTimer)
+                    state.statusMsg = string.format("Holding & Stabilizing (%.1f/5.0s)", state.stableTimer)
                     
                     if state.stableTimer >= 5.0 then
                         local avgThrust = (engineOutputs.FL + engineOutputs.FR + engineOutputs.BL + engineOutputs.BR) / 4
                         state.baseThrottle = math.max(1, math.min(15, math.floor(avgThrust + 0.5)))
                         state.mode = "HOLD_ALT"
-                        state.statusMsg = string.format("Calibration Done! Base: %d", state.baseThrottle)
+                        state.statusMsg = string.format("Calibrated! Hover Base: %d", state.baseThrottle)
                     end
                 else
                     state.stableTimer = 0
-                    if altError > 2.0 and state.baseThrottle < 14 and currVspeed < 0.5 then
+                    if altError > 1.5 and state.baseThrottle < 14 and currVspeed < 0.3 then
                         state.baseThrottle = state.baseThrottle + 0.01
-                    elseif altError < -2.0 and state.baseThrottle > 1 and currVspeed > -0.5 then
+                    elseif altError < -1.5 and state.baseThrottle > 1 and currVspeed > -0.3 then
                         state.baseThrottle = state.baseThrottle - 0.01
                     end
-                    state.statusMsg = string.format("Reaching 200m (Current: %.1fm)", currAlt)
+                    state.statusMsg = string.format("Stabilizing at %.1fm (V: %+.1f)", state.targetAlt, currVspeed)
                 end
             end
             
