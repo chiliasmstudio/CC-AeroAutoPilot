@@ -471,12 +471,36 @@ local function renderLoop()
 end
 
 local function touchEventLoop()
-    while true do
-        local event, id, x, y = os.pullEvent()
-        if event == "directgpu_touch" or event == "monitor_touch" or event == "mouse_click" then
-            local clickX, clickY = x, y
-            if event == "mouse_click" then clickX, clickY = id, x end
+    -- 取得 Monitor 字元尺寸以計算座標縮放比例
+    local mon = peripheral.find("monitor")
+    local monCharW, monCharH = 1, 1
+    if mon then
+        monCharW, monCharH = mon.getSize()
+    end
 
+    while true do
+        local event, p1, p2, p3 = os.pullEvent()
+        local clickX, clickY = nil, nil
+
+        if event == "directgpu_touch" then
+            -- directgpu_touch 事件: p1=displayId, p2=pixelX, p3=pixelY
+            clickX = p2
+            clickY = p3
+        elseif event == "monitor_touch" then
+            -- monitor_touch 事件: p1=side/name, p2=charX, p3=charY
+            -- 換算為 DirectGPU 的像素座標 (Pixel Coordinates)
+            if not mon then mon = peripheral.find("monitor") end
+            if mon then monCharW, monCharH = mon.getSize() end
+            clickX = math.floor(((p2 - 0.5) / monCharW) * screenW)
+            clickY = math.floor(((p3 - 0.5) / monCharH) * screenH)
+        elseif event == "mouse_click" then
+            -- 終端機滑鼠點擊 (以防直接在電腦內部點擊)
+            local termW, termH = term.getSize()
+            clickX = math.floor(((p2 - 0.5) / termW) * screenW)
+            clickY = math.floor(((p3 - 0.5) / termH) * screenH)
+        end
+
+        if clickX and clickY then
             for _, btn in ipairs(buttons) do
                 if clickX >= btn.x and clickX < btn.x + btn.w and
                    clickY >= btn.y and clickY < btn.y + btn.h then
