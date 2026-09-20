@@ -1,32 +1,28 @@
-# 🚀 Create: Avionics 四軸有線飛控與高度保持系統 (Quad-Engine Avionics)
+# 🚀 Create: Avionics 四軸有線飛控系統 (Quad-Engine Avionics)
 
-本系統專為 **Minecraft (Create: Aeronautics / Simulated + CC: Tweaked + Create: Avionics)** 設計。
-採用 **「駕駛艙主電腦單一大腦 + 4 隻純硬體有線烏龜 (免跑程式)」** 的高可靠性四軸混控架構。
-
----
-
-## 🌟 核心特點
-
-1. **四角獨立動力混控 (Quad-Mixer Matrix)**：
-   * 支援 **左前 (FL)**、**右前 (FR)**、**左後 (BL)**、**右後 (BR)** 獨立差動輸出。
-   * 同步實現 **「定高升降 + 俯仰平衡 (Pitch) + 滾轉平衡 (Roll)」** 三合一閉環穩定。
-2. **烏龜 100% 免開機、免程式**：
-   * 4 隻烏龜純粹作為實體紅石中繼輸出端口，所有 PID 算法與儀表全由主電腦集中運算。
-3. **原生航空觸控螢幕 GUI (Advanced Monitor)**：
-   * 不依賴 DirectGPU 模組，100% 原生相容。
-   * **絕不搶奪玩家滑鼠滾輪**（自由切換快捷欄），右鍵點擊螢幕即時觸控。
-4. **一鍵自動推力校準 (`CALIBRATE`)**：
-   * 自動同步測試四角引擎推力，快速鎖定飛艇懸停所需的基準紅石檔位。
+本專案專為 **Minecraft (Create: Aeronautics / Simulated + CC: Tweaked + Create: Avionics)** 設計。
+採用 **「駕駛艙主電腦單一大腦 + 4 隻純硬體有線烏龜 (FL, FR, BL, BR 免跑程式)」** 的高可靠性四軸混控架構。
 
 ---
 
-## 🛠️ 硬體架構與佈線指南
+## 🌟 雙版本飛控程式 (最新發布)
+
+本倉庫精簡保留兩個最完善的四軸飛控版本：
+
+| 程式檔案 | 顯示技術 | 特色與推薦情境 |
+| :--- | :--- | :--- |
+| **[`quad_altitude.lua`](quad_altitude.lua)** | **CC 原生 Advanced Monitor** | **【主力推薦】**<br>• 100% 原生相容，自帶深色航空調色盤。<br>• **絕不干擾玩家滑鼠滾輪**（自由切換快捷欄）。<br>• 右鍵點擊螢幕按鈕即時觸控。 |
+| **[`directgpu_quad_altitude.lua`](directgpu_quad_altitude.lua)** | **CC-DirectGPU-Mod** | **【高畫質全彩版】**<br>• 24-bit True RGB 真全彩渲染。<br>• 圓形高度儀表盤與平滑動態推力條。 |
+
+---
+
+## 🛠️ 硬體架構與四角佈局
 
 ```
                     ┌────────────────────────────────────────┐
                     │       駕駛艙 Advanced Computer         │
-                    │  * 運行 quad_altitude.lua (單一主控)   │
-                    │  * 連接 Advanced Monitor (觸控儀表)    │
+                    │  * 運行飛控主程式 (二選一)             │
+                    │  * 連接 Monitor 螢幕 (觸控儀表)        │
                     │  * 連接 Altitude Sensor (高度計)       │
                     │  * 連接 Gimbal Sensor (陀螺儀 - 可選)  │
                     └───────────────────┬────────────────────┘
@@ -64,11 +60,15 @@
 * 使用 **Networking Cable** 將 4 隻烏龜的 Wired Modem 全部拉線連接到駕駛艙的 **主電腦 (Advanced Computer)**。
 
 ### 步驟 3：啟動飛控系統
-1. 在主電腦下載並運行飛控主程式：
-   ```bash
-   quad_altitude
-   ```
-2. 螢幕將立即點亮全彩深色航空儀表盤！
+在駕駛艙主電腦執行以下任一程式：
+* **原生螢幕版（推薦）**：
+  ```bash
+  quad_altitude
+  ```
+* **DirectGPU 全彩版**：
+  ```bash
+  directgpu_quad_altitude
+  ```
 
 ---
 
@@ -97,12 +97,3 @@
 * **`BASE +1` / `BASE -1`**：手動微調四角基礎推力。
 * **`HOLD ALT`**：啟動四軸 PID 高度鎖定與姿態自穩平衡。
 * **`STOP / IDLE`**：緊急停機，立即關閉四角引擎推力（紅石歸 0）。
-
----
-
-## 📁 專案檔案清單
-
-* **[quad_altitude.lua](quad_altitude.lua)**：四軸有線飛控主程式（推薦使用）。
-* **[native_gui_altitude.lua](native_gui_altitude.lua)**：單引擎/通用有線飛控程式。
-* **[turtle_altitude.lua](turtle_altitude.lua)**：無線烏龜從機程式（備用）。
-* **[directgpu-1.0.24-neoforge-1.21.1.jar](directgpu-1.0.24-neoforge-1.21.1.jar)**：已修復 5m 滾輪互動距離限制的 DirectGPU 模組。
