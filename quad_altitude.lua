@@ -6,7 +6,7 @@
     - 主電腦 (Advanced Computer) 運行本程式，連接 Advanced Monitor。
     - 4 隻普通 Turtle 透過 Wired Modem + 網路纜線 (Cable) 連接到主電腦。
     - 4 隻烏龜【不需要開機、不跑任何程式】，由主電腦直接遠程控制紅石輸出！
-    - 4 隻烏龜在遊戲中設定 Label 標籤: "FL", "FR", "BL", "BR" (或在程式中一鍵辨識配置)。
+    - 4 隻烏龜在遊戲中設定 Label 標籤: "FL", "FR", "BL", "BR"。
     - 飛艇上安裝 Altitude Sensor (高度計) 與 Gimbal Sensor (姿態陀螺儀 - 可選自穩)。
 --]]
 
@@ -80,6 +80,15 @@ end
 local altiSensor   = peripheral.find("altitude_sensor")
 local gimbalSensor = peripheral.find("gimbal_sensor")
 
+-- 安全 blit 輔助函式 (自動確保文字、前景色、背景色長度嚴格一致)
+local function safeBlit(x, y, text, fgChar, bgChar)
+    display.setCursorPos(x, y)
+    local len = #text
+    local fg = (type(fgChar) == "string" and #fgChar == len) and fgChar or string.rep(tostring(fgChar or "0"), len)
+    local bg = (type(bgChar) == "string" and #bgChar == len) and bgChar or string.rep(tostring(bgChar or "f"), len)
+    display.blit(text, fg, bg)
+end
+
 -- ========================================================
 -- 3. 四角烏龜引擎節點掃描與辨識 (FL, FR, BL, BR)
 -- ========================================================
@@ -120,7 +129,6 @@ local function scanQuadTurtles()
         end
     end
 
-    -- 若標籤未設置，自動將未分配的依序填入 (容錯)
     local slots = {"FL", "FR", "BL", "BR"}
     local uIdx = 1
     for _, slot in ipairs(slots) do
@@ -142,14 +150,12 @@ local function outputToEngine(node, signal)
     if not node or not node.p then return end
     signal = math.max(0, math.min(15, math.floor(signal + 0.5)))
     
-    -- 向所有可能的面輸出紅石 (包含 bottom, top, left, right, front, back)
     for _, side in ipairs({"bottom", "top", "left", "right", "front", "back"}) do
         pcall(function() node.p.setAnalogOutput(side, signal) end)
     end
 end
 
 local function applyQuadThrust(baseThrust, deltaAlt, deltaPitch, deltaRoll)
-    -- 四軸混控公式
     local outFL = baseThrust + deltaAlt - deltaPitch - deltaRoll
     local outFR = baseThrust + deltaAlt - deltaPitch + deltaRoll
     local outBL = baseThrust + deltaAlt + deltaPitch - deltaRoll
@@ -173,13 +179,13 @@ local state = {
     mode = "IDLE",       -- "IDLE", "HOLD_ALT", "CALIBRATING"
     targetAlt = 120.0,
     baseThrottle = 7,
-    autoLevel = true,    -- 自動水平姿態配平
+    autoLevel = true,
     statusMsg = "System Ready"
 }
 
-local altPID   = PID.new(0.6, 0.05, 0.8, -8, 8)   -- 高度 PID
-local pitchPID = PID.new(0.08, 0.0, 0.04, -4, 4)  -- 俯仰平衡 PID
-local rollPID  = PID.new(0.08, 0.0, 0.04, -4, 4)  -- 滾轉平衡 PID
+local altPID   = PID.new(0.6, 0.05, 0.8, -8, 8)
+local pitchPID = PID.new(0.08, 0.0, 0.04, -4, 4)
+local rollPID  = PID.new(0.08, 0.0, 0.04, -4, 4)
 
 local buttons = {}
 
@@ -200,11 +206,11 @@ local function drawQuadUI()
     display.clear()
 
     -- 1. 標題列
-    display.setCursorPos(1, 1)
     local titleText = "  QUAD-ENGINE AVIONICS MASTER  "
     local padL = math.floor((w - #titleText) / 2)
     local padR = w - #titleText - padL
-    display.blit(string.rep(" ", padL) .. titleText .. string.rep(" ", padR), string.rep("0", w), string.rep("b", w))
+    local header = string.rep(" ", padL) .. titleText .. string.rep(" ", padR)
+    safeBlit(1, 1, header, "0", "b")
 
     local currAlt = altiSensor and altiSensor.getHeight() or 0
     local currVspeed = altiSensor and altiSensor.getVerticalSpeed() or 0
@@ -214,59 +220,52 @@ local function drawQuadUI()
     -- 2. 左側高度與姿態卡片
     local cardW = math.floor(w / 2) - 2
     for y = 3, 8 do
-        display.setCursorPos(2, y)
-        display.blit(string.rep(" ", cardW), string.rep("0", cardW), string.rep("8", cardW))
+        safeBlit(2, y, string.rep(" ", cardW), "0", "8")
     end
-    display.setCursorPos(3, 3)
-    display.blit("ALTITUDE & ATTITUDE", "999999999999999999", "888888888888888888")
+    safeBlit(3, 3, "ALTITUDE & ATTITUDE", "9", "8")
     
     local altStr = string.format("ALT: %6.1f m", currAlt)
-    display.setCursorPos(3, 5)
-    display.blit(altStr, string.rep("0", #altStr), string.rep("8", #altStr))
+    safeBlit(3, 5, altStr, "0", "8")
     
     local vspeedStr = string.format("V.SPD: %+5.1f m/s", currVspeed)
-    display.setCursorPos(3, 6)
-    display.blit(vspeedStr, string.rep("4", #vspeedStr), string.rep("8", #vspeedStr))
+    safeBlit(3, 6, vspeedStr, "4", "8")
 
     local attStr = string.format("P:%+4.1f* R:%+4.1f*", currPitch, currRoll)
-    display.setCursorPos(3, 7)
-    display.blit(attStr, string.rep("3", #attStr), string.rep("8", #attStr))
+    safeBlit(3, 7, attStr, "3", "8")
 
-    -- 3. 右側四軸引擎狀態卡片 (Quad Engine Status Card)
+    -- 3. 右側四軸引擎狀態卡片
     local rightX = cardW + 4
     local rightW = w - rightX
     for y = 3, 8 do
-        display.setCursorPos(rightX, y)
-        display.blit(string.rep(" ", rightW), string.rep("0", rightW), string.rep("8", rightW))
+        safeBlit(rightX, y, string.rep(" ", rightW), "0", "8")
     end
-    display.setCursorPos(rightX + 1, 3)
-    display.blit("QUAD ENGINES (0-15)", "99999999999999999", "88888888888888888")
+    safeBlit(rightX + 1, 3, "QUAD ENGINES (0-15)", "9", "8")
 
-    -- 繪製 FL, FR, BL, BR 推力狀態
     local function getStatusCol(node) return node and "5" or "e" end
     
-    display.setCursorPos(rightX + 1, 5)
     local flText = string.format("FL:%2d", engineOutputs.FL)
     local frText = string.format("FR:%2d", engineOutputs.FR)
-    display.blit(flText .. "  " .. frText, getStatusCol(engines.FL):rep(5) .. "00" .. getStatusCol(engines.FR):rep(5), "888888888888")
+    local row1 = flText .. "  " .. frText
+    local row1Fg = string.rep(getStatusCol(engines.FL), 5) .. "00" .. string.rep(getStatusCol(engines.FR), 5)
+    safeBlit(rightX + 1, 5, row1, row1Fg, "8")
 
-    display.setCursorPos(rightX + 1, 6)
     local blText = string.format("BL:%2d", engineOutputs.BL)
     local brText = string.format("BR:%2d", engineOutputs.BR)
-    display.blit(blText .. "  " .. brText, getStatusCol(engines.BL):rep(5) .. "00" .. getStatusCol(engines.BR):rep(5), "888888888888")
+    local row2 = blText .. "  " .. brText
+    local row2Fg = string.rep(getStatusCol(engines.BL), 5) .. "00" .. string.rep(getStatusCol(engines.BR), 5)
+    safeBlit(rightX + 1, 6, row2, row2Fg, "8")
 
-    display.setCursorPos(rightX + 1, 7)
     local modeFg = (state.mode == "HOLD_ALT") and "5" or "e"
-    display.blit(string.format("MODE: %-6s BASE:%2d", state.mode, state.baseThrottle), string.rep(modeFg, 12) .. "00000000", string.rep("8", rightW - 1))
+    local modeRow = string.format("MODE:%-5s B:%2d", state.mode:sub(1,5), state.baseThrottle)
+    safeBlit(rightX + 1, 7, modeRow, modeFg, "8")
 
     -- 4. 狀態訊息列
-    display.setCursorPos(2, 9)
-    display.blit(string.format("STATUS: %-30s", state.statusMsg), string.rep("0", w - 2), string.rep("f", w - 2))
+    local statusRow = string.format("STATUS: %-30s", state.statusMsg):sub(1, w - 2)
+    safeBlit(2, 9, statusRow, "0", "f")
 
     -- 5. 觸控按鈕
     buttons = {}
 
-    -- 第 1 排：高度加減按鈕
     local bY1 = 11
     local bW1 = math.floor((w - 5) / 4)
     addButton(2, bY1, bW1, 2, "+10m", "d", "0", function()
@@ -282,7 +281,6 @@ local function drawQuadUI()
         state.targetAlt = math.max(0, state.targetAlt - 10)
     end)
 
-    -- 第 2 排：基準推力 & 重新掃描/校準
     local bY2 = 14
     local bW2 = math.floor((w - 4) / 3)
     addButton(2, bY2, bW2, 2, "BASE +1", "3", "0", function()
@@ -296,7 +294,6 @@ local function drawQuadUI()
         state.mode = "CALIBRATING"
     end)
 
-    -- 第 3 排主按鈕：HOLD ALT / STOP
     local bY3 = 17
     local mainBW = math.floor((w - 3) / 2)
     local holdBg = (state.mode == "HOLD_ALT") and "5" or "d"
@@ -318,13 +315,11 @@ local function drawQuadUI()
 
     for _, btn in ipairs(buttons) do
         for dy = 0, btn.h - 1 do
-            display.setCursorPos(btn.x, btn.y + dy)
-            display.blit(string.rep(" ", btn.w), string.rep(btn.fg, btn.w), string.rep(btn.bg, btn.w))
+            safeBlit(btn.x, btn.y + dy, string.rep(" ", btn.w), btn.fg, btn.bg)
         end
         local tx = btn.x + math.floor((btn.w - #btn.text) / 2)
         local ty = btn.y + math.floor(btn.h / 2)
-        display.setCursorPos(tx, ty)
-        display.blit(btn.text, string.rep(btn.fg, #btn.text), string.rep(btn.bg, #btn.text))
+        safeBlit(tx, ty, btn.text, btn.fg, btn.bg)
     end
 end
 
@@ -338,17 +333,15 @@ local function flightControlLoop()
             local altError = state.targetAlt - currentAlt
             local deltaAlt = altPID:update(altError)
 
-            -- 姿態自穩計算 (Pitch & Roll 平衡)
             local deltaPitch = 0
             local deltaRoll = 0
             if state.autoLevel and gimbalSensor then
                 local angles = gimbalSensor.getAngles() or {0, 0}
                 local currPitch, currRoll = angles[1] or 0, angles[2] or 0
-                deltaPitch = pitchPID:update(-currPitch) -- 修正俯仰
-                deltaRoll  = rollPID:update(-currRoll)   -- 修正滾轉
+                deltaPitch = pitchPID:update(-currPitch)
+                deltaRoll  = rollPID:update(-currRoll)
             end
 
-            -- 混控輸出至四角烏龜
             applyQuadThrust(state.baseThrottle, deltaAlt, deltaPitch, deltaRoll)
             
         elseif state.mode == "CALIBRATING" then
