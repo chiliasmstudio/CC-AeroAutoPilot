@@ -124,13 +124,13 @@ end
 
 scanQuadTurtles()
 
-local allSides = {"bottom", "top", "left", "right", "front", "back"}
+local outputSides = {"bottom", "top", "left", "right", "back"}
 
 local function outputToEngine(node, signal)
     if not node or not node.p then return end
     signal = math.max(0, math.min(15, math.floor(signal + 0.5)))
     local digitalState = (signal > 0)
-    for _, side in ipairs(allSides) do
+    for _, side in ipairs(outputSides) do
         pcall(function()
             if node.p.setAnalogOutput then node.p.setAnalogOutput(side, signal) end
             if node.p.setOutput then node.p.setOutput(side, digitalState) end
@@ -312,7 +312,14 @@ end
 -- 6. 飛控閉環控制迴圈 (20Hz)
 -- ========================================================
 local function flightControlLoop()
+    local scanTicker = 0
     while true do
+        scanTicker = scanTicker + 1
+        if scanTicker >= 20 then
+            scanTicker = 0
+            scanQuadTurtles()
+        end
+
         local currAlt = altiSensor and altiSensor.getHeight() or 0
         local currVspeed = altiSensor and altiSensor.getVerticalSpeed() or 0
         local angles = (gimbalSensor and gimbalSensor.getAngles()) or {0, 0}
