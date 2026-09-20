@@ -1,2 +1,4 @@
-# Ignore cloned reference repo
+# Ignore cloned reference repos and compiled jars
 CreateAvionics/
+CC-DirectGPU-Mod/
+*.jar
