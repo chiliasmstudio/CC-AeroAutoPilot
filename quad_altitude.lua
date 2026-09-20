@@ -1,11 +1,11 @@
 --[[
     Create: Avionics & CC: Tweaked
-    Quad-Engine Wired Flight Controller (四軸有線飛控大腦 - 全向全紅石輸出升級版)
+    Quad-Engine Wired Flight Controller (四軸有線原生螢幕飛控大腦)
     
-    升級特性:
-    - 烏龜【六個面全向輸出】: bottom, top, left, right, front, back 同步輸出！
-    - 【雙協議輸出】: 同時發送 setAnalogOutput (類比紅石 0~15) 與 setOutput (數位開關紅石)。
-    - 自動檢測並支援 Wired Modem、Redstone Relay 以及 Turtle 本體。
+    智慧校準邏輯:
+    - 啟動 CALIBRATE 時，系統會自主爬升/下降並尋找平衡點。
+    - 目標鎖定在 Y = 200m，並啟動姿態自穩 PID (Pitch & Roll 平衡)。
+    - 當「高度誤差 < 0.5m、垂直速度 < 0.15m/s、水平角度誤差 < 1.0°」持續穩定維持 5 秒，自動鎖定基準推力並宣告校準完成！
 --]]
 
 -- ========================================================
@@ -63,16 +63,16 @@ if mon then
 end
 
 if display.setPaletteColor then
-    display.setPaletteColor(colors.black, 0x111622)      -- 深夜藍底色
-    display.setPaletteColor(colors.gray, 0x1c2438)       -- 面板卡片深灰藍
-    display.setPaletteColor(colors.lightGray, 0x5a6988)  -- 刻度與次要文字
-    display.setPaletteColor(colors.blue, 0x2266cc)       -- 導航主藍色
-    display.setPaletteColor(colors.cyan, 0x00d2ff)       -- 儀表亮青色
-    display.setPaletteColor(colors.lime, 0x2ed573)       -- 啟動與推力綠
-    display.setPaletteColor(colors.green, 0x1e824c)      -- 深綠按鈕
-    display.setPaletteColor(colors.yellow, 0xffa502)     -- 警告與高亮金黃
-    display.setPaletteColor(colors.red, 0xff4757)        -- 停機與警示紅
-    display.setPaletteColor(colors.white, 0xf1f2f6)      -- 銳利白文字
+    display.setPaletteColor(colors.black, 0x111622)
+    display.setPaletteColor(colors.gray, 0x1c2438)
+    display.setPaletteColor(colors.lightGray, 0x5a6988)
+    display.setPaletteColor(colors.blue, 0x2266cc)
+    display.setPaletteColor(colors.cyan, 0x00d2ff)
+    display.setPaletteColor(colors.lime, 0x2ed573)
+    display.setPaletteColor(colors.green, 0x1e824c)
+    display.setPaletteColor(colors.yellow, 0xffa502)
+    display.setPaletteColor(colors.red, 0xff4757)
+    display.setPaletteColor(colors.white, 0xf1f2f6)
 end
 
 local altiSensor   = peripheral.find("altitude_sensor")
@@ -87,14 +87,9 @@ local function safeBlit(x, y, text, fgChar, bgChar)
 end
 
 -- ========================================================
--- 3. 四角烏龜引擎節點掃描與辨識 (支援 FL, FL_xxx 等)
+-- 3. 四角烏龜引擎節點掃描與辨識 (FL, FR, BL, BR)
 -- ========================================================
-local engines = {
-    FL = nil, -- 左前
-    FR = nil, -- 右前
-    BL = nil, -- 左後
-    BR = nil  -- 右後
-}
+local engines = { FL = nil, FR = nil, BL = nil, BR = nil }
 
 local function matchPrefix(label, prefix)
     local u = string.upper(label)
@@ -143,7 +138,7 @@ end
 scanQuadTurtles()
 
 -- ========================================================
--- 4. 全向紅石與混控矩陣輸出 (Omni-Directional Redstone)
+-- 4. 全向六面紅石輸出與四軸混控
 -- ========================================================
 local engineOutputs = { FL = 0, FR = 0, BL = 0, BR = 0 }
 local allSides = {"bottom", "top", "left", "right", "front", "back"}
@@ -153,15 +148,10 @@ local function outputToEngine(node, signal)
     signal = math.max(0, math.min(15, math.floor(signal + 0.5)))
     local digitalState = (signal > 0)
     
-    -- 向 6 個面全向同步發送類比與數位紅石
     for _, side in ipairs(allSides) do
         pcall(function()
-            if node.p.setAnalogOutput then
-                node.p.setAnalogOutput(side, signal)
-            end
-            if node.p.setOutput then
-                node.p.setOutput(side, digitalState)
-            end
+            if node.p.setAnalogOutput then node.p.setAnalogOutput(side, signal) end
+            if node.p.setOutput then node.p.setOutput(side, digitalState) end
         end)
     end
 end
@@ -188,10 +178,11 @@ end
 -- ========================================================
 local state = {
     mode = "IDLE",       -- "IDLE", "HOLD_ALT", "CALIBRATING"
-    targetAlt = 120.0,
+    targetAlt = 200.0,   -- 預設目標高度 200m
     baseThrottle = 7,
     autoLevel = true,
-    statusMsg = "System Ready"
+    statusMsg = "System Ready",
+    stableTimer = 0      -- 穩定計時器 (秒)
 }
 
 local altPID   = PID.new(0.6, 0.05, 0.8, -8, 8)
@@ -209,7 +200,7 @@ local function addButton(x, y, w, h, text, bgBlit, fgBlit, action)
 end
 
 -- ========================================================
--- 6. 螢幕繪製函式 (顯示名稱與四軸狀態)
+-- 6. 螢幕繪製函式
 -- ========================================================
 local function drawQuadUI()
     local w, h = display.getSize()
@@ -244,11 +235,11 @@ local function drawQuadUI()
     local attStr = string.format("P:%+4.1f* R:%+4.1f*", currPitch, currRoll)
     safeBlit(3, 7, attStr, "3", "8")
     
-    local modeFg = (state.mode == "HOLD_ALT") and "5" or "e"
+    local modeFg = (state.mode == "HOLD_ALT") and "5" or (state.mode == "CALIBRATING" and "4" or "e")
     local modeRow = string.format("MODE:%-5s B:%2d", state.mode:sub(1,5), state.baseThrottle)
     safeBlit(3, 8, modeRow, modeFg, "8")
 
-    -- 3. 右側四軸烏龜名稱與推力卡片 (Quad Names & Thrust)
+    -- 3. 右側四軸烏龜名稱與推力卡片
     local rightX = cardW + 4
     local rightW = w - rightX
     for y = 3, 9 do
@@ -307,9 +298,15 @@ local function drawQuadUI()
     addButton(3 + bW2, bY2, bW2, 2, "BASE -1", "9", "0", function()
         state.baseThrottle = math.max(0, state.baseThrottle - 1)
     end)
-    addButton(4 + bW2*2, bY2, bW2, 2, "RE-SCAN", "a", "0", function()
+    addButton(4 + bW2*2, bY2, bW2, 2, "CALIBRATE", "a", "0", function()
         scanQuadTurtles()
-        state.statusMsg = "Re-scanned all 4 engines!"
+        state.targetAlt = 200.0 -- 校準高度鎖定 200m
+        state.mode = "CALIBRATING"
+        state.stableTimer = 0
+        altPID:reset()
+        pitchPID:reset()
+        rollPID:reset()
+        state.statusMsg = "Auto-calibrating to 200m..."
     end)
 
     local bY3 = 18
@@ -346,46 +343,54 @@ end
 -- ========================================================
 local function flightControlLoop()
     while true do
-        if state.mode == "HOLD_ALT" and altiSensor then
-            local currentAlt = altiSensor.getHeight()
-            local altError = state.targetAlt - currentAlt
+        local currAlt = altiSensor and altiSensor.getHeight() or 0
+        local currVspeed = altiSensor and altiSensor.getVerticalSpeed() or 0
+        local angles = (gimbalSensor and gimbalSensor.getAngles()) or {0, 0}
+        local currPitch, currRoll = angles[1] or 0, angles[2] or 0
+
+        if state.mode == "HOLD_ALT" or state.mode == "CALIBRATING" then
+            local altError = state.targetAlt - currAlt
             local deltaAlt = altPID:update(altError)
 
             local deltaPitch = 0
             local deltaRoll = 0
             if state.autoLevel and gimbalSensor then
-                local angles = gimbalSensor.getAngles() or {0, 0}
-                local currPitch, currRoll = angles[1] or 0, angles[2] or 0
                 deltaPitch = pitchPID:update(-currPitch)
                 deltaRoll  = rollPID:update(-currRoll)
             end
 
             applyQuadThrust(state.baseThrottle, deltaAlt, deltaPitch, deltaRoll)
-            
-        elseif state.mode == "CALIBRATING" then
-            state.statusMsg = "Calibrating 4 engines..."
-            drawQuadUI()
-            local bestSignal = 0
-            local minVspeed = 999
 
-            for sig = 0, 15 do
-                applyQuadThrust(sig, 0, 0, 0)
-                state.statusMsg = string.format("Testing Quad [%2d/15]", sig)
-                drawQuadUI()
-                sleep(1.0)
+            -- 智慧校準判定: 在 200m 維持水平穩定
+            if state.mode == "CALIBRATING" then
+                local altDiff = math.abs(altError)
+                local vDiff = math.abs(currVspeed)
+                local attDiff = math.max(math.abs(currPitch), math.abs(currRoll))
 
-                local vspeed = altiSensor and altiSensor.getVerticalSpeed() or 0
-                if math.abs(vspeed) < minVspeed then
-                    minVspeed = math.abs(vspeed)
-                    bestSignal = sig
+                -- 判定標準: 高度誤差 < 0.8m, 垂直速度 < 0.2m/s, 姿態傾斜 < 1.5°
+                if altDiff < 0.8 and vDiff < 0.2 and attDiff < 1.5 then
+                    state.stableTimer = state.stableTimer + 0.05
+                    state.statusMsg = string.format("Stabilizing at 200m... (%.1f/5.0s)", state.stableTimer)
+                    
+                    -- 連續穩定 5 秒，宣告校準成功！
+                    if state.stableTimer >= 5.0 then
+                        -- 自動以當前平均推力作為基準懸停推力
+                        local avgThrust = (engineOutputs.FL + engineOutputs.FR + engineOutputs.BL + engineOutputs.BR) / 4
+                        state.baseThrottle = math.max(1, math.min(15, math.floor(avgThrust + 0.5)))
+                        state.mode = "HOLD_ALT"
+                        state.statusMsg = string.format("Calibration Done! Base: %d", state.baseThrottle)
+                    end
+                else
+                    -- 若尚未穩定，慢速自動調整基準推力幫助爬升或下降
+                    state.stableTimer = 0
+                    if altError > 2.0 and state.baseThrottle < 14 and currVspeed < 0.5 then
+                        state.baseThrottle = state.baseThrottle + 0.01
+                    elseif altError < -2.0 and state.baseThrottle > 1 and currVspeed > -0.5 then
+                        state.baseThrottle = state.baseThrottle - 0.01
+                    end
+                    state.statusMsg = string.format("Reaching 200m (Current: %.1fm)", currAlt)
                 end
-                if vspeed > 0.3 and sig > 0 then break end
             end
-
-            state.baseThrottle = bestSignal
-            applyQuadThrust(bestSignal, 0, 0, 0)
-            state.mode = "HOLD_ALT"
-            state.statusMsg = string.format("Calib Done: %d", bestSignal)
             
         elseif state.mode == "IDLE" then
             applyQuadThrust(0, 0, 0, 0)

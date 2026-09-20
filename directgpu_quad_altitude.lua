@@ -1,12 +1,11 @@
 --[[
     Create: Avionics & CC: Tweaked + DirectGPU
-    DirectGPU Quad-Engine Wired Flight Controller (DirectGPU 四軸有線飛控大腦)
+    DirectGPU Quad-Engine Wired Flight Controller (DirectGPU 四軸有線全彩飛控大腦)
     
-    特色:
-    - 採用 DirectGPU 24-bit True RGB 全彩高解析度渲染 + 觸控互動。
-    - 四軸有線混控 (Quad-Mixer Matrix): 左前 (FL)、右前 (FR)、左後 (BL)、右後 (BR)。
-    - 烏龜【100% 免跑程式、免開機】，由主電腦直接遠程控制。
-    - 閉環高度 PID + 姿態自穩 (Pitch / Roll 平衡)。
+    智慧校準邏輯:
+    - 啟動 CALIBRATE 時，系統會自主爬升/下降並尋找平衡點。
+    - 目標鎖定在 Y = 200m，並啟動姿態自穩 PID (Pitch & Roll 平衡)。
+    - 當「高度誤差 < 0.5m、垂直速度 < 0.15m/s、水平角度誤差 < 1.0°」持續穩定維持 5 秒，自動鎖定基準推力並宣告校準完成！
 --]]
 
 -- ========================================================
@@ -79,6 +78,11 @@ local gimbalSensor = peripheral.find("gimbal_sensor")
 local engines = { FL = nil, FR = nil, BL = nil, BR = nil }
 local engineOutputs = { FL = 0, FR = 0, BL = 0, BR = 0 }
 
+local function matchPrefix(label, prefix)
+    local u = string.upper(label)
+    return u == prefix or u:sub(1, #prefix + 1) == (prefix .. "_") or u:sub(1, #prefix + 1) == (prefix .. "-") or u:sub(1, #prefix + 1) == (prefix .. " ")
+end
+
 local function scanQuadTurtles()
     engines.FL = nil
     engines.FR = nil
@@ -90,18 +94,17 @@ local function scanQuadTurtles()
 
     for _, name in ipairs(pNames) do
         local pType = peripheral.getType(name)
-        if pType == "turtle" or pType == "computer" or pType == "redstone_relay" then
+        if pType == "turtle" or pType == "computer" or pType == "redstone_relay" or pType == "modem" then
             local p = peripheral.wrap(name)
-            local label = (p.getLabel and p.getLabel()) or ""
-            local upperLabel = string.upper(label)
+            local label = (p.getLabel and p.getLabel()) or name
 
-            if upperLabel == "FL" or upperLabel == "FRONT_LEFT" or string.find(upperLabel, "FL") then
+            if matchPrefix(label, "FL") then
                 engines.FL = { name = name, p = p, label = label }
-            elseif upperLabel == "FR" or upperLabel == "FRONT_RIGHT" or string.find(upperLabel, "FR") then
+            elseif matchPrefix(label, "FR") then
                 engines.FR = { name = name, p = p, label = label }
-            elseif upperLabel == "BL" or upperLabel == "BACK_LEFT" or string.find(upperLabel, "BL") then
+            elseif matchPrefix(label, "BL") then
                 engines.BL = { name = name, p = p, label = label }
-            elseif upperLabel == "BR" or upperLabel == "BACK_RIGHT" or string.find(upperLabel, "BR") then
+            elseif matchPrefix(label, "BR") then
                 engines.BR = { name = name, p = p, label = label }
             else
                 table.insert(unmapped, { name = name, p = p, label = label })
@@ -121,11 +124,17 @@ end
 
 scanQuadTurtles()
 
+local allSides = {"bottom", "top", "left", "right", "front", "back"}
+
 local function outputToEngine(node, signal)
     if not node or not node.p then return end
     signal = math.max(0, math.min(15, math.floor(signal + 0.5)))
-    for _, side in ipairs({"bottom", "top", "left", "right", "front", "back"}) do
-        pcall(function() node.p.setAnalogOutput(side, signal) end)
+    local digitalState = (signal > 0)
+    for _, side in ipairs(allSides) do
+        pcall(function()
+            if node.p.setAnalogOutput then node.p.setAnalogOutput(side, signal) end
+            if node.p.setOutput then node.p.setOutput(side, digitalState) end
+        end)
     end
 end
 
@@ -151,10 +160,11 @@ end
 -- ========================================================
 local state = {
     mode = "IDLE",       -- "IDLE", "HOLD_ALT", "CALIBRATING"
-    targetAlt = 120.0,
+    targetAlt = 200.0,   -- 預設目標 200m
     baseThrottle = 7,
     autoLevel = true,
-    statusMsg = "DirectGPU Quad Engine Ready"
+    statusMsg = "DirectGPU Quad Engine Ready",
+    stableTimer = 0
 }
 
 local altPID   = PID.new(0.6, 0.05, 0.8, -8, 8)
@@ -195,31 +205,38 @@ local function drawDirectGPU_UI()
 
     -- 3. 中間飛行狀態卡
     local cardX = 115
-    local cardW = 100
+    local cardW = 95
     gpu.fillRect(displayId, cardX, 35, cardW, 85, 25, 32, 48)
-    gpu.drawText(displayId, string.format("TGT: %.0fm", state.targetAlt), cardX + 8, 42, 80, 220, 255, "Arial", 11, "bold")
-    gpu.drawText(displayId, string.format("V.S: %+.1f", currVspeed), cardX + 8, 58, 255, 200, 80, "Arial", 11, "bold")
-    gpu.drawText(displayId, string.format("P:%+.1f*", currPitch), cardX + 8, 74, 180, 200, 220, "Arial", 10, "plain")
-    gpu.drawText(displayId, string.format("R:%+.1f*", currRoll), cardX + 8, 88, 180, 200, 220, "Arial", 10, "plain")
+    gpu.drawText(displayId, string.format("TGT: %.0fm", state.targetAlt), cardX + 6, 42, 80, 220, 255, "Arial", 11, "bold")
+    gpu.drawText(displayId, string.format("V.S: %+.1f", currVspeed), cardX + 6, 58, 255, 200, 80, "Arial", 11, "bold")
+    gpu.drawText(displayId, string.format("P:%+.1f*", currPitch), cardX + 6, 74, 180, 200, 220, "Arial", 10, "plain")
+    gpu.drawText(displayId, string.format("R:%+.1f*", currRoll), cardX + 6, 88, 180, 200, 220, "Arial", 10, "plain")
     
-    local mCol = (state.mode == "HOLD_ALT") and {80, 255, 120} or {255, 80, 80}
-    gpu.drawText(displayId, state.mode, cardX + 8, 103, mCol[1], mCol[2], mCol[3], "Arial", 10, "bold")
+    local mCol = (state.mode == "HOLD_ALT") and {80, 255, 120} or (state.mode == "CALIBRATING" and {80, 200, 255} or {255, 80, 80})
+    gpu.drawText(displayId, state.mode, cardX + 6, 103, mCol[1], mCol[2], mCol[3], "Arial", 10, "bold")
 
-    -- 4. 右側四軸引擎推力卡 (FL, FR, BL, BR)
-    local qCardX = cardX + cardW + 8
+    -- 4. 右側四軸烏龜名稱與推力卡 (顯示 Label 名稱)
+    local qCardX = cardX + cardW + 6
     local qCardW = screenW - qCardX - 8
     gpu.fillRect(displayId, qCardX, 35, qCardW, 85, 25, 32, 48)
-    gpu.drawText(displayId, "ENGINES", qCardX + 8, 42, 220, 230, 245, "Arial", 10, "bold")
+    gpu.drawText(displayId, "ENGINES (LABEL & SIG)", qCardX + 6, 42, 220, 230, 245, "Arial", 9, "bold")
 
-    local function engCol(node) return node and {80, 255, 120} or {255, 70, 70} end
-    local flC, frC = engCol(engines.FL), engCol(engines.FR)
-    local blC, brC = engCol(engines.BL), engCol(engines.BR)
+    local function getEngText(node, def)
+        local lbl = node and (node.label or node.name or def) or (def .. ":OFF")
+        if #lbl > 6 then lbl = lbl:sub(1, 6) end
+        return lbl
+    end
 
-    gpu.drawText(displayId, string.format("FL:%2d", engineOutputs.FL), qCardX + 8, 58, flC[1], flC[2], flC[3], "Arial", 11, "bold")
-    gpu.drawText(displayId, string.format("FR:%2d", engineOutputs.FR), qCardX + 50, 58, frC[1], frC[2], frC[3], "Arial", 11, "bold")
-    gpu.drawText(displayId, string.format("BL:%2d", engineOutputs.BL), qCardX + 8, 78, blC[1], blC[2], blC[3], "Arial", 11, "bold")
-    gpu.drawText(displayId, string.format("BR:%2d", engineOutputs.BR), qCardX + 50, 78, brC[1], brC[2], brC[3], "Arial", 11, "bold")
-    gpu.drawText(displayId, string.format("BASE:%2d", state.baseThrottle), qCardX + 8, 98, 200, 220, 255, "Arial", 10, "plain")
+    local flLbl = getEngText(engines.FL, "FL")
+    local frLbl = getEngText(engines.FR, "FR")
+    local blLbl = getEngText(engines.BL, "BL")
+    local brLbl = getEngText(engines.BR, "BR")
+
+    gpu.drawText(displayId, string.format("%s:%2d", flLbl, engineOutputs.FL), qCardX + 6, 58, 120, 240, 150, "Arial", 10, "bold")
+    gpu.drawText(displayId, string.format("%s:%2d", frLbl, engineOutputs.FR), qCardX + 50, 58, 120, 240, 150, "Arial", 10, "bold")
+    gpu.drawText(displayId, string.format("%s:%2d", blLbl, engineOutputs.BL), qCardX + 6, 76, 120, 240, 150, "Arial", 10, "bold")
+    gpu.drawText(displayId, string.format("%s:%2d", brLbl, engineOutputs.BR), qCardX + 50, 76, 120, 240, 150, "Arial", 10, "bold")
+    gpu.drawText(displayId, string.format("BASE:%2d", state.baseThrottle), qCardX + 6, 96, 200, 220, 255, "Arial", 10, "plain")
 
     -- 5. 觸控按鈕區
     buttons = {}
@@ -251,7 +268,13 @@ local function drawDirectGPU_UI()
     end)
     addButton(18 + btnW2*2, btnY2, btnW2, btnH1, "CALIBRATE", {120, 60, 160}, {255, 255, 255}, function()
         scanQuadTurtles()
+        state.targetAlt = 200.0
         state.mode = "CALIBRATING"
+        state.stableTimer = 0
+        altPID:reset()
+        pitchPID:reset()
+        rollPID:reset()
+        state.statusMsg = "Auto-calibrating to 200m..."
     end)
 
     local btnY3 = 194
@@ -290,46 +313,49 @@ end
 -- ========================================================
 local function flightControlLoop()
     while true do
-        if state.mode == "HOLD_ALT" and altiSensor then
-            local currentAlt = altiSensor.getHeight()
-            local altError = state.targetAlt - currentAlt
+        local currAlt = altiSensor and altiSensor.getHeight() or 0
+        local currVspeed = altiSensor and altiSensor.getVerticalSpeed() or 0
+        local angles = (gimbalSensor and gimbalSensor.getAngles()) or {0, 0}
+        local currPitch, currRoll = angles[1] or 0, angles[2] or 0
+
+        if state.mode == "HOLD_ALT" or state.mode == "CALIBRATING" then
+            local altError = state.targetAlt - currAlt
             local deltaAlt = altPID:update(altError)
 
             local deltaPitch = 0
             local deltaRoll = 0
             if state.autoLevel and gimbalSensor then
-                local angles = gimbalSensor.getAngles() or {0, 0}
-                local currPitch, currRoll = angles[1] or 0, angles[2] or 0
                 deltaPitch = pitchPID:update(-currPitch)
                 deltaRoll  = rollPID:update(-currRoll)
             end
 
             applyQuadThrust(state.baseThrottle, deltaAlt, deltaPitch, deltaRoll)
-            
-        elseif state.mode == "CALIBRATING" then
-            state.statusMsg = "Calibrating 4 engines..."
-            drawDirectGPU_UI()
-            local bestSignal = 0
-            local minVspeed = 999
 
-            for sig = 0, 15 do
-                applyQuadThrust(sig, 0, 0, 0)
-                state.statusMsg = string.format("Testing Quad [%2d/15]", sig)
-                drawDirectGPU_UI()
-                sleep(1.0)
+            if state.mode == "CALIBRATING" then
+                local altDiff = math.abs(altError)
+                local vDiff = math.abs(currVspeed)
+                local attDiff = math.max(math.abs(currPitch), math.abs(currRoll))
 
-                local vspeed = altiSensor and altiSensor.getVerticalSpeed() or 0
-                if math.abs(vspeed) < minVspeed then
-                    minVspeed = math.abs(vspeed)
-                    bestSignal = sig
+                if altDiff < 0.8 and vDiff < 0.2 and attDiff < 1.5 then
+                    state.stableTimer = state.stableTimer + 0.05
+                    state.statusMsg = string.format("Stabilizing at 200m (%.1f/5.0s)", state.stableTimer)
+                    
+                    if state.stableTimer >= 5.0 then
+                        local avgThrust = (engineOutputs.FL + engineOutputs.FR + engineOutputs.BL + engineOutputs.BR) / 4
+                        state.baseThrottle = math.max(1, math.min(15, math.floor(avgThrust + 0.5)))
+                        state.mode = "HOLD_ALT"
+                        state.statusMsg = string.format("Calibration Done! Base: %d", state.baseThrottle)
+                    end
+                else
+                    state.stableTimer = 0
+                    if altError > 2.0 and state.baseThrottle < 14 and currVspeed < 0.5 then
+                        state.baseThrottle = state.baseThrottle + 0.01
+                    elseif altError < -2.0 and state.baseThrottle > 1 and currVspeed > -0.5 then
+                        state.baseThrottle = state.baseThrottle - 0.01
+                    end
+                    state.statusMsg = string.format("Reaching 200m (Current: %.1fm)", currAlt)
                 end
-                if vspeed > 0.3 and sig > 0 then break end
             end
-
-            state.baseThrottle = bestSignal
-            applyQuadThrust(bestSignal, 0, 0, 0)
-            state.mode = "HOLD_ALT"
-            state.statusMsg = string.format("Calib Done: %d", bestSignal)
             
         elseif state.mode == "IDLE" then
             applyQuadThrust(0, 0, 0, 0)
