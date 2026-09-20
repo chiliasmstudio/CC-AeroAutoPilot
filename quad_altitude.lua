@@ -1,14 +1,11 @@
 --[[
     Create: Avionics & CC: Tweaked
-    Quad-Engine Wired Flight Controller (四軸有線飛控大腦 - 烏龜免跑程式)
+    Quad-Engine Wired Flight Controller (四軸有線飛控大腦 - 全向全紅石輸出升級版)
     
-    標籤命名支援:
-    - 左前: "FL" 或 "FL_xxxx" (如 FL_FrontLeft, FL_Motor1)
-    - 右前: "FR" 或 "FR_xxxx" (如 FR_EngineA)
-    - 左後: "BL" 或 "BL_xxxx" (如 BL_Rotor)
-    - 右後: "BR" 或 "BR_xxxx" (如 BR_BackRight)
-    
-    螢幕即時顯示各角連接的烏龜名稱與連線狀態！
+    升級特性:
+    - 烏龜【六個面全向輸出】: bottom, top, left, right, front, back 同步輸出！
+    - 【雙協議輸出】: 同時發送 setAnalogOutput (類比紅石 0~15) 與 setOutput (數位開關紅石)。
+    - 自動檢測並支援 Wired Modem、Redstone Relay 以及 Turtle 本體。
 --]]
 
 -- ========================================================
@@ -81,7 +78,6 @@ end
 local altiSensor   = peripheral.find("altitude_sensor")
 local gimbalSensor = peripheral.find("gimbal_sensor")
 
--- 安全 blit 輔助函式
 local function safeBlit(x, y, text, fgChar, bgChar)
     display.setCursorPos(x, y)
     local len = #text
@@ -94,15 +90,14 @@ end
 -- 3. 四角烏龜引擎節點掃描與辨識 (支援 FL, FL_xxx 等)
 -- ========================================================
 local engines = {
-    FL = nil, -- 左前 (Front Left)
-    FR = nil, -- 右前 (Front Right)
-    BL = nil, -- 左後 (Back Left)
-    BR = nil  -- 右後 (Back Right)
+    FL = nil, -- 左前
+    FR = nil, -- 右前
+    BL = nil, -- 左後
+    BR = nil  -- 右後
 }
 
 local function matchPrefix(label, prefix)
     local u = string.upper(label)
-    -- 匹配 "FL" 或 "FL_xxxx" 或 "FL-xxxx" 或 "FL xxxx"
     return u == prefix or u:sub(1, #prefix + 1) == (prefix .. "_") or u:sub(1, #prefix + 1) == (prefix .. "-") or u:sub(1, #prefix + 1) == (prefix .. " ")
 end
 
@@ -117,7 +112,7 @@ local function scanQuadTurtles()
 
     for _, name in ipairs(pNames) do
         local pType = peripheral.getType(name)
-        if pType == "turtle" or pType == "computer" or pType == "redstone_relay" then
+        if pType == "turtle" or pType == "computer" or pType == "redstone_relay" or pType == "modem" then
             local p = peripheral.wrap(name)
             local label = (p.getLabel and p.getLabel()) or name
 
@@ -135,7 +130,6 @@ local function scanQuadTurtles()
         end
     end
 
-    -- 容錯：若標籤未設置，依序自動指派剩餘設備
     local slots = {"FL", "FR", "BL", "BR"}
     local uIdx = 1
     for _, slot in ipairs(slots) do
@@ -149,15 +143,26 @@ end
 scanQuadTurtles()
 
 -- ========================================================
--- 4. 四軸混控矩陣輸出 (Quad Mixer Matrix)
+-- 4. 全向紅石與混控矩陣輸出 (Omni-Directional Redstone)
 -- ========================================================
 local engineOutputs = { FL = 0, FR = 0, BL = 0, BR = 0 }
+local allSides = {"bottom", "top", "left", "right", "front", "back"}
 
 local function outputToEngine(node, signal)
     if not node or not node.p then return end
     signal = math.max(0, math.min(15, math.floor(signal + 0.5)))
-    for _, side in ipairs({"bottom", "top", "left", "right", "front", "back"}) do
-        pcall(function() node.p.setAnalogOutput(side, signal) end)
+    local digitalState = (signal > 0)
+    
+    -- 向 6 個面全向同步發送類比與數位紅石
+    for _, side in ipairs(allSides) do
+        pcall(function()
+            if node.p.setAnalogOutput then
+                node.p.setAnalogOutput(side, signal)
+            end
+            if node.p.setOutput then
+                node.p.setOutput(side, digitalState)
+            end
+        end)
     end
 end
 
@@ -260,7 +265,6 @@ local function drawQuadUI()
         return string.format("%-10s: %2d/15", lbl, outVal), "5"
     end
 
-    -- 顯示 4 個引擎的自訂 Label 名稱與當前輸出
     local flStr, flCol = getEngineInfo(engines.FL, "FL", engineOutputs.FL)
     safeBlit(rightX + 1, 5, flStr, flCol, "8")
 
