@@ -461,17 +461,38 @@ local function flightControlLoop()
 end
 
 -- ========================================================
--- 7. 畫面渲染與觸控監聽
+-- 7. 畫面渲染與 DirectGPU 專屬事件監聽
 -- ========================================================
+local function processClick(clickX, clickY)
+    if not clickX or not clickY then return end
+    for _, btn in ipairs(buttons) do
+        if clickX >= btn.x and clickX < btn.x + btn.w and
+           clickY >= btn.y and clickY < btn.y + btn.h then
+            btn.action()
+            drawDirectGPU_UI()
+            break
+        end
+    end
+end
+
 local function renderLoop()
     while true do
+        -- 處理 DirectGPU 專屬內部隊列事件 (gpu.pollEvent)
+        if gpu.hasEvents and gpu.pollEvent then
+            while gpu.hasEvents(displayId) do
+                local ev = gpu.pollEvent(displayId)
+                if ev and (ev.type == "mouse_click" or ev.type == "click" or ev.type == "touch") then
+                    processClick(ev.x, ev.y)
+                end
+            end
+        end
+
         drawDirectGPU_UI()
         sleep(0.05)
     end
 end
 
 local function touchEventLoop()
-    -- 取得 Monitor 字元尺寸以計算座標縮放比例
     local mon = peripheral.find("monitor")
     local monCharW, monCharH = 1, 1
     if mon then
@@ -480,34 +501,25 @@ local function touchEventLoop()
 
     while true do
         local event, p1, p2, p3 = os.pullEvent()
-        local clickX, clickY = nil, nil
 
         if event == "directgpu_touch" then
-            -- directgpu_touch 事件: p1=displayId, p2=pixelX, p3=pixelY
-            clickX = p2
-            clickY = p3
+            -- p1=displayId, p2=pixelX, p3=pixelY
+            processClick(p2, p3)
         elseif event == "monitor_touch" then
-            -- monitor_touch 事件: p1=side/name, p2=charX, p3=charY
-            -- 換算為 DirectGPU 的像素座標 (Pixel Coordinates)
             if not mon then mon = peripheral.find("monitor") end
             if mon then monCharW, monCharH = mon.getSize() end
-            clickX = math.floor(((p2 - 0.5) / monCharW) * screenW)
-            clickY = math.floor(((p3 - 0.5) / monCharH) * screenH)
+            local clickX = math.floor(((p2 - 0.5) / monCharW) * screenW)
+            local clickY = math.floor(((p3 - 0.5) / monCharH) * screenH)
+            processClick(clickX, clickY)
         elseif event == "mouse_click" then
-            -- 終端機滑鼠點擊 (以防直接在電腦內部點擊)
-            local termW, termH = term.getSize()
-            clickX = math.floor(((p2 - 0.5) / termW) * screenW)
-            clickY = math.floor(((p3 - 0.5) / termH) * screenH)
-        end
-
-        if clickX and clickY then
-            for _, btn in ipairs(buttons) do
-                if clickX >= btn.x and clickX < btn.x + btn.w and
-                   clickY >= btn.y and clickY < btn.y + btn.h then
-                    btn.action()
-                    drawDirectGPU_UI()
-                    break
-                end
+            -- 支援原生事件 table 或字元座標
+            if type(p1) == "table" and p1.x and p1.y then
+                processClick(p1.x, p1.y)
+            elseif type(p2) == "number" and type(p3) == "number" then
+                local termW, termH = term.getSize()
+                local clickX = math.floor(((p2 - 0.5) / termW) * screenW)
+                local clickY = math.floor(((p3 - 0.5) / termH) * screenH)
+                processClick(clickX, clickY)
             end
         end
     end
