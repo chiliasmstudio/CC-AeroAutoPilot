@@ -148,6 +148,8 @@ if masterModem then
     pcall(function() masterModem.open(101) end)
 end
 
+local pwmTick = 0
+
 local function outputToEngine(node, signal)
     if not node or not node.p then return end
     signal = math.max(0, math.min(15, math.floor(signal + 0.5)))
@@ -162,15 +164,33 @@ local function outputToEngine(node, signal)
 end
 
 local function applyQuadThrust(baseThrust, deltaAlt, deltaPitch, deltaRoll)
-    local outFL = baseThrust + deltaAlt - deltaPitch - deltaRoll
-    local outFR = baseThrust + deltaAlt - deltaPitch + deltaRoll
-    local outBL = baseThrust + deltaAlt + deltaPitch - deltaRoll
-    local outBR = baseThrust + deltaAlt + deltaPitch + deltaRoll
+    -- 累加 PWM 週期計數器 (0 ~ 9)
+    pwmTick = (pwmTick + 1) % 10
 
-    engineOutputs.FL = math.max(0, math.min(15, math.floor(outFL + 0.5)))
-    engineOutputs.FR = math.max(0, math.min(15, math.floor(outFR + 0.5)))
-    engineOutputs.BL = math.max(0, math.min(15, math.floor(outBL + 0.5)))
-    engineOutputs.BR = math.max(0, math.min(15, math.floor(outBR + 0.5)))
+    local rawFL = baseThrust + deltaAlt - deltaPitch - deltaRoll
+    local rawFR = baseThrust + deltaAlt - deltaPitch + deltaRoll
+    local rawBL = baseThrust + deltaAlt + deltaPitch - deltaRoll
+    local rawBR = baseThrust + deltaAlt + deltaPitch + deltaRoll
+
+    local function resolvePwmOutput(val)
+        if val <= 0 then return 0 end
+        if val < 1.0 then
+            -- 脈衝模式 (PWM): 0.1 ~ 0.9 轉為 10 ticks 內的佔空比
+            local activeThreshold = math.floor(val * 10 + 0.5)
+            if pwmTick < activeThreshold then
+                return 1 -- 輸出 1 訊號
+            else
+                return 0 -- 輸出 0 訊號
+            end
+        else
+            return math.max(0, math.min(15, math.floor(val + 0.5)))
+        end
+    end
+
+    engineOutputs.FL = resolvePwmOutput(rawFL)
+    engineOutputs.FR = resolvePwmOutput(rawFR)
+    engineOutputs.BL = resolvePwmOutput(rawBL)
+    engineOutputs.BR = resolvePwmOutput(rawBR)
 
     -- 1. 雙重輸出 A：透過有線網路向 Turtle/Relay 周邊呼叫
     outputToEngine(engines.FL, engineOutputs.FL)
@@ -200,14 +220,14 @@ end
 local state = {
     mode = "IDLE",       -- "IDLE", "HOLD_ALT", "CALIBRATING"
     targetAlt = 200.0,   -- 預設目標高度 200m
-    baseThrottle = 7,
+    baseThrottle = 1.0,  -- 支援浮點推力 (0.1 ~ 15.0)，< 1 自動進入 PWM 脈衝模式
     autoLevel = true,
     statusMsg = "System Ready",
     stableTimer = 0,     -- 穩定計時器 (秒)
     calibStartAlt = 0,   -- 校正啟動高度
     calibTargetAlt = 0,  -- 校正目標高度 (啟動高度 + 30m)
-    calibPhase = "RAMP", -- "RAMP" (緩慢加力起飛), "STABILIZE" (保持+30m定高自穩)
-    calibThrottle = 1.0  -- 校正時微調浮點油門
+    calibPhase = "RAMP", -- "RAMP" (緩慢脈衝加力起飛), "STABILIZE" (保持定高自穩)
+    calibThrottle = 0.05 -- 校正微調油門 (從極微小 0.05 脈衝起步)
 }
 
 local altPID   = PID.new(0.6, 0.05, 0.8, -8, 8)
@@ -261,7 +281,7 @@ local function drawQuadUI()
     safeBlit(3, 7, attStr, "3", "8")
     
     local modeFg = (state.mode == "HOLD_ALT") and "5" or (state.mode == "CALIBRATING" and "4" or "e")
-    local modeRow = string.format("MODE:%-5s B:%2d", state.mode:sub(1,5), state.baseThrottle)
+    local modeRow = string.format("MODE:%-5s B:%4.1f", state.mode:sub(1,5), state.baseThrottle)
     safeBlit(3, 8, modeRow, modeFg, "8")
 
     -- 3. 右側四軸烏龜名稱與推力卡片
@@ -317,11 +337,19 @@ local function drawQuadUI()
 
     local bY2 = 15
     local bW2 = math.floor((w - 5) / 4)
-    addButton(2, bY2, bW2, 2, "BASE +1", "3", "0", function()
-        state.baseThrottle = math.min(15, state.baseThrottle + 1)
+    addButton(2, bY2, bW2, 2, "BASE +", "3", "0", function()
+        if state.baseThrottle < 1.0 then
+            state.baseThrottle = math.min(15.0, math.floor((state.baseThrottle + 0.1) * 10 + 0.5) / 10)
+        else
+            state.baseThrottle = math.min(15.0, state.baseThrottle + 1.0)
+        end
     end)
-    addButton(3 + bW2, bY2, bW2, 2, "BASE -1", "9", "0", function()
-        state.baseThrottle = math.max(0, state.baseThrottle - 1)
+    addButton(3 + bW2, bY2, bW2, 2, "BASE -", "9", "0", function()
+        if state.baseThrottle <= 1.0 then
+            state.baseThrottle = math.max(0.0, math.floor((state.baseThrottle - 0.1) * 10 + 0.5) / 10)
+        else
+            state.baseThrottle = math.max(0.0, state.baseThrottle - 1.0)
+        end
     end)
     addButton(4 + bW2*2, bY2, bW2, 2, "RE-SCAN", "b", "0", function()
         scanQuadTurtles()
@@ -331,16 +359,16 @@ local function drawQuadUI()
         scanQuadTurtles()
         local cur = altiSensor and altiSensor.getHeight() or 100
         state.calibStartAlt = cur
-        state.calibTargetAlt = cur + 30.0 -- 上升超過 30m 即鎖定高度自穩
+        state.calibTargetAlt = cur + 30.0
         state.calibPhase = "RAMP"
-        state.calibThrottle = 1.0
-        state.baseThrottle = 1
+        state.calibThrottle = 0.05 -- 從超微小脈衝起步
+        state.baseThrottle = 0.1
         state.mode = "CALIBRATING"
         state.stableTimer = 0
         altPID:reset()
         pitchPID:reset()
         rollPID:reset()
-        state.statusMsg = "Calib: Gently ramping up thrust..."
+        state.statusMsg = "Calib: Pulse Ramping Power..."
     end)
 
     local bY3 = 18
@@ -414,22 +442,22 @@ local function flightControlLoop()
             local climbDist = currAlt - state.calibStartAlt
 
             if state.calibPhase == "RAMP" then
-                -- 階段 1: 緩慢增加推力功率 (每 0.5s 增加 0.1 檔位)
-                state.calibThrottle = math.min(15.0, state.calibThrottle + 0.01)
-                state.baseThrottle = math.floor(state.calibThrottle + 0.5)
+                -- 階段 1: 緩慢增加推力功率 (從 0.05 脈衝開始，每秒增加約 0.05)
+                state.calibThrottle = math.min(15.0, state.calibThrottle + 0.003)
+                state.baseThrottle = math.floor(state.calibThrottle * 100 + 0.5) / 100
 
-                -- 輸出四軸推力 (此時不加 deltaAlt，純靠平穩緩慢加力)
+                -- 輸出四軸推力 (此時不加 deltaAlt，純靠平穩緩慢脈衝加力)
                 applyQuadThrust(state.baseThrottle, 0, deltaPitch, deltaRoll)
 
-                state.statusMsg = string.format("Ramping Power: %2d/15 (+%.1fm)", state.baseThrottle, climbDist)
+                state.statusMsg = string.format("Ramping: %4.2f/15 (+%.1fm)", state.baseThrottle, climbDist)
 
-                -- 判定起飛上升超過 30m: 立即停止提高推力，切入定高自穩判定階段！
-                if climbDist >= 30.0 or (climbDist >= 2.0 and currVspeed > 1.2) then
+                -- 判定起飛上升超過 30m 或偵測到明顯爬升速度 (> 0.6 m/s): 立即停止提高推力，切入定高自穩！
+                if climbDist >= 30.0 or (climbDist >= 1.0 and currVspeed > 0.6) then
                     state.calibPhase = "STABILIZE"
                     state.targetAlt = currAlt -- 鎖定當前高度 (不再往上衝)
                     state.stableTimer = 0
                     altPID:reset()
-                    state.statusMsg = string.format("Lift-off detected! Holding at %.1fm", currAlt)
+                    state.statusMsg = string.format("Lift-off! Holding at %.1fm", currAlt)
                 end
 
             elseif state.calibPhase == "STABILIZE" then
@@ -449,21 +477,19 @@ local function flightControlLoop()
                     state.statusMsg = string.format("Holding & Stabilizing... (%.1f/5.0s)", state.stableTimer)
 
                     if state.stableTimer >= 5.0 then
-                        -- 連續 5 秒平穩懸停，鎖定平均推力作為基準檔位！
-                        local avgThrust = (engineOutputs.FL + engineOutputs.FR + engineOutputs.BL + engineOutputs.BR) / 4
-                        state.baseThrottle = math.max(1, math.min(15, math.floor(avgThrust + 0.5)))
+                        -- 連續 5 秒平穩懸停，鎖定當前基準檔位！
                         state.mode = "HOLD_ALT"
-                        state.statusMsg = string.format("Calibrated! Hover Base: %d", state.baseThrottle)
+                        state.statusMsg = string.format("Calibrated! Hover Base: %.2f", state.baseThrottle)
                     end
                 else
                     state.stableTimer = 0
-                    -- 若微幅掉高或過衝，小幅度修正基準
-                    if altError > 1.5 and state.baseThrottle < 14 and currVspeed < 0.3 then
-                        state.baseThrottle = state.baseThrottle + 0.01
-                    elseif altError < -1.5 and state.baseThrottle > 1 and currVspeed > -0.3 then
-                        state.baseThrottle = state.baseThrottle - 0.01
+                    -- 若微幅掉高或過衝，以極細微步長修正基準
+                    if altError > 0.8 and state.baseThrottle < 14 and currVspeed < 0.2 then
+                        state.baseThrottle = math.min(15.0, state.baseThrottle + 0.005)
+                    elseif altError < -0.8 and state.baseThrottle > 0.05 and currVspeed > -0.2 then
+                        state.baseThrottle = math.max(0.01, state.baseThrottle - 0.005)
                     end
-                    state.statusMsg = string.format("Stabilizing at %.1fm (V: %+.1f)", state.targetAlt, currVspeed)
+                    state.statusMsg = string.format("Stabilizing at %.1fm (B:%4.2f)", state.targetAlt, state.baseThrottle)
                 end
             end
 

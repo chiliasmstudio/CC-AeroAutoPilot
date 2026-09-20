@@ -131,6 +131,8 @@ if masterModem then
     pcall(function() masterModem.open(101) end)
 end
 
+local pwmTick = 0
+
 local function outputToEngine(node, signal)
     if not node or not node.p then return end
     signal = math.max(0, math.min(15, math.floor(signal + 0.5)))
@@ -144,15 +146,31 @@ local function outputToEngine(node, signal)
 end
 
 local function applyQuadThrust(baseThrust, deltaAlt, deltaPitch, deltaRoll)
-    local outFL = baseThrust + deltaAlt - deltaPitch - deltaRoll
-    local outFR = baseThrust + deltaAlt - deltaPitch + deltaRoll
-    local outBL = baseThrust + deltaAlt + deltaPitch - deltaRoll
-    local outBR = baseThrust + deltaAlt + deltaPitch + deltaRoll
+    pwmTick = (pwmTick + 1) % 10
 
-    engineOutputs.FL = math.max(0, math.min(15, math.floor(outFL + 0.5)))
-    engineOutputs.FR = math.max(0, math.min(15, math.floor(outFR + 0.5)))
-    engineOutputs.BL = math.max(0, math.min(15, math.floor(outBL + 0.5)))
-    engineOutputs.BR = math.max(0, math.min(15, math.floor(outBR + 0.5)))
+    local rawFL = baseThrust + deltaAlt - deltaPitch - deltaRoll
+    local rawFR = baseThrust + deltaAlt - deltaPitch + deltaRoll
+    local rawBL = baseThrust + deltaAlt + deltaPitch - deltaRoll
+    local rawBR = baseThrust + deltaAlt + deltaPitch + deltaRoll
+
+    local function resolvePwmOutput(val)
+        if val <= 0 then return 0 end
+        if val < 1.0 then
+            local activeThreshold = math.floor(val * 10 + 0.5)
+            if pwmTick < activeThreshold then
+                return 1
+            else
+                return 0
+            end
+        else
+            return math.max(0, math.min(15, math.floor(val + 0.5)))
+        end
+    end
+
+    engineOutputs.FL = resolvePwmOutput(rawFL)
+    engineOutputs.FR = resolvePwmOutput(rawFR)
+    engineOutputs.BL = resolvePwmOutput(rawBL)
+    engineOutputs.BR = resolvePwmOutput(rawBR)
 
     -- 1. 雙重輸出 A：透過有線網路向 Turtle/Relay 周邊呼叫
     outputToEngine(engines.FL, engineOutputs.FL)
@@ -182,14 +200,14 @@ end
 local state = {
     mode = "IDLE",       -- "IDLE", "HOLD_ALT", "CALIBRATING"
     targetAlt = 200.0,   -- 預設目標 200m
-    baseThrottle = 7,
+    baseThrottle = 1.0,  -- 支援浮點推力 (0.1 ~ 15.0)，< 1 自動進入 PWM 脈衝模式
     autoLevel = true,
     statusMsg = "System Ready",
     stableTimer = 0,     -- 穩定計時器 (秒)
     calibStartAlt = 0,   -- 校正啟動高度
     calibTargetAlt = 0,  -- 校正目標高度 (啟動高度 + 30m)
-    calibPhase = "RAMP", -- "RAMP" (緩慢加力起飛), "STABILIZE" (保持+30m定高自穩)
-    calibThrottle = 1.0  -- 校正時微調浮點油門
+    calibPhase = "RAMP", -- "RAMP" (緩慢脈衝加力起飛), "STABILIZE" (保持定高自穩)
+    calibThrottle = 0.05 -- 校正微調油門 (從極微小 0.05 脈衝起步)
 }
 
 local altPID   = PID.new(0.6, 0.05, 0.8, -8, 8)
@@ -261,7 +279,7 @@ local function drawDirectGPU_UI()
     gpu.drawText(displayId, string.format("%s:%2d", frLbl, engineOutputs.FR), qCardX + 50, 58, 120, 240, 150, "Arial", 10, "bold")
     gpu.drawText(displayId, string.format("%s:%2d", blLbl, engineOutputs.BL), qCardX + 6, 76, 120, 240, 150, "Arial", 10, "bold")
     gpu.drawText(displayId, string.format("%s:%2d", brLbl, engineOutputs.BR), qCardX + 50, 76, 120, 240, 150, "Arial", 10, "bold")
-    gpu.drawText(displayId, string.format("BASE:%2d", state.baseThrottle), qCardX + 6, 96, 200, 220, 255, "Arial", 10, "plain")
+    gpu.drawText(displayId, string.format("BASE:%4.1f", state.baseThrottle), qCardX + 6, 96, 200, 220, 255, "Arial", 10, "plain")
 
     -- 5. 觸控按鈕區
     buttons = {}
@@ -285,11 +303,19 @@ local function drawDirectGPU_UI()
 
     local btnY2 = 162
     local btnW2 = math.floor((screenW - 35) / 4)
-    addButton(8, btnY2, btnW2, btnH1, "BASE +1", {40, 90, 140}, {255, 255, 255}, function()
-        state.baseThrottle = math.min(15, state.baseThrottle + 1)
+    addButton(8, btnY2, btnW2, btnH1, "BASE +", {40, 90, 140}, {255, 255, 255}, function()
+        if state.baseThrottle < 1.0 then
+            state.baseThrottle = math.min(15.0, math.floor((state.baseThrottle + 0.1) * 10 + 0.5) / 10)
+        else
+            state.baseThrottle = math.min(15.0, state.baseThrottle + 1.0)
+        end
     end)
-    addButton(13 + btnW2, btnY2, btnW2, btnH1, "BASE -1", {50, 70, 120}, {255, 255, 255}, function()
-        state.baseThrottle = math.max(0, state.baseThrottle - 1)
+    addButton(13 + btnW2, btnY2, btnW2, btnH1, "BASE -", {50, 70, 120}, {255, 255, 255}, function()
+        if state.baseThrottle <= 1.0 then
+            state.baseThrottle = math.max(0.0, math.floor((state.baseThrottle - 0.1) * 10 + 0.5) / 10)
+        else
+            state.baseThrottle = math.max(0.0, state.baseThrottle - 1.0)
+        end
     end)
     addButton(18 + btnW2*2, btnY2, btnW2, btnH1, "RE-SCAN", {40, 120, 150}, {255, 255, 255}, function()
         scanQuadTurtles()
@@ -301,14 +327,14 @@ local function drawDirectGPU_UI()
         state.calibStartAlt = cur
         state.calibTargetAlt = cur + 30.0
         state.calibPhase = "RAMP"
-        state.calibThrottle = 1.0
-        state.baseThrottle = 1
+        state.calibThrottle = 0.05
+        state.baseThrottle = 0.1
         state.mode = "CALIBRATING"
         state.stableTimer = 0
         altPID:reset()
         pitchPID:reset()
         rollPID:reset()
-        state.statusMsg = "Calib: Gently ramping up thrust..."
+        state.statusMsg = "Calib: Pulse Ramping Power..."
     end)
 
     local btnY3 = 194
@@ -383,19 +409,19 @@ local function flightControlLoop()
             local climbDist = currAlt - state.calibStartAlt
 
             if state.calibPhase == "RAMP" then
-                state.calibThrottle = math.min(15.0, state.calibThrottle + 0.01)
-                state.baseThrottle = math.floor(state.calibThrottle + 0.5)
+                state.calibThrottle = math.min(15.0, state.calibThrottle + 0.003)
+                state.baseThrottle = math.floor(state.calibThrottle * 100 + 0.5) / 100
 
                 applyQuadThrust(state.baseThrottle, 0, deltaPitch, deltaRoll)
 
-                state.statusMsg = string.format("Ramping Power: %2d/15 (+%.1fm)", state.baseThrottle, climbDist)
+                state.statusMsg = string.format("Ramping: %4.2f/15 (+%.1fm)", state.baseThrottle, climbDist)
 
-                if climbDist >= 30.0 or (climbDist >= 2.0 and currVspeed > 1.2) then
+                if climbDist >= 30.0 or (climbDist >= 1.0 and currVspeed > 0.6) then
                     state.calibPhase = "STABILIZE"
                     state.targetAlt = currAlt
                     state.stableTimer = 0
                     altPID:reset()
-                    state.statusMsg = string.format("Lift-off detected! Holding at %.1fm", currAlt)
+                    state.statusMsg = string.format("Lift-off! Holding at %.1fm", currAlt)
                 end
 
             elseif state.calibPhase == "STABILIZE" then
@@ -413,19 +439,17 @@ local function flightControlLoop()
                     state.statusMsg = string.format("Holding & Stabilizing (%.1f/5.0s)", state.stableTimer)
                     
                     if state.stableTimer >= 5.0 then
-                        local avgThrust = (engineOutputs.FL + engineOutputs.FR + engineOutputs.BL + engineOutputs.BR) / 4
-                        state.baseThrottle = math.max(1, math.min(15, math.floor(avgThrust + 0.5)))
                         state.mode = "HOLD_ALT"
-                        state.statusMsg = string.format("Calibrated! Hover Base: %d", state.baseThrottle)
+                        state.statusMsg = string.format("Calibrated! Hover Base: %.2f", state.baseThrottle)
                     end
                 else
                     state.stableTimer = 0
-                    if altError > 1.5 and state.baseThrottle < 14 and currVspeed < 0.3 then
-                        state.baseThrottle = state.baseThrottle + 0.01
-                    elseif altError < -1.5 and state.baseThrottle > 1 and currVspeed > -0.3 then
-                        state.baseThrottle = state.baseThrottle - 0.01
+                    if altError > 0.8 and state.baseThrottle < 14 and currVspeed < 0.2 then
+                        state.baseThrottle = math.min(15.0, state.baseThrottle + 0.005)
+                    elseif altError < -0.8 and state.baseThrottle > 0.05 and currVspeed > -0.2 then
+                        state.baseThrottle = math.max(0.01, state.baseThrottle - 0.005)
                     end
-                    state.statusMsg = string.format("Stabilizing at %.1fm (V: %+.1f)", state.targetAlt, currVspeed)
+                    state.statusMsg = string.format("Stabilizing at %.1fm (B:%4.2f)", state.targetAlt, state.baseThrottle)
                 end
             end
             
