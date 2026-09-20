@@ -2,12 +2,13 @@
     Create: Avionics & CC: Tweaked
     Quad-Engine Wired Flight Controller (四軸有線飛控大腦 - 烏龜免跑程式)
     
-    硬體架構:
-    - 主電腦 (Advanced Computer) 運行本程式，連接 Advanced Monitor。
-    - 4 隻普通 Turtle 透過 Wired Modem + 網路纜線 (Cable) 連接到主電腦。
-    - 4 隻烏龜【不需要開機、不跑任何程式】，由主電腦直接遠程控制紅石輸出！
-    - 4 隻烏龜在遊戲中設定 Label 標籤: "FL", "FR", "BL", "BR"。
-    - 飛艇上安裝 Altitude Sensor (高度計) 與 Gimbal Sensor (姿態陀螺儀 - 可選自穩)。
+    標籤命名支援:
+    - 左前: "FL" 或 "FL_xxxx" (如 FL_FrontLeft, FL_Motor1)
+    - 右前: "FR" 或 "FR_xxxx" (如 FR_EngineA)
+    - 左後: "BL" 或 "BL_xxxx" (如 BL_Rotor)
+    - 右後: "BR" 或 "BR_xxxx" (如 BR_BackRight)
+    
+    螢幕即時顯示各角連接的烏龜名稱與連線狀態！
 --]]
 
 -- ========================================================
@@ -80,7 +81,7 @@ end
 local altiSensor   = peripheral.find("altitude_sensor")
 local gimbalSensor = peripheral.find("gimbal_sensor")
 
--- 安全 blit 輔助函式 (自動確保文字、前景色、背景色長度嚴格一致)
+-- 安全 blit 輔助函式
 local function safeBlit(x, y, text, fgChar, bgChar)
     display.setCursorPos(x, y)
     local len = #text
@@ -90,7 +91,7 @@ local function safeBlit(x, y, text, fgChar, bgChar)
 end
 
 -- ========================================================
--- 3. 四角烏龜引擎節點掃描與辨識 (FL, FR, BL, BR)
+-- 3. 四角烏龜引擎節點掃描與辨識 (支援 FL, FL_xxx 等)
 -- ========================================================
 local engines = {
     FL = nil, -- 左前 (Front Left)
@@ -98,6 +99,12 @@ local engines = {
     BL = nil, -- 左後 (Back Left)
     BR = nil  -- 右後 (Back Right)
 }
+
+local function matchPrefix(label, prefix)
+    local u = string.upper(label)
+    -- 匹配 "FL" 或 "FL_xxxx" 或 "FL-xxxx" 或 "FL xxxx"
+    return u == prefix or u:sub(1, #prefix + 1) == (prefix .. "_") or u:sub(1, #prefix + 1) == (prefix .. "-") or u:sub(1, #prefix + 1) == (prefix .. " ")
+end
 
 local function scanQuadTurtles()
     engines.FL = nil
@@ -112,16 +119,15 @@ local function scanQuadTurtles()
         local pType = peripheral.getType(name)
         if pType == "turtle" or pType == "computer" or pType == "redstone_relay" then
             local p = peripheral.wrap(name)
-            local label = (p.getLabel and p.getLabel()) or ""
-            local upperLabel = string.upper(label)
+            local label = (p.getLabel and p.getLabel()) or name
 
-            if upperLabel == "FL" or upperLabel == "FRONT_LEFT" or string.find(upperLabel, "FL") then
+            if matchPrefix(label, "FL") then
                 engines.FL = { name = name, p = p, label = label }
-            elseif upperLabel == "FR" or upperLabel == "FRONT_RIGHT" or string.find(upperLabel, "FR") then
+            elseif matchPrefix(label, "FR") then
                 engines.FR = { name = name, p = p, label = label }
-            elseif upperLabel == "BL" or upperLabel == "BACK_LEFT" or string.find(upperLabel, "BL") then
+            elseif matchPrefix(label, "BL") then
                 engines.BL = { name = name, p = p, label = label }
-            elseif upperLabel == "BR" or upperLabel == "BACK_RIGHT" or string.find(upperLabel, "BR") then
+            elseif matchPrefix(label, "BR") then
                 engines.BR = { name = name, p = p, label = label }
             else
                 table.insert(unmapped, { name = name, p = p, label = label })
@@ -129,6 +135,7 @@ local function scanQuadTurtles()
         end
     end
 
+    -- 容錯：若標籤未設置，依序自動指派剩餘設備
     local slots = {"FL", "FR", "BL", "BR"}
     local uIdx = 1
     for _, slot in ipairs(slots) do
@@ -149,7 +156,6 @@ local engineOutputs = { FL = 0, FR = 0, BL = 0, BR = 0 }
 local function outputToEngine(node, signal)
     if not node or not node.p then return end
     signal = math.max(0, math.min(15, math.floor(signal + 0.5)))
-    
     for _, side in ipairs({"bottom", "top", "left", "right", "front", "back"}) do
         pcall(function() node.p.setAnalogOutput(side, signal) end)
     end
@@ -198,14 +204,14 @@ local function addButton(x, y, w, h, text, bgBlit, fgBlit, action)
 end
 
 -- ========================================================
--- 6. 螢幕繪製函式 (Quad Cockpit Monitor UI)
+-- 6. 螢幕繪製函式 (顯示名稱與四軸狀態)
 -- ========================================================
 local function drawQuadUI()
     local w, h = display.getSize()
     display.setBackgroundColor(colors.black)
     display.clear()
 
-    -- 1. 標題列
+    -- 1. 頂部標題列
     local titleText = "  QUAD-ENGINE AVIONICS MASTER  "
     local padL = math.floor((w - #titleText) / 2)
     local padR = w - #titleText - padL
@@ -219,7 +225,7 @@ local function drawQuadUI()
 
     -- 2. 左側高度與姿態卡片
     local cardW = math.floor(w / 2) - 2
-    for y = 3, 8 do
+    for y = 3, 9 do
         safeBlit(2, y, string.rep(" ", cardW), "0", "8")
     end
     safeBlit(3, 3, "ALTITUDE & ATTITUDE", "9", "8")
@@ -232,41 +238,49 @@ local function drawQuadUI()
 
     local attStr = string.format("P:%+4.1f* R:%+4.1f*", currPitch, currRoll)
     safeBlit(3, 7, attStr, "3", "8")
-
-    -- 3. 右側四軸引擎狀態卡片
-    local rightX = cardW + 4
-    local rightW = w - rightX
-    for y = 3, 8 do
-        safeBlit(rightX, y, string.rep(" ", rightW), "0", "8")
-    end
-    safeBlit(rightX + 1, 3, "QUAD ENGINES (0-15)", "9", "8")
-
-    local function getStatusCol(node) return node and "5" or "e" end
     
-    local flText = string.format("FL:%2d", engineOutputs.FL)
-    local frText = string.format("FR:%2d", engineOutputs.FR)
-    local row1 = flText .. "  " .. frText
-    local row1Fg = string.rep(getStatusCol(engines.FL), 5) .. "00" .. string.rep(getStatusCol(engines.FR), 5)
-    safeBlit(rightX + 1, 5, row1, row1Fg, "8")
-
-    local blText = string.format("BL:%2d", engineOutputs.BL)
-    local brText = string.format("BR:%2d", engineOutputs.BR)
-    local row2 = blText .. "  " .. brText
-    local row2Fg = string.rep(getStatusCol(engines.BL), 5) .. "00" .. string.rep(getStatusCol(engines.BR), 5)
-    safeBlit(rightX + 1, 6, row2, row2Fg, "8")
-
     local modeFg = (state.mode == "HOLD_ALT") and "5" or "e"
     local modeRow = string.format("MODE:%-5s B:%2d", state.mode:sub(1,5), state.baseThrottle)
-    safeBlit(rightX + 1, 7, modeRow, modeFg, "8")
+    safeBlit(3, 8, modeRow, modeFg, "8")
+
+    -- 3. 右側四軸烏龜名稱與推力卡片 (Quad Names & Thrust)
+    local rightX = cardW + 4
+    local rightW = w - rightX
+    for y = 3, 9 do
+        safeBlit(rightX, y, string.rep(" ", rightW), "0", "8")
+    end
+    safeBlit(rightX + 1, 3, "ENGINES (LABEL & SIG)", "9", "8")
+
+    local function getEngineInfo(node, defaultLabel, outVal)
+        if not node then
+            return string.format("%-10s: OFFLINE", defaultLabel), "e"
+        end
+        local lbl = node.label or node.name or defaultLabel
+        if #lbl > 10 then lbl = lbl:sub(1, 10) end
+        return string.format("%-10s: %2d/15", lbl, outVal), "5"
+    end
+
+    -- 顯示 4 個引擎的自訂 Label 名稱與當前輸出
+    local flStr, flCol = getEngineInfo(engines.FL, "FL", engineOutputs.FL)
+    safeBlit(rightX + 1, 5, flStr, flCol, "8")
+
+    local frStr, frCol = getEngineInfo(engines.FR, "FR", engineOutputs.FR)
+    safeBlit(rightX + 1, 6, frStr, frCol, "8")
+
+    local blStr, blCol = getEngineInfo(engines.BL, "BL", engineOutputs.BL)
+    safeBlit(rightX + 1, 7, blStr, blCol, "8")
+
+    local brStr, brCol = getEngineInfo(engines.BR, "BR", engineOutputs.BR)
+    safeBlit(rightX + 1, 8, brStr, brCol, "8")
 
     -- 4. 狀態訊息列
     local statusRow = string.format("STATUS: %-30s", state.statusMsg):sub(1, w - 2)
-    safeBlit(2, 9, statusRow, "0", "f")
+    safeBlit(2, 10, statusRow, "0", "f")
 
-    -- 5. 觸控按鈕
+    -- 5. 觸控按鈕區
     buttons = {}
 
-    local bY1 = 11
+    local bY1 = 12
     local bW1 = math.floor((w - 5) / 4)
     addButton(2, bY1, bW1, 2, "+10m", "d", "0", function()
         state.targetAlt = state.targetAlt + 10
@@ -281,7 +295,7 @@ local function drawQuadUI()
         state.targetAlt = math.max(0, state.targetAlt - 10)
     end)
 
-    local bY2 = 14
+    local bY2 = 15
     local bW2 = math.floor((w - 4) / 3)
     addButton(2, bY2, bW2, 2, "BASE +1", "3", "0", function()
         state.baseThrottle = math.min(15, state.baseThrottle + 1)
@@ -289,12 +303,12 @@ local function drawQuadUI()
     addButton(3 + bW2, bY2, bW2, 2, "BASE -1", "9", "0", function()
         state.baseThrottle = math.max(0, state.baseThrottle - 1)
     end)
-    addButton(4 + bW2*2, bY2, bW2, 2, "CALIBRATE", "a", "0", function()
+    addButton(4 + bW2*2, bY2, bW2, 2, "RE-SCAN", "a", "0", function()
         scanQuadTurtles()
-        state.mode = "CALIBRATING"
+        state.statusMsg = "Re-scanned all 4 engines!"
     end)
 
-    local bY3 = 17
+    local bY3 = 18
     local mainBW = math.floor((w - 3) / 2)
     local holdBg = (state.mode == "HOLD_ALT") and "5" or "d"
     addButton(2, bY3, mainBW, 3, " [ HOLD ALT ] ", holdBg, "0", function()
