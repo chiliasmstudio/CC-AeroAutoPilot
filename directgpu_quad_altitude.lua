@@ -259,14 +259,18 @@ local function drawDirectGPU_UI()
     end)
 
     local btnY2 = 162
-    local btnW2 = math.floor((screenW - 30) / 3)
+    local btnW2 = math.floor((screenW - 35) / 4)
     addButton(8, btnY2, btnW2, btnH1, "BASE +1", {40, 90, 140}, {255, 255, 255}, function()
         state.baseThrottle = math.min(15, state.baseThrottle + 1)
     end)
     addButton(13 + btnW2, btnY2, btnW2, btnH1, "BASE -1", {50, 70, 120}, {255, 255, 255}, function()
         state.baseThrottle = math.max(0, state.baseThrottle - 1)
     end)
-    addButton(18 + btnW2*2, btnY2, btnW2, btnH1, "CALIBRATE", {120, 60, 160}, {255, 255, 255}, function()
+    addButton(18 + btnW2*2, btnY2, btnW2, btnH1, "RE-SCAN", {40, 120, 150}, {255, 255, 255}, function()
+        scanQuadTurtles()
+        state.statusMsg = "Engines Re-scanned!"
+    end)
+    addButton(23 + btnW2*3, btnY2, btnW2, btnH1, "CALIBRATE", {120, 60, 160}, {255, 255, 255}, function()
         scanQuadTurtles()
         state.targetAlt = 200.0
         state.mode = "CALIBRATING"

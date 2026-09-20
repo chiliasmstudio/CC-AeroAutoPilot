@@ -291,14 +291,18 @@ local function drawQuadUI()
     end)
 
     local bY2 = 15
-    local bW2 = math.floor((w - 4) / 3)
+    local bW2 = math.floor((w - 5) / 4)
     addButton(2, bY2, bW2, 2, "BASE +1", "3", "0", function()
         state.baseThrottle = math.min(15, state.baseThrottle + 1)
     end)
     addButton(3 + bW2, bY2, bW2, 2, "BASE -1", "9", "0", function()
         state.baseThrottle = math.max(0, state.baseThrottle - 1)
     end)
-    addButton(4 + bW2*2, bY2, bW2, 2, "CALIBRATE", "a", "0", function()
+    addButton(4 + bW2*2, bY2, bW2, 2, "RE-SCAN", "b", "0", function()
+        scanQuadTurtles()
+        state.statusMsg = "Engines Re-scanned!"
+    end)
+    addButton(5 + bW2*3, bY2, bW2, 2, "CALIBRATE", "a", "0", function()
         scanQuadTurtles()
         state.targetAlt = 200.0 -- 校準高度鎖定 200m
         state.mode = "CALIBRATING"
