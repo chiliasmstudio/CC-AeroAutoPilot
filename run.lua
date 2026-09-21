@@ -685,24 +685,49 @@ Drivers.toms = {
         if col <= 0x00FFFFFF then return col + 0xFF000000 end
         return col
     end,
-    drawBitmapText = function(self, startX, startY, text, color, scale)
+    drawText = function(self, startX, startY, text, color, scale)
         scale = scale or 1
-        text = string.upper(tostring(text or ""))
-        local curX = startX
+        text = tostring(text or "")
         local argb = self:toARGB(color)
         local sw, sh = self.screenW, self.screenH
+
+        -- 1. 原生高速文字路徑 (Native drawText Fast Path)
+        if self.gpu.drawText and scale == 1 then
+            local ok = pcall(self.gpu.drawText, math.max(1, math.min(sw, startX)), math.max(1, math.min(sh, startY)), text, argb)
+            if ok then return end
+        end
+
+        -- 2. 向量點陣垂直合併極速繪製 (Vertical Run-Length Merging)
+        text = string.upper(text)
+        local curX = startX
+        local gpu_fr = self.gpu.filledRectangle
 
         for i = 1, #text do
             local ch = text:sub(i, i)
             local glyph = FONT_5X7[ch] or FONT_5X7[' ']
             for col = 1, 5 do
                 local colBits = glyph[col] or 0
-                for row = 0, 6 do
-                    if bit32.band(colBits, bit32.lshift(1, row)) ~= 0 then
-                        local px = curX + (col - 1) * scale
-                        local py = startY + row * scale
-                        if px >= 1 and py >= 1 and px + scale - 1 <= sw and py + scale - 1 <= sh then
-                            pcall(function() self.gpu.filledRectangle(px, py, scale, scale, argb) end)
+                if colBits ~= 0 then
+                    local px = curX + (col - 1) * scale
+                    if px >= 1 and px + scale - 1 <= sw then
+                        local runStart = nil
+                        local runLen = 0
+                        for row = 0, 7 do
+                            local bit = (row < 7) and (bit32.band(colBits, bit32.lshift(1, row)) ~= 0) or false
+                            if bit then
+                                if not runStart then runStart = row end
+                                runLen = runLen + 1
+                            else
+                                if runStart then
+                                    local py = startY + runStart * scale
+                                    local ph = runLen * scale
+                                    if py >= 1 and py + ph - 1 <= sh then
+                                        pcall(gpu_fr, px, py, scale, ph, argb)
+                                    end
+                                    runStart = nil
+                                    runLen = 0
+                                end
+                            end
                         end
                     end
                 end
@@ -737,7 +762,7 @@ Drivers.toms = {
             end)
         end
         local function sTxt(x, y, txt, fc, sz)
-            self:drawBitmapText(x, y, txt, fc, sz or 1)
+            self:drawText(x, y, txt, fc, sz or 1)
         end
         local function sArc(cx, cy, r, startD, endD, stepD, c)
             local px, py = nil, nil
@@ -1216,11 +1241,11 @@ local function flightLoop()
     end
 end
 
--- 3.2 顯示繪製線程
+-- 3.2 顯示繪製線程 (約 12.5 FPS，平滑且完全避免 Watchdog 逾時)
 local function renderLoop()
     while true do
         activeDriver:draw()
-        sleep(0.05)
+        sleep(0.08)
     end
 end
 
