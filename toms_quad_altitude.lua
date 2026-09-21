@@ -5,12 +5,13 @@
     
     支援規格:
     - 專為 Tom's Peripherals 的 GPU 方塊 (tm_gpu / gpu) 與 Bitmap Monitors 打造。
+    - 全面啟用 64x64 高畫質解析度 (gpu.setSize(64))。
+    - 完整 32-bit ARGB (0xAARRGGBB) 顏色不透明度校正 (Alpha = 0xFF)，解決文字與刻度隱形問題。
     - A350 ECAM 全彩航空儀表：採用 GPU 平滑弧線 (lineS)、多色指針與數位讀數方框。
     - 穩健起飛偵測 (抗雜訊)：持續平穩爬坡加力，離地判定 (高度上升 >= 0.6m 或 垂直速度 >= 0.18m/s)。
     - 升力校準至 200m：平穩爬升至 200m，懸停自穩 5 秒自動鎖定並記錄懸停基準推力！
     - 自動平衡關閉 (純集體升力混控)，Gimbal 陀螺儀 Pitch / Roll 姿態完整即時呈現。
     - 支援 tm_monitor_touch 觸控點擊與全螢幕自動解析度適配。
-    - 嚴格座標邊界保護 (1-indexed 邊界鉗位)，徹底杜絕 Out of boundary 異常。
 --]]
 
 local VERSION = "v3.5.0"
@@ -65,13 +66,19 @@ function PID:update(error)
 end
 
 -- ========================================================
--- 2. Tom's Peripherals GPU 初始化與邊界安全繪圖模組
+-- 2. Tom's Peripherals GPU 初始化與 32-bit ARGB 安全繪圖模組
 -- ========================================================
 local gpu = peripheral.find("tm_gpu") or peripheral.find("gpu")
 if not gpu then
     error("未找到 Tom's Peripherals GPU 設備！請確保電腦相鄰放置了 GPU 方塊並連接 Bitmap Monitors。")
 end
 
+-- 啟用 64x64 高畫質點陣螢幕解析度
+pcall(function()
+    if gpu.setSize then
+        gpu.setSize(64)
+    end
+end)
 gpu.refreshSize()
 sleep(0.05)
 
@@ -86,6 +93,15 @@ end
 
 updateScreenSize()
 
+-- 32-bit ARGB 顏色轉換 (強制注入 100% Alpha 不透明度 0xFF000000)
+local function toARGB(col)
+    if type(col) ~= "number" then return 0xFFFFFFFF end
+    if col <= 0x00FFFFFF then
+        return col + 0xFF000000
+    end
+    return col
+end
+
 local function clampX(x)
     return math.max(1, math.min(screenW, math.floor(x + 0.5)))
 end
@@ -95,11 +111,12 @@ local function clampY(y)
 end
 
 local function safeFill(color)
+    local argb = toARGB(color)
     pcall(function()
         if gpu.fill then
-            gpu.fill(color)
+            gpu.fill(argb)
         else
-            gpu.filledRectangle(1, 1, screenW, screenH, color)
+            gpu.filledRectangle(1, 1, screenW, screenH, argb)
         end
     end)
 end
@@ -110,7 +127,8 @@ local function safeFilledRectangle(x, y, w, h, color)
     y = clampY(y)
     w = math.max(1, math.min(screenW - x + 1, math.floor(w + 0.5)))
     h = math.max(1, math.min(screenH - y + 1, math.floor(h + 0.5)))
-    pcall(function() gpu.filledRectangle(x, y, w, h, color) end)
+    local argb = toARGB(color)
+    pcall(function() gpu.filledRectangle(x, y, w, h, argb) end)
 end
 
 local function safeRectangle(x, y, w, h, color)
@@ -119,7 +137,8 @@ local function safeRectangle(x, y, w, h, color)
     y = clampY(y)
     w = math.max(1, math.min(screenW - x + 1, math.floor(w + 0.5)))
     h = math.max(1, math.min(screenH - y + 1, math.floor(h + 0.5)))
-    pcall(function() gpu.rectangle(x, y, w, h, color) end)
+    local argb = toARGB(color)
+    pcall(function() gpu.rectangle(x, y, w, h, argb) end)
 end
 
 local function safeLine(x1, y1, x2, y2, color)
@@ -127,7 +146,8 @@ local function safeLine(x1, y1, x2, y2, color)
     y1 = clampY(y1)
     x2 = clampX(x2)
     y2 = clampY(y2)
-    pcall(function() gpu.line(x1, y1, x2, y2, color) end)
+    local argb = toARGB(color)
+    pcall(function() gpu.line(x1, y1, x2, y2, argb) end)
 end
 
 local function safeLineS(x1, y1, x2, y2, color)
@@ -135,11 +155,12 @@ local function safeLineS(x1, y1, x2, y2, color)
     y1 = clampY(y1)
     x2 = clampX(x2)
     y2 = clampY(y2)
+    local argb = toARGB(color)
     pcall(function()
         if gpu.lineS then
-            gpu.lineS(x1, y1, x2, y2, color)
+            gpu.lineS(x1, y1, x2, y2, argb)
         else
-            gpu.line(x1, y1, x2, y2, color)
+            gpu.line(x1, y1, x2, y2, argb)
         end
     end)
 end
@@ -148,8 +169,14 @@ local function safeDrawText(x, y, text, textColor, bgColor, size)
     x = clampX(x)
     y = clampY(y)
     text = tostring(text or "")
+    local fgARGB = toARGB(textColor or 0xFFFFFF)
+    local bgARGB = bgColor and toARGB(bgColor) or nil
     pcall(function()
-        gpu.drawText(x, y, text, textColor, bgColor, size or 1)
+        if gpu.drawTextSmart then
+            gpu.drawTextSmart(x, y, text, fgARGB, bgARGB, false, size or 1)
+        elseif gpu.drawText then
+            gpu.drawText(x, y, text, fgARGB, bgARGB, size or 1)
+        end
     end)
 end
 
@@ -380,8 +407,8 @@ end
 -- 6. Airbus A350 ECAM 引擎儀表全彩渲染函式 (Tom's Peripherals GPU)
 -- ========================================================
 local function drawA350EngineDial(cx, cy, r, val, maxVal, label, sig)
-    -- 1. 儀表上方名稱標籤
-    local labelSize = math.max(1, math.floor(r * 0.04))
+    -- 1. 儀表上方名稱標籤 (大字體)
+    local labelSize = (screenW >= 280) and 2 or 1
     safeDrawText(cx - #label * 4 * labelSize, cy - r - 16, label, 0xC8E6FF, nil, labelSize)
 
     -- 2. 刻度弧 (210° ~ -30°)
@@ -450,7 +477,8 @@ local function drawTomsUI()
     -- 2. 頂部標題列 (1-indexed 邊界保護)
     local headerH = math.max(24, math.floor(screenH * 0.08))
     safeFilledRectangle(1, 1, screenW, headerH, 0x192841)
-    safeDrawText(12, math.floor((headerH - 8) / 2) + 1, string.format("QUAD-ENGINE AVIONICS - TOMS GPU %s", VERSION), 0xF0F5FF, nil, 1)
+    local titleSize = (screenW >= 300) and 2 or 1
+    safeDrawText(12, math.floor((headerH - 8 * titleSize) / 2) + 1, string.format("QUAD-ENGINE AVIONICS - TOMS GPU %s", VERSION), 0xF0F5FF, nil, titleSize)
 
     local currAlt = altiSensor and altiSensor.getHeight() or 0
     local currVspeed = altiSensor and altiSensor.getVerticalSpeed() or 0
@@ -475,18 +503,20 @@ local function drawTomsUI()
     drawCircle(gCX, gCY, gR, 0x1E2837, true)
     drawCircle(gCX, gCY, gR, 0x50AAF0, false)
     local altText = string.format("%.0f", currAlt)
-    safeDrawText(gCX - math.floor(#altText * 3.5), gCY - 4, altText, 0xFFFFFF, nil, 1)
+    local altSize = (gR >= 26) and 2 or 1
+    safeDrawText(gCX - math.floor(#altText * 3.5 * altSize), gCY - 4 * altSize, altText, 0xFFFFFF, nil, altSize)
     safeDrawText(gCX - 12, gCY + math.floor(gR * 0.36), "ALT(M)", 0xA0CDF0, nil, 1)
 
-    -- 狀態文字讀數
+    -- 狀態文字讀數 (支援大字體)
     local textX = pfdX + math.floor(leftW * 0.52)
     local rowSpacing = math.floor((instH - 24) / 5)
+    local textSize = (instH >= 120) and 2 or 1
 
-    safeDrawText(textX, instY + 16, string.format("TGT: %.0fm", state.targetAlt), 0x50E6FF, nil, 1)
-    safeDrawText(textX, instY + 16 + rowSpacing, string.format("V.S: %+.2f", currVspeed), 0xFFCD4B, nil, 1)
+    safeDrawText(textX, instY + 16, string.format("TGT: %.0fm", state.targetAlt), 0x50E6FF, nil, textSize)
+    safeDrawText(textX, instY + 16 + rowSpacing, string.format("V.S: %+.2f", currVspeed), 0xFFCD4B, nil, textSize)
     
     local mCol = (state.mode == "HOLD_ALT") and 0x50FF78 or (state.mode == "CALIBRATING" and 0x50C8FF or 0xFF5050)
-    safeDrawText(textX, instY + 16 + rowSpacing * 2, string.format("MODE: %s", state.mode:sub(1,7)), mCol, nil, 1)
+    safeDrawText(textX, instY + 16 + rowSpacing * 2, string.format("MODE: %s", state.mode:sub(1,7)), mCol, nil, textSize)
 
     -- 姿態與陀螺儀讀數
     safeDrawText(textX, instY + 16 + rowSpacing * 3, string.format("P:%+4.1f R:%+4.1f", currPitch, currRoll), 0xB4DCFF, nil, 1)
@@ -618,12 +648,13 @@ local function drawTomsUI()
     end)
 
     -- 繪製所有按鈕
+    local btnTextSize = (rowH >= 24) and 2 or 1
     for _, btn in ipairs(buttons) do
         safeFilledRectangle(btn.x, btn.y, btn.w, btn.h, btn.bg)
         safeRectangle(btn.x, btn.y, btn.w, btn.h, 0x8CA0B4)
-        local tx = btn.x + math.max(2, math.floor((btn.w - #btn.text * 6) / 2))
-        local ty = btn.y + math.floor((btn.h - 8) / 2)
-        safeDrawText(tx, ty, btn.text, btn.fg, nil, 1)
+        local tx = btn.x + math.max(2, math.floor((btn.w - #btn.text * 6 * btnTextSize) / 2))
+        local ty = btn.y + math.floor((btn.h - 8 * btnTextSize) / 2)
+        safeDrawText(tx, ty, btn.text, btn.fg, nil, btnTextSize)
     end
 
     -- 6. 同步至螢幕
