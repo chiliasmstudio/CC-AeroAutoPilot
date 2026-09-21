@@ -10,6 +10,7 @@
     - 升力校準至 200m：平穩爬升至 200m，懸停自穩 5 秒自動鎖定並記錄懸停基準推力！
     - 自動平衡關閉 (純集體升力混控)，Gimbal 陀螺儀 Pitch / Roll 姿態完整即時呈現。
     - 支援 tm_monitor_touch 觸控點擊與全螢幕自動解析度適配。
+    - 嚴格座標邊界保護 (1-indexed 邊界鉗位)，徹底杜絕 Out of boundary 異常。
 --]]
 
 local VERSION = "v3.5.0"
@@ -64,7 +65,7 @@ function PID:update(error)
 end
 
 -- ========================================================
--- 2. Tom's Peripherals GPU 初始化與輔助繪圖函式
+-- 2. Tom's Peripherals GPU 初始化與邊界安全繪圖模組
 -- ========================================================
 local gpu = peripheral.find("tm_gpu") or peripheral.find("gpu")
 if not gpu then
@@ -73,6 +74,84 @@ end
 
 gpu.refreshSize()
 sleep(0.05)
+
+local screenW, screenH = 320, 240
+
+local function updateScreenSize()
+    local ok, w, h = pcall(function() return gpu.getSize() end)
+    if ok and w and h and w > 0 and h > 0 then
+        screenW, screenH = w, h
+    end
+end
+
+updateScreenSize()
+
+local function clampX(x)
+    return math.max(1, math.min(screenW, math.floor(x + 0.5)))
+end
+
+local function clampY(y)
+    return math.max(1, math.min(screenH, math.floor(y + 0.5)))
+end
+
+local function safeFill(color)
+    pcall(function()
+        if gpu.fill then
+            gpu.fill(color)
+        else
+            gpu.filledRectangle(1, 1, screenW, screenH, color)
+        end
+    end)
+end
+
+local function safeFilledRectangle(x, y, w, h, color)
+    if w <= 0 or h <= 0 then return end
+    x = clampX(x)
+    y = clampY(y)
+    w = math.max(1, math.min(screenW - x + 1, math.floor(w + 0.5)))
+    h = math.max(1, math.min(screenH - y + 1, math.floor(h + 0.5)))
+    pcall(function() gpu.filledRectangle(x, y, w, h, color) end)
+end
+
+local function safeRectangle(x, y, w, h, color)
+    if w <= 0 or h <= 0 then return end
+    x = clampX(x)
+    y = clampY(y)
+    w = math.max(1, math.min(screenW - x + 1, math.floor(w + 0.5)))
+    h = math.max(1, math.min(screenH - y + 1, math.floor(h + 0.5)))
+    pcall(function() gpu.rectangle(x, y, w, h, color) end)
+end
+
+local function safeLine(x1, y1, x2, y2, color)
+    x1 = clampX(x1)
+    y1 = clampY(y1)
+    x2 = clampX(x2)
+    y2 = clampY(y2)
+    pcall(function() gpu.line(x1, y1, x2, y2, color) end)
+end
+
+local function safeLineS(x1, y1, x2, y2, color)
+    x1 = clampX(x1)
+    y1 = clampY(y1)
+    x2 = clampX(x2)
+    y2 = clampY(y2)
+    pcall(function()
+        if gpu.lineS then
+            gpu.lineS(x1, y1, x2, y2, color)
+        else
+            gpu.line(x1, y1, x2, y2, color)
+        end
+    end)
+end
+
+local function safeDrawText(x, y, text, textColor, bgColor, size)
+    x = clampX(x)
+    y = clampY(y)
+    text = tostring(text or "")
+    pcall(function()
+        gpu.drawText(x, y, text, textColor, bgColor, size or 1)
+    end)
+end
 
 local altiSensor   = peripheral.find("altitude_sensor")
 local gimbalSensor = peripheral.find("gimbal_sensor")
@@ -106,14 +185,10 @@ local function drawArc(cx, cy, r, startDeg, endDeg, stepDeg, color)
     local step = (startDeg > endDeg) and -math.abs(stepDeg or 5) or math.abs(stepDeg or 5)
     for deg = startDeg, endDeg, step do
         local rad = math.rad(deg)
-        local px = math.floor(cx + r * math.cos(rad) + 0.5)
-        local py = math.floor(cy - r * math.sin(rad) + 0.5)
+        local px = cx + r * math.cos(rad)
+        local py = cy - r * math.sin(rad)
         if prevX and prevY then
-            if gpu.lineS then
-                gpu.lineS(prevX, prevY, px, py, color)
-            else
-                gpu.line(prevX, prevY, px, py, color)
-            end
+            safeLineS(prevX, prevY, px, py, color)
         end
         prevX, prevY = px, py
     end
@@ -123,19 +198,11 @@ local function drawCircle(cx, cy, r, color, filled)
     if filled then
         for dy = -r, r do
             local dx = math.floor(math.sqrt(math.max(0, r * r - dy * dy)) + 0.5)
-            gpu.line(cx - dx, cy + dy, cx + dx, cy + dy, color)
+            safeLine(cx - dx, cy + dy, cx + dx, cy + dy, color)
         end
     else
         drawArc(cx, cy, r, 0, 360, 10, color)
     end
-end
-
-local function safeDrawText(x, y, text, textColor, bgColor, size)
-    pcall(function()
-        if gpu.drawText then
-            gpu.drawText(x, y, text, textColor, bgColor, size or 1)
-        end
-    end)
 end
 
 -- ========================================================
@@ -325,11 +392,11 @@ local function drawA350EngineDial(cx, cy, r, val, maxVal, label, sig)
     local ticks = {210, 90, -30}
     for _, deg in ipairs(ticks) do
         local rad = math.rad(deg)
-        local t1x = math.floor(cx + (r - 3) * math.cos(rad) + 0.5)
-        local t1y = math.floor(cy - (r - 3) * math.sin(rad) + 0.5)
-        local t2x = math.floor(cx + (r + 5) * math.cos(rad) + 0.5)
-        local t2y = math.floor(cy - (r + 5) * math.sin(rad) + 0.5)
-        gpu.line(t1x, t1y, t2x, t2y, 0xB4C8DC)
+        local t1x = cx + (r - 3) * math.cos(rad)
+        local t1y = cy - (r - 3) * math.sin(rad)
+        local t2x = cx + (r + 5) * math.cos(rad)
+        local t2y = cy - (r + 5) * math.sin(rad)
+        safeLine(t1x, t1y, t2x, t2y, 0xB4C8DC)
     end
 
     -- 3. 高推力紅線區 (13.0 ~ 15.0，對應 10° ~ -30°)
@@ -338,24 +405,20 @@ local function drawA350EngineDial(cx, cy, r, val, maxVal, label, sig)
 
     -- 紅線極限標記線
     local rTickRad = math.rad(-18)
-    local rx1 = math.floor(cx + (r - 3) * math.cos(rTickRad) + 0.5)
-    local ry1 = math.floor(cy - (r - 3) * math.sin(rTickRad) + 0.5)
-    local rx2 = math.floor(cx + (r + 7) * math.cos(rTickRad) + 0.5)
-    local ry2 = math.floor(cy - (r + 7) * math.sin(rTickRad) + 0.5)
-    gpu.line(rx1, ry1, rx2, ry2, 0xFF3232)
+    local rx1 = cx + (r - 3) * math.cos(rTickRad)
+    local ry1 = cy - (r - 3) * math.sin(rTickRad)
+    local rx2 = cx + (r + 7) * math.cos(rTickRad)
+    local ry2 = cy - (r + 7) * math.sin(rTickRad)
+    safeLine(rx1, ry1, rx2, ry2, 0xFF3232)
 
     -- 4. 綠色指針
     local ratio = math.min(1.0, math.max(0.0, val / (maxVal or 15.0)))
     local needleDeg = 210 - ratio * 240
     local nRad = math.rad(needleDeg)
-    local nx = math.floor(cx + (r - 2) * math.cos(nRad) + 0.5)
-    local ny = math.floor(cy - (r - 2) * math.sin(nRad) + 0.5)
+    local nx = cx + (r - 2) * math.cos(nRad)
+    local ny = cy - (r - 2) * math.sin(nRad)
 
-    if gpu.lineS then
-        gpu.lineS(cx, cy, nx, ny, 0x32FF64)
-    else
-        gpu.line(cx, cy, nx, ny, 0x32FF64)
-    end
+    safeLineS(cx, cy, nx, ny, 0x32FF64)
     drawCircle(cx, cy, math.max(2, math.floor(r * 0.12)), 0xD2DCF0, true)
 
     -- 5. 底部數位連續推力讀數方框
@@ -364,8 +427,8 @@ local function drawA350EngineDial(cx, cy, r, val, maxVal, label, sig)
     local boxX = cx - math.floor(boxW / 2)
     local boxY = cy + math.floor(r * 0.28)
 
-    gpu.filledRectangle(boxX, boxY, boxW, boxH, 0x0C121C)
-    gpu.rectangle(boxX, boxY, boxW, boxH, 0x2896C8)
+    safeFilledRectangle(boxX, boxY, boxW, boxH, 0x0C121C)
+    safeRectangle(boxX, boxY, boxW, boxH, 0x2896C8)
 
     local valStr = string.format("%4.1f", val)
     safeDrawText(boxX + 4, boxY + 2, valStr, 0x46FF78, nil, 1)
@@ -379,17 +442,15 @@ end
 -- 7. Tom's Peripherals GPU 全螢幕大字體響應式介面
 -- ========================================================
 local function drawTomsUI()
-    local screenW, screenH = gpu.getSize()
-    screenW = screenW or 320
-    screenH = screenH or 240
+    updateScreenSize()
 
     -- 1. 背景清除 (深航空藍黑)
-    gpu.fill(0x0F141E)
+    safeFill(0x0F141E)
 
-    -- 2. 頂部標題列
+    -- 2. 頂部標題列 (1-indexed 邊界保護)
     local headerH = math.max(24, math.floor(screenH * 0.08))
-    gpu.filledRectangle(0, 0, screenW, headerH, 0x192841)
-    safeDrawText(12, math.floor((headerH - 8) / 2), string.format("QUAD-ENGINE AVIONICS - TOMS GPU %s", VERSION), 0xF0F5FF, nil, 1)
+    safeFilledRectangle(1, 1, screenW, headerH, 0x192841)
+    safeDrawText(12, math.floor((headerH - 8) / 2) + 1, string.format("QUAD-ENGINE AVIONICS - TOMS GPU %s", VERSION), 0xF0F5FF, nil, 1)
 
     local currAlt = altiSensor and altiSensor.getHeight() or 0
     local currVspeed = altiSensor and altiSensor.getVerticalSpeed() or 0
@@ -402,8 +463,8 @@ local function drawTomsUI()
 
     -- [左側 PFD / 高度與飛行狀態卡片]
     local pfdX = 6
-    gpu.filledRectangle(pfdX, instY, leftW, instH, 0x141A26)
-    gpu.rectangle(pfdX, instY, leftW, instH, 0x283850)
+    safeFilledRectangle(pfdX, instY, leftW, instH, 0x141A26)
+    safeRectangle(pfdX, instY, leftW, instH, 0x283850)
     safeDrawText(pfdX + 8, instY + 6, "PRIMARY FLIGHT DISPLAY", 0xAAD2E6, nil, 1)
 
     -- PFD 圓形高度儀表
@@ -438,8 +499,8 @@ local function drawTomsUI()
     -- [右側 A350 ECAM 四軸引擎儀表區]
     local ecamX = pfdX + leftW + 6
     local ecamW = screenW - ecamX - 6
-    gpu.filledRectangle(ecamX, instY, ecamW, instH, 0x121822)
-    gpu.rectangle(ecamX, instY, ecamW, instH, 0x283850)
+    safeFilledRectangle(ecamX, instY, ecamW, instH, 0x121822)
+    safeRectangle(ecamX, instY, ecamW, instH, 0x283850)
 
     -- 渲染 4 具 A350 ECAM 引擎儀表 (FL, FR, BL, BR)
     local slotW = math.floor((ecamW - 8) / 4)
@@ -462,8 +523,8 @@ local function drawTomsUI()
     -- 4. 狀態訊息橫幅
     local statY = instY + instH + 6
     local statH = math.max(18, math.floor(screenH * 0.06))
-    gpu.filledRectangle(pfdX, statY, screenW - 12, statH, 0x1E2432)
-    gpu.rectangle(pfdX, statY, screenW - 12, statH, 0x3C4B64)
+    safeFilledRectangle(pfdX, statY, screenW - 12, statH, 0x1E2432)
+    safeRectangle(pfdX, statY, screenW - 12, statH, 0x3C4B64)
     safeDrawText(pfdX + 8, statY + math.floor((statH - 8) / 2), string.format("STATUS: %s", state.statusMsg), 0x50E6FF, nil, 1)
 
     -- 5. 觸控按鈕區 (響應式下半部排版)
@@ -558,17 +619,19 @@ local function drawTomsUI()
 
     -- 繪製所有按鈕
     for _, btn in ipairs(buttons) do
-        gpu.filledRectangle(btn.x, btn.y, btn.w, btn.h, btn.bg)
-        gpu.rectangle(btn.x, btn.y, btn.w, btn.h, 0x8CA0B4)
+        safeFilledRectangle(btn.x, btn.y, btn.w, btn.h, btn.bg)
+        safeRectangle(btn.x, btn.y, btn.w, btn.h, 0x8CA0B4)
         local tx = btn.x + math.max(2, math.floor((btn.w - #btn.text * 6) / 2))
         local ty = btn.y + math.floor((btn.h - 8) / 2)
         safeDrawText(tx, ty, btn.text, btn.fg, nil, 1)
     end
 
     -- 6. 同步至螢幕
-    if gpu.sync then
-        gpu.sync()
-    end
+    pcall(function()
+        if gpu.sync then
+            gpu.sync()
+        end
+    end)
 end
 
 -- ========================================================
