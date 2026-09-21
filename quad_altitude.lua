@@ -118,10 +118,29 @@ local function getGimbalData()
 end
 
 local function safeBlit(x, y, text, fgChar, bgChar)
-    display.setCursorPos(x, y)
+    text = tostring(text or "")
     local len = #text
-    local fg = (type(fgChar) == "string" and #fgChar == len) and fgChar or string.rep(tostring(fgChar or "0"), len)
-    local bg = (type(bgChar) == "string" and #bgChar == len) and bgChar or string.rep(tostring(bgChar or "f"), len)
+    if len == 0 then return end
+    display.setCursorPos(x, y)
+
+    local fg = tostring(fgChar or "0")
+    if #fg == 1 then
+        fg = string.rep(fg, len)
+    elseif #fg < len then
+        fg = fg .. string.rep("0", len - #fg)
+    elseif #fg > len then
+        fg = fg:sub(1, len)
+    end
+
+    local bg = tostring(bgChar or "f")
+    if #bg == 1 then
+        bg = string.rep(bg, len)
+    elseif #bg < len then
+        bg = bg .. string.rep(bg:sub(#bg, #bg), len - #bg)
+    elseif #bg > len then
+        bg = bg:sub(1, len)
+    end
+
     display.blit(text, fg, bg)
 end
 
