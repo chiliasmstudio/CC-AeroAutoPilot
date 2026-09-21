@@ -5,7 +5,7 @@
     
     智慧校準與防暴衝姿態自穩邏輯:
     - 類比紅石純淨輸出：修正 setOutput 導致訊號被強制頂到 15 滿載暴衝的底層問題。
-    - Airbus A350 ECAM 引擎儀表：全彩渲染 4 軸引擎弧形指針儀表、極限紅線、綠色指針、數位讀數方框與離散訊號。
+    - Airbus A350 ECAM 航太級全彩儀表：全螢幕自適應大尺寸渲染 4 軸引擎弧形刻度、極限紅線標記、空巴綠指針、數位讀數方框與離散訊號。
     - 智慧變速探索起飛推力：起步極慢 -> 持續無動作則穩健加速加力 (不卡死在低檔) -> 偵測到起飛立刻放緩加力並平滑控速爬升。
     - 虛擬軌跡巡航爬升：以 0.30 m/s 柔和定速引導爬升至 +10 格懸浮，消除階躍誤差暴衝。
     - 姿態即時反向加力配平：傾斜時立刻對低側加力、高側減力，維持水平。
@@ -75,10 +75,6 @@ local displayId = gpu.autoDetectAndCreateDisplay()
 if not displayId then
     error("DirectGPU 未能檢測到 Monitor 螢幕！")
 end
-
-local dispInfo = gpu.getDisplayInfo(displayId)
-local screenW = dispInfo.pixelWidth or 320
-local screenH = dispInfo.pixelHeight or 240
 
 local altiSensor   = peripheral.find("altitude_sensor")
 local gimbalSensor = peripheral.find("gimbal_sensor")
@@ -274,58 +270,82 @@ local function addButton(x, y, w, h, text, bg, fg, action)
 end
 
 -- ========================================================
--- 5. DirectGPU 渲染介面 (24-bit True RGB + A350 ECAM Gauges)
+-- 5. Airbus A350 ECAM 引擎儀表全彩渲染函式
 -- ========================================================
 local function drawA350EngineDial(cx, cy, r, val, maxVal, label, sig)
-    -- 1. 儀表標題
-    gpu.drawText(displayId, label, cx - 8, cy - r - 9, 200, 230, 255, "Arial", 8, "bold")
+    -- 1. 儀表上方標題 (例如 1 FL 或 FL)
+    local labelSize = math.max(9, math.floor(r * 0.45))
+    gpu.drawText(displayId, label, cx - 12, cy - r - 14, 200, 230, 255, "Arial", labelSize, "bold")
 
-    -- 2. 圓弧刻度 (210° 到 -30°，共 240° 扇形範圍)
+    -- 2. 儀表圓弧背景與主刻度弧 (210° 到 -30°，共 240° 扇形)
     local arcPts = {}
-    for deg = 210, -30, -15 do
+    local arcPtsOuter = {}
+    for deg = 210, -30, -10 do
         local rad = math.rad(deg)
         table.insert(arcPts, {
             math.floor(cx + r * math.cos(rad) + 0.5),
             math.floor(cy - r * math.sin(rad) + 0.5)
         })
+        table.insert(arcPtsOuter, {
+            math.floor(cx + (r + 1) * math.cos(rad) + 0.5),
+            math.floor(cy - (r + 1) * math.sin(rad) + 0.5)
+        })
     end
-    gpu.drawPolylines(displayId, arcPts, 130, 150, 175)
+    gpu.drawPolylines(displayId, arcPts, 160, 180, 205)
+    gpu.drawPolylines(displayId, arcPtsOuter, 120, 140, 165)
 
-    -- 3. 高推力紅線區 (Redline zone: 13 ~ 15 滿推力紅線標記)
+    -- 主刻度線 (0%, 50%, 100%)
+    local ticks = {210, 90, -30}
+    for _, deg in ipairs(ticks) do
+        local rad = math.rad(deg)
+        local t1x = math.floor(cx + (r - 2) * math.cos(rad) + 0.5)
+        local t1y = math.floor(cy - (r - 2) * math.sin(rad) + 0.5)
+        local t2x = math.floor(cx + (r + 5) * math.cos(rad) + 0.5)
+        local t2y = math.floor(cy - (r + 5) * math.sin(rad) + 0.5)
+        gpu.drawLine(displayId, t1x, t1y, t2x, t2y, 180, 200, 225)
+    end
+
+    -- 3. 高推力紅線區 (Redline zone: 13.0 ~ 15.0 滿推力紅色警示)
     local redPts = {}
-    for deg = 10, -30, -10 do
+    for deg = 10, -30, -8 do
         local rad = math.rad(deg)
         table.insert(redPts, {
             math.floor(cx + r * math.cos(rad) + 0.5),
             math.floor(cy - r * math.sin(rad) + 0.5)
         })
     end
-    gpu.drawPolylines(displayId, redPts, 255, 60, 60)
+    gpu.drawPolylines(displayId, redPts, 255, 55, 55)
 
-    -- 紅線極限標記 (A350 Red Limit Tick)
-    local rTickRad = math.rad(-15)
-    gpu.drawLine(displayId,
-        math.floor(cx + (r - 2) * math.cos(rTickRad)),
-        math.floor(cy - (r - 2) * math.sin(rTickRad)),
-        math.floor(cx + (r + 4) * math.cos(rTickRad)),
-        math.floor(cy - (r + 4) * math.sin(rTickRad)),
-        255, 60, 60
-    )
+    -- 紅線極限標記 (A350 Red Limit Flag / Tick)
+    local rTickRad = math.rad(-18)
+    local rx1 = math.floor(cx + (r - 3) * math.cos(rTickRad) + 0.5)
+    local ry1 = math.floor(cy - (r - 3) * math.sin(rTickRad) + 0.5)
+    local rx2 = math.floor(cx + (r + 7) * math.cos(rTickRad) + 0.5)
+    local ry2 = math.floor(cy - (r + 7) * math.sin(rTickRad) + 0.5)
+    gpu.drawLine(displayId, rx1, ry1, rx2, ry2, 255, 50, 50)
+    gpu.drawLine(displayId, rx1 + 1, ry1, rx2 + 1, ry2, 255, 50, 50)
 
-    -- 4. 空巴經典霓虹綠指針 (A350 Neon Green Needle)
+    -- 4. 空巴經典霓虹綠指針 (A350 Thick Neon Green Needle)
     local ratio = math.min(1.0, math.max(0.0, val / (maxVal or 15.0)))
     local needleDeg = 210 - ratio * 240
     local nRad = math.rad(needleDeg)
-    local nx = math.floor(cx + (r - 2) * math.cos(nRad) + 0.5)
-    local ny = math.floor(cy - (r - 2) * math.sin(nRad) + 0.5)
+    local nx = math.floor(cx + (r - 3) * math.cos(nRad) + 0.5)
+    local ny = math.floor(cy - (r - 3) * math.sin(nRad) + 0.5)
 
-    gpu.drawLine(displayId, cx, cy, nx, ny, 60, 255, 100)
-    gpu.drawCircle(displayId, cx, cy, 2, 200, 220, 240, true)
+    -- 繪製加粗指針
+    gpu.drawLine(displayId, cx, cy, nx, ny, 50, 255, 100)
+    gpu.drawLine(displayId, cx + 1, cy, nx + 1, ny, 50, 255, 100)
+    gpu.drawLine(displayId, cx, cy + 1, nx, ny + 1, 50, 255, 100)
 
-    -- 5. 底部數位數值讀數框 (A350 Digital Readout Box)
-    local boxW, boxH = 26, 11
-    local boxX = cx - 13
-    local boxY = cy + 4
+    -- 中心圓形軸心 (Hub)
+    gpu.drawCircle(displayId, cx, cy, math.max(2, math.floor(r * 0.14)), 200, 220, 240, true)
+
+    -- 5. 底部空巴數位數值讀數框 (A350 Digital Box)
+    local boxW = math.max(38, math.floor(r * 1.5))
+    local boxH = math.max(16, math.floor(r * 0.65))
+    local boxX = cx - math.floor(boxW / 2)
+    local boxY = cy + math.floor(r * 0.28)
+
     gpu.fillRect(displayId, boxX, boxY, boxW, boxH, 12, 18, 28)
     gpu.drawPolylines(displayId, {
         {boxX, boxY},
@@ -333,108 +353,132 @@ local function drawA350EngineDial(cx, cy, r, val, maxVal, label, sig)
         {boxX + boxW, boxY + boxH},
         {boxX, boxY + boxH},
         {boxX, boxY}
-    }, 40, 140, 180)
+    }, 40, 150, 200)
 
     local valStr = string.format("%4.1f", val)
-    gpu.drawText(displayId, valStr, boxX + 2, boxY + 2, 80, 255, 120, "Arial", 8, "bold")
+    local numFontSize = math.max(9, math.floor(boxH * 0.68))
+    local textOffset = math.floor((boxW - #valStr * (numFontSize * 0.6)) / 2)
+    gpu.drawText(displayId, valStr, boxX + math.max(3, textOffset), boxY + 2, 70, 255, 120, "Arial", numFontSize, "bold")
 
-    -- 6. 離散輸出訊號 (例如 2/15)
-    gpu.drawText(displayId, string.format("%d/15", sig or 0), cx - 9, boxY + boxH + 2, 140, 180, 210, "Arial", 7, "plain")
+    -- 6. 離散訊號標籤 (例如 2/15)
+    local sigStr = string.format("%d/15", sig or 0)
+    local sigFontSize = math.max(8, math.floor(boxH * 0.55))
+    gpu.drawText(displayId, sigStr, cx - math.floor(#sigStr * 3), boxY + boxH + 3, 140, 180, 215, "Arial", sigFontSize, "plain")
 end
 
+-- ========================================================
+-- 6. DirectGPU 全螢幕響應式渲染介面
+-- ========================================================
 local function drawDirectGPU_UI()
+    local dispInfo = gpu.getDisplayInfo(displayId)
+    local screenW = dispInfo.pixelWidth or 320
+    local screenH = dispInfo.pixelHeight or 240
+
     gpu.clear(displayId, 15, 20, 30)
 
-    -- 1. 頂部標題列 (包含版本號)
-    gpu.fillRect(displayId, 0, 0, screenW, 24, 25, 40, 65)
-    gpu.drawText(displayId, string.format("QUAD-ENGINE AVIONICS - A350 ECAM %s", VERSION), 10, 5, 240, 245, 255, "Arial", 12, "bold")
+    -- 1. 頂部標題列 (比例自適應)
+    local headerH = math.max(26, math.floor(screenH * 0.08))
+    gpu.fillRect(displayId, 0, 0, screenW, headerH, 25, 40, 65)
+    gpu.drawText(displayId, string.format("QUAD-ENGINE AVIONICS - A350 ECAM %s", VERSION), 12, math.floor((headerH - 12) / 2), 240, 245, 255, "Arial", math.max(11, math.floor(headerH * 0.45)), "bold")
 
     local currAlt = altiSensor and altiSensor.getHeight() or 0
     local currVspeed = altiSensor and altiSensor.getVerticalSpeed() or 0
     local currPitch, currRoll = getGimbalData()
 
-    -- 2. 左側高度與飛行狀態卡 (PFD / ALTITUDE)
-    local pfdX = 6
-    local pfdY = 28
-    local pfdW = 108
-    local pfdH = 96
-    gpu.fillRect(displayId, pfdX, pfdY, pfdW, pfdH, 20, 26, 38)
+    -- 2. 儀表主區塊垂直尺寸分配
+    local instY = headerH + 6
+    local instH = math.floor((screenH - headerH) * 0.52)
+    local leftW = math.max(100, math.floor(screenW * 0.30))
 
-    -- 高度圓形儀表
-    local gCX, gCY, gR = pfdX + 22, pfdY + 30, 19
+    -- [左側 PFD / 高度與飛行狀態卡片]
+    local pfdX = 6
+    gpu.fillRect(displayId, pfdX, instY, leftW, instH, 20, 26, 38)
+
+    -- PFD 圓形高度儀表 (依 instH 自適應尺寸)
+    local gR = math.min(28, math.floor(instH * 0.25))
+    local gCX = pfdX + math.floor(leftW * 0.28)
+    local gCY = instY + math.floor(instH * 0.35)
+
     gpu.drawCircle(displayId, gCX, gCY, gR, 35, 45, 60, true)
     gpu.drawCircle(displayId, gCX, gCY, gR, 100, 180, 255, false)
-    gpu.drawText(displayId, string.format("%.0f", currAlt), gCX - 10, gCY - 6, 255, 255, 255, "Arial", 12, "bold")
-    gpu.drawText(displayId, "ALT(M)", gCX - 12, gCY + 6, 160, 200, 230, "Arial", 7, "plain")
+    local altText = string.format("%.0f", currAlt)
+    gpu.drawText(displayId, altText, gCX - math.floor(#altText * 4), gCY - 7, 255, 255, 255, "Arial", math.max(12, math.floor(gR * 0.55)), "bold")
+    gpu.drawText(displayId, "ALT(M)", gCX - 14, gCY + 7, 160, 200, 230, "Arial", 8, "plain")
 
-    -- 狀態文字
-    gpu.drawText(displayId, string.format("TGT: %.0fm", state.targetAlt), pfdX + 46, pfdY + 12, 80, 220, 255, "Arial", 9, "bold")
-    gpu.drawText(displayId, string.format("V.S: %+.2f", currVspeed), pfdX + 46, pfdY + 26, 255, 200, 80, "Arial", 9, "bold")
+    -- 狀態文字讀數
+    local textX = pfdX + math.floor(leftW * 0.56)
+    gpu.drawText(displayId, string.format("TGT: %.0fm", state.targetAlt), textX, instY + 14, 80, 220, 255, "Arial", 10, "bold")
+    gpu.drawText(displayId, string.format("V.S: %+.2fm/s", currVspeed), textX, instY + 32, 255, 200, 80, "Arial", 10, "bold")
     
     if gimbalAvailable then
-        gpu.drawText(displayId, string.format("P:%+4.1f* R:%+4.1f*", currPitch, currRoll), pfdX + 6, pfdY + 56, 180, 220, 255, "Arial", 8, "plain")
-        gpu.drawText(displayId, "GIMBAL: ACTIVE", pfdX + 6, pfdY + 68, 80, 255, 120, "Arial", 8, "bold")
+        gpu.drawText(displayId, string.format("P:%+4.1f* R:%+4.1f*", currPitch, currRoll), pfdX + 10, instY + math.floor(instH * 0.68), 180, 220, 255, "Arial", 9, "plain")
+        gpu.drawText(displayId, "GIMBAL: ACTIVE [OK]", pfdX + 10, instY + math.floor(instH * 0.82), 80, 255, 120, "Arial", 9, "bold")
     else
-        gpu.drawText(displayId, "P: ---   R: ---", pfdX + 6, pfdY + 56, 150, 150, 150, "Arial", 8, "plain")
-        gpu.drawText(displayId, "GIMBAL: NO SENSOR", pfdX + 6, pfdY + 68, 255, 60, 60, "Arial", 8, "bold")
+        gpu.drawText(displayId, "P: ---   R: ---", pfdX + 10, instY + math.floor(instH * 0.68), 150, 150, 150, "Arial", 9, "plain")
+        gpu.drawText(displayId, "GIMBAL: NO SENSOR", pfdX + 10, instY + math.floor(instH * 0.82), 255, 60, 60, "Arial", 9, "bold")
     end
     
     local mCol = (state.mode == "HOLD_ALT") and {80, 255, 120} or (state.mode == "CALIBRATING" and {80, 200, 255} or {255, 80, 80})
-    gpu.drawText(displayId, string.format("MODE: %s", state.mode), pfdX + 6, pfdY + 82, mCol[1], mCol[2], mCol[3], "Arial", 9, "bold")
+    gpu.drawText(displayId, string.format("MODE: %s", state.mode), textX, instY + 50, mCol[1], mCol[2], mCol[3], "Arial", 10, "bold")
 
-    -- 3. 右側四軸空巴 A350 ECAM 引擎儀表區
-    local ecamX = pfdX + pfdW + 6
-    local ecamY = 28
+    -- [右側 A350 ECAM 四軸引擎儀表區]
+    local ecamX = pfdX + leftW + 6
     local ecamW = screenW - ecamX - 6
-    local ecamH = 96
-    gpu.fillRect(displayId, ecamX, ecamY, ecamW, ecamH, 18, 24, 34)
+    gpu.fillRect(displayId, ecamX, instY, ecamW, instH, 18, 24, 34)
 
-    -- 渲染 4 顆 A350 ECAM 引擎儀表 (FL, FR, BL, BR)
+    -- 渲染 4 顆大尺寸 A350 ECAM 引擎儀表 (FL, FR, BL, BR)
     local slotW = math.floor((ecamW - 8) / 4)
     local slots = {"FL", "FR", "BL", "BR"}
 
+    -- 動態計算大尺寸半徑
+    local dialR = math.min(math.floor(slotW * 0.36), math.floor(instH * 0.30))
+    local engCenterY = instY + math.floor(instH * 0.44)
+
     for i, slot in ipairs(slots) do
         local engCenterX = ecamX + 4 + math.floor((i - 0.5) * slotW)
-        local engCenterY = ecamY + 38
         local vVal = virtualOutputs[slot] or 0.0
         local sig  = engineOutputs[slot] or 0
         local node = engines[slot]
         local lbl  = node and (node.label or node.name or slot) or slot
-        if #lbl > 4 then lbl = lbl:sub(1, 4) end
+        if #lbl > 5 then lbl = lbl:sub(1, 5) end
 
-        drawA350EngineDial(engCenterX, engCenterY, 14, vVal, 15.0, lbl, sig)
+        drawA350EngineDial(engCenterX, engCenterY, dialR, vVal, 15.0, lbl, sig)
     end
 
-    -- ECAM 儀表底層狀態文字
-    gpu.drawText(displayId, string.format("BASE: %4.3f", state.baseThrottle), ecamX + 8, ecamY + ecamH - 12, 200, 220, 255, "Arial", 8, "plain")
+    -- ECAM 儀表底部數值
+    gpu.drawText(displayId, string.format("BASE: %4.3f", state.baseThrottle), ecamX + 10, instY + instH - 12, 200, 220, 255, "Arial", 9, "plain")
     local autoLvlCol = (state.autoLevel and gimbalAvailable) and {80, 255, 120} or {255, 90, 90}
-    gpu.drawText(displayId, string.format("AUTO-LVL: %s", (state.autoLevel and gimbalAvailable) and "ON" or "OFF"), ecamX + ecamW - 75, ecamY + ecamH - 12, autoLvlCol[1], autoLvlCol[2], autoLvlCol[3], "Arial", 8, "bold")
+    gpu.drawText(displayId, string.format("AUTO-LVL: %s", (state.autoLevel and gimbalAvailable) and "ON" or "OFF"), ecamX + ecamW - 85, instY + instH - 12, autoLvlCol[1], autoLvlCol[2], autoLvlCol[3], "Arial", 9, "bold")
 
-    -- 4. 狀態訊息橫條
-    gpu.fillRect(displayId, 6, 126, screenW - 12, 16, 18, 24, 34)
-    gpu.drawText(displayId, string.format("STATUS: %s", state.statusMsg), 10, 129, 240, 240, 240, "Arial", 9, "plain")
+    -- 3. 狀態訊息橫條 (自適應垂直高度)
+    local statY = instY + instH + 6
+    local statH = math.max(18, math.floor(screenH * 0.07))
+    gpu.fillRect(displayId, 6, statY, screenW - 12, statH, 18, 24, 34)
+    gpu.drawText(displayId, string.format("STATUS: %s", state.statusMsg), 12, statY + math.floor((statH - 10) / 2), 240, 240, 240, "Arial", math.max(9, math.floor(statH * 0.48)), "plain")
 
-    -- 5. 觸控按鈕區
+    -- 4. 底部觸控按鈕區 (填滿整個螢幕剩餘高度)
     buttons = {}
+    local btnStartY = statY + statH + 6
+    local btnAreaH = screenH - btnStartY - 6
+    local rowH = math.max(22, math.floor((btnAreaH - 12) / 3))
 
     -- 第一排按鈕：目標高度調整 (+10m, +1m, -1m, -10m, SET CURR)
-    local btnY1 = 144
+    local btnY1 = btnStartY
     local btnW1 = math.floor((screenW - 36) / 5)
-    local btnH1 = 24
 
-    addButton(6, btnY1, btnW1, btnH1, "+10m", {40, 120, 60}, {255, 255, 255}, function()
+    addButton(6, btnY1, btnW1, rowH, "+10m", {40, 120, 60}, {255, 255, 255}, function()
         state.targetAlt = state.targetAlt + 10
     end)
-    addButton(12 + btnW1, btnY1, btnW1, btnH1, "+1m", {60, 150, 80}, {255, 255, 255}, function()
+    addButton(12 + btnW1, btnY1, btnW1, rowH, "+1m", {60, 150, 80}, {255, 255, 255}, function()
         state.targetAlt = state.targetAlt + 1
     end)
-    addButton(18 + btnW1*2, btnY1, btnW1, btnH1, "-1m", {180, 110, 40}, {255, 255, 255}, function()
+    addButton(18 + btnW1*2, btnY1, btnW1, rowH, "-1m", {180, 110, 40}, {255, 255, 255}, function()
         state.targetAlt = math.max(0, state.targetAlt - 1)
     end)
-    addButton(24 + btnW1*3, btnY1, btnW1, btnH1, "-10m", {180, 60, 50}, {255, 255, 255}, function()
+    addButton(24 + btnW1*3, btnY1, btnW1, rowH, "-10m", {180, 60, 50}, {255, 255, 255}, function()
         state.targetAlt = math.max(0, state.targetAlt - 10)
     end)
-    addButton(30 + btnW1*4, btnY1, btnW1, btnH1, "SET CURR", {40, 110, 160}, {255, 255, 255}, function()
+    addButton(30 + btnW1*4, btnY1, btnW1, rowH, "SET CURR", {40, 110, 160}, {255, 255, 255}, function()
         local cur = altiSensor and altiSensor.getHeight() or 0
         state.targetAlt = math.floor(cur + 0.5)
         state.virtualAlt = cur
@@ -442,29 +486,28 @@ local function drawDirectGPU_UI()
     end)
 
     -- 第二排按鈕：基準油門微調、重新掃描、校正 (+10格懸浮自穩)
-    local btnY2 = 172
+    local btnY2 = btnStartY + rowH + 6
     local btnW2 = math.floor((screenW - 30) / 4)
-    local btnH2 = 24
 
-    addButton(6, btnY2, btnW2, btnH2, "BASE +", {40, 90, 140}, {255, 255, 255}, function()
+    addButton(6, btnY2, btnW2, rowH, "BASE +", {40, 90, 140}, {255, 255, 255}, function()
         if state.baseThrottle < 1.0 then
             state.baseThrottle = math.min(15.0, math.floor((state.baseThrottle + 0.05) * 100 + 0.5) / 100)
         else
             state.baseThrottle = math.min(15.0, state.baseThrottle + 1.0)
         end
     end)
-    addButton(12 + btnW2, btnY2, btnW2, btnH2, "BASE -", {50, 70, 120}, {255, 255, 255}, function()
+    addButton(12 + btnW2, btnY2, btnW2, rowH, "BASE -", {50, 70, 120}, {255, 255, 255}, function()
         if state.baseThrottle <= 1.0 then
             state.baseThrottle = math.max(0.0, math.floor((state.baseThrottle - 0.05) * 100 + 0.5) / 100)
         else
             state.baseThrottle = math.max(0.0, state.baseThrottle - 1.0)
         end
     end)
-    addButton(18 + btnW2*2, btnY2, btnW2, btnH2, "RE-SCAN", {40, 120, 150}, {255, 255, 255}, function()
+    addButton(18 + btnW2*2, btnY2, btnW2, rowH, "RE-SCAN", {40, 120, 150}, {255, 255, 255}, function()
         scanQuadTurtles()
         state.statusMsg = "Hardware Re-scanned!"
     end)
-    addButton(24 + btnW2*3, btnY2, btnW2, btnH2, "CALIBRATE", {120, 60, 160}, {255, 255, 255}, function()
+    addButton(24 + btnW2*3, btnY2, btnW2, rowH, "CALIBRATE", {120, 60, 160}, {255, 255, 255}, function()
         scanQuadTurtles()
         local cur = altiSensor and altiSensor.getHeight() or 100
         state.calibStartAlt = cur
@@ -487,13 +530,13 @@ local function drawDirectGPU_UI()
         end
     end)
 
-    -- 第三排按鈕：主要飛控模式
-    local btnY3 = 200
+    -- 第三排按鈕：主要飛控模式 (高度更大更顯眼)
+    local btnY3 = btnStartY + (rowH + 6) * 2
     local mainBW = math.floor((screenW - 20) / 2)
-    local mainBH = 30
+    local lastRowH = screenH - btnY3 - 6
 
     local holdBg = (state.mode == "HOLD_ALT") and {30, 180, 80} or {50, 80, 60}
-    addButton(6, btnY3, mainBW, mainBH, "HOLD ALT", holdBg, {255, 255, 255}, function()
+    addButton(6, btnY3, mainBW, lastRowH, "HOLD ALT", holdBg, {255, 255, 255}, function()
         state.mode = "HOLD_ALT"
         local cur = altiSensor and altiSensor.getHeight() or state.targetAlt
         state.virtualAlt = cur
@@ -508,25 +551,27 @@ local function drawDirectGPU_UI()
     end)
 
     local stopBg = (state.mode == "IDLE") and {180, 40, 40} or {90, 40, 40}
-    addButton(14 + mainBW, btnY3, mainBW, mainBH, "STOP / IDLE", stopBg, {255, 255, 255}, function()
+    addButton(14 + mainBW, btnY3, mainBW, lastRowH, "STOP / IDLE", stopBg, {255, 255, 255}, function()
         state.mode = "IDLE"
         altPID:reset()
         applyQuadThrust(0, 0, 0, 0)
         state.statusMsg = "All 4 Engines Stopped"
     end)
 
+    -- 繪製所有按鈕
     for _, btn in ipairs(buttons) do
         gpu.fillRect(displayId, btn.x, btn.y, btn.w, btn.h, btn.bg[1], btn.bg[2], btn.bg[3])
-        local tx = btn.x + math.max(2, math.floor((btn.w - #btn.text * 7) / 2))
-        local ty = btn.y + math.floor((btn.h - 10) / 2)
-        gpu.drawText(displayId, btn.text, tx, ty, btn.fg[1], btn.fg[2], btn.fg[3], "Arial", 10, "bold")
+        local btnFontSize = math.max(10, math.floor(btn.h * 0.38))
+        local tx = btn.x + math.max(2, math.floor((btn.w - #btn.text * (btnFontSize * 0.62)) / 2))
+        local ty = btn.y + math.floor((btn.h - btnFontSize) / 2)
+        gpu.drawText(displayId, btn.text, tx, ty, btn.fg[1], btn.fg[2], btn.fg[3], "Arial", btnFontSize, "bold")
     end
 
     gpu.updateDisplay(displayId)
 end
 
 -- ========================================================
--- 6. 飛控閉環控制迴圈 (20Hz)
+-- 7. 飛控閉環控制迴圈 (20Hz)
 -- ========================================================
 local function flightControlLoop()
     local scanTicker = 0
@@ -670,7 +715,7 @@ local function flightControlLoop()
 end
 
 -- ========================================================
--- 7. 畫面渲染與 DirectGPU 專屬事件監聽
+-- 8. 畫面渲染與 DirectGPU 專屬事件監聽
 -- ========================================================
 local function processClick(clickX, clickY)
     if not clickX or not clickY then return end
