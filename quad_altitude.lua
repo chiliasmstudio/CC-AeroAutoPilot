@@ -1,16 +1,18 @@
 --[[
     Create: Avionics & CC: Tweaked
-    Quad-Engine Wired Flight Controller (四軸有線原生螢幕飛控大腦)
+    Quad-Engine Flight Controller - A350 ECAM Edition (四軸有線 A350 ECAM 原生螢幕飛控大腦)
     Version: v3.5.0
     
     升力校準與定高邏輯:
+    - 移植 A350 ECAM 引擎儀表：在一般螢幕/終端機上以彩色字元繪製弧形刻度錶、高溫紅線區、連續浮點推力讀數與離散紅石訊號。
+    - 穩健起飛偵測 (抗雜訊)：徹底杜絕 V+0.01 輕微抖動就誤判或重置加速，持續加速加力直到飛艇確鑿離地 (高度上升 >= 0.6m 或 垂直速度 >= 0.18m/s)。
+    - 升力校準至 200m：上升中不增加多餘功率，到達 200m 懸停自穩 5 秒並記錄最佳基準推力！
     - 自動平衡功能已關閉 (四軸純集體升力混控)，姿態與陀螺儀即時角度仍完整顯示於儀表。
-    - 智慧升力校準：地面漸進加力起飛 -> 一旦上升立即停止加力 -> 平穩爬升至 200m -> 於 200m 懸停自穩 5 秒並精確記錄基準推力！
     - 類比紅石純淨輸出，消除階躍暴衝。
 --]]
 
 local VERSION = "v3.5.0"
-print(string.format("[AVIONICS] Loading Quad-Engine Flight Controller %s...", VERSION))
+print(string.format("[AVIONICS] Loading Quad-Engine Flight Controller (A350 ECAM) %s...", VERSION))
 
 -- ========================================================
 -- 1. 內建 PID 控制器 (Embedded PID)
@@ -118,7 +120,7 @@ local function safeBlit(x, y, text, fgChar, bgChar)
 end
 
 -- ========================================================
--- 3. 四角烏龜引擎節點掃描與辨識 (FL, FR, BL, BR)
+-- 3. 四角烏龜引擎節點掃描 (FL, FR, BL, BR)
 -- ========================================================
 local engines = { FL = nil, FR = nil, BL = nil, BR = nil }
 local engineOutputs  = { FL = 0, FR = 0, BL = 0, BR = 0 }
@@ -202,7 +204,7 @@ local function applyQuadThrust(baseThrust, deltaAlt, deltaPitch, deltaRoll)
     -- 20 ticks (1.0s 週期) 超高解析度 PWM 佔空比計數器 (0 ~ 19)
     pwmTick = (pwmTick + 1) % 20
 
-    -- 平衡功能已關閉：四軸輸出純集體推力 (deltaPitch = 0, deltaRoll = 0)
+    -- 平衡功能已關閉：四軸輸出純集體推力
     deltaPitch = deltaPitch or 0
     deltaRoll  = deltaRoll or 0
 
@@ -289,41 +291,154 @@ local function addButton(x, y, w, h, text, bgBlit, fgBlit, action)
 end
 
 -- ========================================================
--- 6. 螢幕繪製函式
+-- 6. Airbus A350 ECAM 引擎文字儀表渲染模組
+-- ========================================================
+local function drawECAMDial(dx, dy, dw, dh, slot, label, val, sig)
+    val = val or 0.0
+    sig = sig or 0
+    local ratio = math.max(0, math.min(1.0, val / 15.0))
+    local lbl = label or slot
+    if #lbl > 4 then lbl = lbl:sub(1, 4) end
+
+    -- 繪製背景底框
+    for row = 0, dh - 1 do
+        safeBlit(dx, dy + row, string.rep(" ", dw), "0", "7")
+    end
+
+    if dh >= 6 then
+        -- 【完整大尺寸 A350 ECAM 儀表】(>= 6 行)
+        -- 行 1: 標題列 +-- FL --+
+        local topBar = string.format("+--%s--+", lbl)
+        if #topBar < dw then
+            local padL = math.floor((dw - #topBar) / 2)
+            local padR = dw - #topBar - padL
+            topBar = string.rep("-", padL) .. topBar .. string.rep("-", padR)
+        elseif #topBar > dw then
+            topBar = topBar:sub(1, dw)
+        end
+        safeBlit(dx, dy, topBar, "9", "8")
+
+        -- 行 2: 弧形刻度錶 (/====..\\)
+        local arcLen = math.max(4, dw - 4)
+        local fillCount = math.floor(ratio * (arcLen - 1) + 0.5)
+        local arcChars = "/"
+        local arcFg = "8"
+        for k = 1, arcLen - 2 do
+            if k <= fillCount then
+                arcChars = arcChars .. "="
+                if k > (arcLen - 2) * 0.85 then
+                    arcFg = arcFg .. "e" -- 高推力紅線區
+                elseif k > (arcLen - 2) * 0.65 then
+                    arcFg = arcFg .. "4" -- 黃色警戒區
+                else
+                    arcFg = arcFg .. "5" -- 綠色正常區
+                end
+            else
+                arcChars = arcChars .. "."
+                arcFg = arcFg .. "7" -- 暗灰空刻度
+            end
+        end
+        arcChars = arcChars .. "\\"
+        arcFg = arcFg .. "e" -- 紅線極限標記
+
+        local arcLine = "|" .. arcChars .. "|"
+        if #arcLine < dw then
+            local padL = math.floor((dw - #arcLine) / 2)
+            local padR = dw - #arcLine - padL
+            arcLine = string.rep(" ", padL) .. arcLine .. string.rep(" ", padR)
+            arcFg = string.rep("0", padL) .. "8" .. arcFg .. "8" .. string.rep("0", padR)
+        end
+        safeBlit(dx, dy + 1, arcLine, arcFg, "7")
+
+        -- 行 3: 連續浮點數值讀數方框 [ 2.30 ]
+        local valText = string.format("[%4.1f]", val)
+        local valPadL = math.max(0, math.floor((dw - #valText) / 2))
+        local valPadR = math.max(0, dw - #valText - valPadL)
+        local valLine = string.rep(" ", valPadL) .. valText .. string.rep(" ", valPadR)
+        local valFg = string.rep("0", valPadL) .. "955559" .. string.rep("0", valPadR)
+        safeBlit(dx, dy + 2, valLine, valFg, "f")
+
+        -- 行 4: 離散紅石訊號 2/15
+        local sigText = string.format("%2d/15", sig)
+        local sigPadL = math.max(0, math.floor((dw - #sigText) / 2))
+        local sigPadR = math.max(0, dw - #sigText - sigPadL)
+        local sigLine = string.rep(" ", sigPadL) .. sigText .. string.rep(" ", sigPadR)
+        local sigFg = string.rep("0", sigPadL) .. "33333" .. string.rep("0", sigPadR)
+        safeBlit(dx, dy + 3, sigLine, sigFg, "7")
+
+        -- 行 5: 底部框線
+        local btmBar = "+" .. string.rep("-", math.max(0, dw - 2)) .. "+"
+        safeBlit(dx, dy + dh - 1, btmBar:sub(1, dw), "8", "7")
+
+    else
+        -- 【緊湊型 A350 ECAM 儀表】(< 6 行)
+        -- 行 1: 標籤與刻度 [FL] /==.\
+        local arcLen = math.max(3, dw - 6)
+        local fillCount = math.floor(ratio * arcLen + 0.5)
+        local arcChars = ""
+        local arcFg = ""
+        for k = 1, arcLen do
+            if k <= fillCount then
+                arcChars = arcChars .. "="
+                arcFg = arcFg .. ((k > arcLen * 0.85) and "e" or ((k > arcLen * 0.65) and "4" or "5"))
+            else
+                arcChars = arcChars .. "."
+                arcFg = arcFg .. "8"
+            end
+        end
+        local r1Text = string.format("%-3s /%s\\", lbl, arcChars):sub(1, dw)
+        local r1Fg = "999" .. "8" .. arcFg .. "e"
+        if #r1Fg < #r1Text then r1Fg = r1Fg .. string.rep("0", #r1Text - #r1Fg) end
+        safeBlit(dx, dy, r1Text, r1Fg:sub(1, #r1Text), "8")
+
+        -- 行 2: 數值與訊號 2.30 (2/15)
+        local r2Text = string.format("%4.1f (%d/15)", val, sig):sub(1, dw)
+        local r2Fg = "5555" .. "3" .. string.rep("3", math.max(0, #r2Text - 5))
+        safeBlit(dx, dy + 1, r2Text, r2Fg:sub(1, #r2Text), "f")
+    end
+end
+
+-- ========================================================
+-- 7. 螢幕繪製主介面 (A350 ECAM 風格)
 -- ========================================================
 local function drawQuadUI()
     local w, h = display.getSize()
     display.setBackgroundColor(colors.black)
     display.clear()
 
-    -- 1. 頂部標題列 (顯示版本號)
-    local titleText = string.format("  QUAD-ENGINE AVIONICS MASTER %s  ", VERSION)
+    -- 1. 頂部標題列 (顯示 A350 ECAM 版本號)
+    local titleText = string.format("  QUAD-ENGINE AVIONICS - A350 ECAM %s  ", VERSION)
     local padL = math.floor((w - #titleText) / 2)
     local padR = w - #titleText - padL
-    local header = string.rep(" ", padL) .. titleText .. string.rep(" ", padR)
-    safeBlit(1, 1, header, "0", "b")
+    local header = string.rep(" ", math.max(0, padL)) .. titleText .. string.rep(" ", math.max(0, padR))
+    safeBlit(1, 1, header:sub(1, w), "0", "b")
 
     local currAlt = altiSensor and altiSensor.getHeight() or 0
     local currVspeed = altiSensor and altiSensor.getVerticalSpeed() or 0
     local currPitch, currRoll = getGimbalData()
 
-    -- 2. 左側高度與姿態卡片
-    local cardW = math.floor(w / 2) - 2
-    for y = 3, 9 do
-        safeBlit(2, y, string.rep(" ", cardW), "0", "8")
+    -- 2. 佈局尺寸分配 (左側 PFD 儀表 + 右側 4 軸 A350 引擎卡片)
+    local cardH = math.max(6, math.min(9, h - 11))
+    local leftW = math.max(20, math.floor(w * 0.38))
+    local rightX = leftW + 3
+    local rightW = w - rightX
+
+    -- [左側 PFD / 飛行數據卡片]
+    for y = 3, 2 + cardH do
+        safeBlit(2, y, string.rep(" ", leftW), "0", "8")
     end
-    safeBlit(3, 3, "ALTITUDE & STATUS", "9", "8")
+    safeBlit(3, 3, "PFD / TELEMETRY", "9", "8")
     
     local altStr = string.format("ALT:%5.1fm (TGT:%4.0f)", currAlt, state.targetAlt)
-    if #altStr > cardW - 2 then altStr = string.format("A:%5.1f T:%4.0f", currAlt, state.targetAlt) end
-    safeBlit(3, 4, altStr, "0", "8")
+    if #altStr > leftW - 2 then altStr = string.format("A:%5.1f T:%4.0f", currAlt, state.targetAlt) end
+    safeBlit(3, 4, altStr:sub(1, leftW - 2), "0", "8")
     
     local vspeedStr = string.format("V.SPD: %+5.2f m/s", currVspeed)
-    safeBlit(3, 5, vspeedStr, "4", "8")
+    safeBlit(3, 5, vspeedStr:sub(1, leftW - 2), "4", "8")
 
     -- 姿態角度與陀螺儀狀態 (保留顯示)
     local attStr = string.format("P:%+4.1f* R:%+4.1f*", currPitch, currRoll)
-    safeBlit(3, 6, attStr, "3", "8")
+    safeBlit(3, 6, attStr:sub(1, leftW - 2), "3", "8")
 
     if gimbalAvailable then
         safeBlit(3, 7, "GIMBAL: ACTIVE [OK]", "5", "8")
@@ -333,62 +448,65 @@ local function drawQuadUI()
     
     local modeFg = (state.mode == "HOLD_ALT") and "5" or (state.mode == "CALIBRATING" and "4" or "e")
     local modeRow = string.format("MODE:%-5s B:%4.2f", state.mode:sub(1,5), state.baseThrottle)
-    safeBlit(3, 8, modeRow, modeFg, "8")
+    safeBlit(3, 8, modeRow:sub(1, leftW - 2), modeFg, "8")
 
-    -- 3. 右側四軸烏龜名稱與推力卡片 (顯示 實體訊號 與 虛擬推力)
-    local rightX = cardW + 4
-    local rightW = w - rightX
-    for y = 3, 9 do
-        safeBlit(rightX, y, string.rep(" ", rightW), "0", "8")
-    end
-    safeBlit(rightX + 1, 3, "ENGINES (SIG / VIRT)", "9", "8")
+    -- [右側 A350 ECAM 四軸引擎儀表區]
+    local slots = {"FL", "FR", "BL", "BR"}
 
-    local function getEngineInfo(node, defaultLabel, outVal, virtVal)
-        if not node then
-            return string.format("%-2s : OFFLINE", defaultLabel), "e"
+    if rightW >= 40 then
+        -- 橫向排布 4 具 A350 引擎儀表 (1x4)
+        local dialW = math.floor((rightW - 3) / 4)
+        for i, slot in ipairs(slots) do
+            local dx = rightX + (i - 1) * (dialW + 1)
+            local node = engines[slot]
+            local lbl = node and (node.label or node.name or slot) or slot
+            drawECAMDial(dx, 3, dialW, cardH, slot, lbl, virtualOutputs[slot], engineOutputs[slot])
         end
-        local lbl = node.label or node.name or defaultLabel
-        if #lbl > 4 then lbl = lbl:sub(1, 4) end
-        return string.format("%-2s : %2d/15 (%4.1f)", lbl, outVal, virtVal or outVal), "5"
+    else
+        -- 2x2 矩陣排布 A350 引擎儀表 (FL, FR / BL, BR)
+        local dialW = math.floor((rightW - 2) / 2)
+        local dialH = math.max(3, math.floor(cardH / 2))
+        
+        -- 上排: FL, FR
+        local flNode = engines.FL
+        local frNode = engines.FR
+        drawECAMDial(rightX, 3, dialW, dialH, "FL", flNode and flNode.label or "FL", virtualOutputs.FL, engineOutputs.FL)
+        drawECAMDial(rightX + dialW + 1, 3, dialW, dialH, "FR", frNode and frNode.label or "FR", virtualOutputs.FR, engineOutputs.FR)
+
+        -- 下排: BL, BR
+        local blNode = engines.BL
+        local brNode = engines.BR
+        local dy2 = 3 + dialH
+        drawECAMDial(rightX, dy2, dialW, dialH, "BL", blNode and blNode.label or "BL", virtualOutputs.BL, engineOutputs.BL)
+        drawECAMDial(rightX + dialW + 1, dy2, dialW, dialH, "BR", brNode and brNode.label or "BR", virtualOutputs.BR, engineOutputs.BR)
     end
-
-    local flStr, flCol = getEngineInfo(engines.FL, "FL", engineOutputs.FL, virtualOutputs.FL)
-    safeBlit(rightX + 1, 4, flStr, flCol, "8")
-
-    local frStr, frCol = getEngineInfo(engines.FR, "FR", engineOutputs.FR, virtualOutputs.FR)
-    safeBlit(rightX + 1, 5, frStr, frCol, "8")
-
-    local blStr, blCol = getEngineInfo(engines.BL, "BL", engineOutputs.BL, virtualOutputs.BL)
-    safeBlit(rightX + 1, 6, blStr, blCol, "8")
-
-    local brStr, brCol = getEngineInfo(engines.BR, "BR", engineOutputs.BR, virtualOutputs.BR)
-    safeBlit(rightX + 1, 7, brStr, brCol, "8")
-
-    safeBlit(rightX + 1, 8, "COLLECTIVE LIFT ONLY", "9", "8")
 
     -- 4. 狀態訊息列
-    local statusRow = string.format("STATUS: %-30s", state.statusMsg):sub(1, w - 2)
-    safeBlit(2, 10, statusRow, "0", "f")
+    local statusY = 3 + cardH + 1
+    local statusRow = string.format("STATUS: %-40s", state.statusMsg):sub(1, w - 2)
+    safeBlit(2, statusY, statusRow, "0", "f")
 
     -- 5. 觸控按鈕區
     buttons = {}
 
     -- 第一排：目標高度調整 (+10m, +1m, -1m, -10m, SET CURR)
-    local bY1 = 12
+    local bY1 = statusY + 2
     local bW1 = math.floor((w - 6) / 5)
-    addButton(2, bY1, bW1, 2, "+10m", "d", "0", function()
+    local bH = (h >= 24) and 2 or 1
+
+    addButton(2, bY1, bW1, bH, "+10m", "d", "0", function()
         state.targetAlt = state.targetAlt + 10
     end)
-    addButton(3 + bW1, bY1, bW1, 2, "+1m", "5", "0", function()
+    addButton(3 + bW1, bY1, bW1, bH, "+1m", "5", "0", function()
         state.targetAlt = state.targetAlt + 1
     end)
-    addButton(4 + bW1*2, bY1, bW1, 2, "-1m", "1", "0", function()
+    addButton(4 + bW1*2, bY1, bW1, bH, "-1m", "1", "0", function()
         state.targetAlt = math.max(0, state.targetAlt - 1)
     end)
-    addButton(5 + bW1*3, bY1, bW1, 2, "-10m", "e", "0", function()
+    addButton(5 + bW1*3, bY1, bW1, bH, "-10m", "e", "0", function()
         state.targetAlt = math.max(0, state.targetAlt - 10)
     end)
-    addButton(6 + bW1*4, bY1, bW1, 2, "SET CURR", "3", "0", function()
+    addButton(6 + bW1*4, bY1, bW1, bH, "SET CURR", "3", "0", function()
         local cur = altiSensor and altiSensor.getHeight() or 0
         state.targetAlt = math.floor(cur + 0.5)
         state.virtualAlt = cur
@@ -396,27 +514,27 @@ local function drawQuadUI()
     end)
 
     -- 第二排：基準油門微調、重新掃描、校正 (升力校準至 200m)
-    local bY2 = 15
+    local bY2 = bY1 + bH + 1
     local bW2 = math.floor((w - 5) / 4)
-    addButton(2, bY2, bW2, 2, "BASE +", "3", "0", function()
+    addButton(2, bY2, bW2, bH, "BASE +", "3", "0", function()
         if state.baseThrottle < 1.0 then
             state.baseThrottle = math.min(15.0, math.floor((state.baseThrottle + 0.05) * 100 + 0.5) / 100)
         else
             state.baseThrottle = math.min(15.0, state.baseThrottle + 1.0)
         end
     end)
-    addButton(3 + bW2, bY2, bW2, 2, "BASE -", "9", "0", function()
+    addButton(3 + bW2, bY2, bW2, bH, "BASE -", "9", "0", function()
         if state.baseThrottle <= 1.0 then
             state.baseThrottle = math.max(0.0, math.floor((state.baseThrottle - 0.05) * 100 + 0.5) / 100)
         else
             state.baseThrottle = math.max(0.0, state.baseThrottle - 1.0)
         end
     end)
-    addButton(4 + bW2*2, bY2, bW2, 2, "RE-SCAN", "b", "0", function()
+    addButton(4 + bW2*2, bY2, bW2, bH, "RE-SCAN", "b", "0", function()
         scanQuadTurtles()
         state.statusMsg = "Hardware Re-scanned!"
     end)
-    addButton(5 + bW2*3, bY2, bW2, 2, "CALIBRATE", "a", "0", function()
+    addButton(5 + bW2*3, bY2, bW2, bH, "CALIBRATE", "a", "0", function()
         scanQuadTurtles()
         local cur = altiSensor and altiSensor.getHeight() or 100
         state.calibStartAlt = cur
@@ -434,10 +552,12 @@ local function drawQuadUI()
     end)
 
     -- 第三排：主要飛控模式按鈕
-    local bY3 = 18
+    local bY3 = bY2 + bH + 1
     local mainBW = math.floor((w - 3) / 2)
+    local mainBH = (h >= 24) and 3 or 2
+
     local holdBg = (state.mode == "HOLD_ALT") and "5" or "d"
-    addButton(2, bY3, mainBW, 3, " [ HOLD ALT ] ", holdBg, "0", function()
+    addButton(2, bY3, mainBW, mainBH, " [ HOLD ALT ] ", holdBg, "0", function()
         state.mode = "HOLD_ALT"
         local cur = altiSensor and altiSensor.getHeight() or state.targetAlt
         state.virtualAlt = cur
@@ -446,13 +566,14 @@ local function drawQuadUI()
     end)
 
     local stopBg = (state.mode == "IDLE") and "e" or "c"
-    addButton(3 + mainBW, bY3, mainBW, 3, " [ STOP / IDLE ] ", stopBg, "0", function()
+    addButton(3 + mainBW, bY3, mainBW, mainBH, " [ STOP / IDLE ] ", stopBg, "0", function()
         state.mode = "IDLE"
         altPID:reset()
         applyQuadThrust(0, 0, 0, 0)
         state.statusMsg = "All 4 Engines Stopped"
     end)
 
+    -- 繪製所有按鈕
     for _, btn in ipairs(buttons) do
         for dy = 0, btn.h - 1 do
             safeBlit(btn.x, btn.y + dy, string.rep(" ", btn.w), btn.fg, btn.bg)
@@ -464,7 +585,7 @@ local function drawQuadUI()
 end
 
 -- ========================================================
--- 7. 飛控閉環控制迴圈 (20Hz)
+-- 8. 飛控閉環控制迴圈 (20Hz)
 -- ========================================================
 local function flightControlLoop()
     local scanTicker = 0
@@ -498,39 +619,40 @@ local function flightControlLoop()
             local climbDist = currAlt - state.calibStartAlt
 
             if state.calibPhase == "GROUND_SEARCH" then
-                -- 階段 1: 地面尋找起飛推力
-                -- 若依然在地面靜止 (垂直速度 < 0.05 且高度上升 < 0.15m)，逐步加快增加推力
-                if currVspeed < 0.05 and climbDist < 0.15 then
-                    state.calibThrottle = math.min(15.0, state.calibThrottle + state.rampRate)
-                    state.baseThrottle = math.floor(state.calibThrottle * 1000 + 0.5) / 1000
-                    state.rampRate = math.min(0.005, state.rampRate + 0.00002)
+                -- 階段 1: 地面持續穩健加速加力
+                -- 只要飛艇未確鑿離地 (爬升 < 0.6m 且 垂直速度 < 0.15m/s)，加力速率持續穩定爬坡，絕不因 0.01 輕微抖動而中斷！
+                state.calibThrottle = math.min(15.0, state.calibThrottle + state.rampRate)
+                state.baseThrottle = math.floor(state.calibThrottle * 1000 + 0.5) / 1000
+
+                if climbDist < 0.6 and currVspeed < 0.15 then
+                    state.rampRate = math.min(0.008, state.rampRate + 0.00003)
                 end
 
                 applyQuadThrust(state.baseThrottle, 0, 0, 0)
                 state.statusMsg = string.format("Search: %4.2f/15 (R:%5.4f)", state.baseThrottle, state.rampRate * 20)
 
-                -- 偵測到開始上升 (垂直速度 >= 0.05m/s 或 高度上升 >= 0.15m)
-                if currVspeed >= 0.05 or climbDist >= 0.15 then
+                -- 確鑿起飛離地判定 (高度上升 >= 0.6m 或 垂直速度確鑿 >= 0.18m/s)
+                if climbDist >= 0.6 or currVspeed >= 0.18 then
                     state.rampRate = 0.0
                     state.virtualAlt = currAlt
                     state.calibPhase = "CLIMB_TO_200"
                     altPID:reset()
-                    state.statusMsg = string.format("Lifted! Climbing to 200m (B:%4.2f)", state.baseThrottle)
+                    state.statusMsg = string.format("Airborne! Climbing to 200m (B:%4.2f)", state.baseThrottle)
                 end
 
             elseif state.calibPhase == "CLIMB_TO_200" then
-                -- 階段 2: 爬升至 200m (如果已經在上升就不增加功率)
-                -- 只有當停滯/掉速時才極微慢補充功率
-                if currVspeed < 0.02 and currAlt < 195.0 and state.baseThrottle < 14 then
-                    state.calibThrottle = math.min(15.0, state.calibThrottle + 0.0003)
+                -- 階段 2: 爬升至 200m (如果已經在上升則不增加功率)
+                -- 速度不足 (V < 0.10 且高度 < 195m) 時才極微慢補充微小功率
+                if currVspeed < 0.10 and currAlt < 195.0 and state.baseThrottle < 14 then
+                    state.calibThrottle = math.min(15.0, state.calibThrottle + 0.0004)
                     state.baseThrottle = math.floor(state.calibThrottle * 1000 + 0.5) / 1000
-                elseif currVspeed > 0.60 and state.baseThrottle > 0.02 then
+                elseif currVspeed > 0.65 and state.baseThrottle > 0.02 then
                     -- 上升過快時微幅回調
                     state.calibThrottle = math.max(0.01, state.calibThrottle - 0.001)
                     state.baseThrottle = math.floor(state.calibThrottle * 1000 + 0.5) / 1000
                 end
 
-                state.virtualAlt = math.min(200.0, state.virtualAlt + 0.025)
+                state.virtualAlt = math.min(200.0, state.virtualAlt + 0.03)
                 local altError = state.virtualAlt - currAlt
                 local deltaAlt = altPID:update(altError)
 
@@ -593,7 +715,7 @@ local function flightControlLoop()
 end
 
 -- ========================================================
--- 8. 介面刷新與右鍵觸控監聽
+-- 9. 介面刷新與右鍵觸控監聽
 -- ========================================================
 local function renderLoop()
     while true do
