@@ -1,7 +1,10 @@
 -- ========================================================
 -- Turtle Engine Node Firmware (startup.lua)
+-- Version: v3.5.0 (Pure Analog PWM Edition)
 -- 放置於 4 隻烏龜中，開機自動啟動，免手動操作
 -- ========================================================
+
+local VERSION = "v3.5.0"
 
 -- 1. 取得烏龜標籤 (FL / FR / BL / BR)
 local label = os.getComputerLabel() or ""
@@ -22,9 +25,10 @@ term.clear()
 term.setCursorPos(1, 1)
 print("================================")
 print("  AVIONICS TURTLE ENGINE NODE   ")
+print("        Firmware " .. VERSION .. "         ")
 print("================================")
 print("ID: " .. os.getComputerID() .. " | Label: " .. (label ~= "" and label or "(None)"))
-print("Role: [" .. role .. "]")
+print("Role: [" .. role .. "] | Ver: " .. VERSION)
 
 -- 2. 尋找並開啟數據機 (支援貼在任何一面的 Wired 或 Wireless Modem)
 local modemSides = {"top", "bottom", "left", "right", "front", "back"}
@@ -76,9 +80,9 @@ while true do
 
         if sig ~= nil then
             applySignal(sig)
-            term.setCursorPos(1, 6)
+            term.setCursorPos(1, 7)
             term.clearLine()
-            term.write(string.format("Role: [%s]  Thrust: %2d/15", role, sig))
+            term.write(string.format("[%s] %s | Sig: %2d/15", role, VERSION, sig))
         end
     end
 end

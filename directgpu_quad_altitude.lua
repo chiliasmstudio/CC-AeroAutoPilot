@@ -1,14 +1,19 @@
 --[[
     Create: Avionics & CC: Tweaked + DirectGPU
-    DirectGPU Quad-Engine Wired Flight Controller (DirectGPU 四軸有線全彩飛控大腦)
+    DirectGPU Quad-Engine Wired Flight Controller (DirectGPU 四軸有線全彩 A350 ECAM 飛控大腦)
+    Version: v3.5.0
     
     智慧校準與防暴衝姿態自穩邏輯:
     - 類比紅石純淨輸出：修正 setOutput 導致訊號被強制頂到 15 滿載暴衝的底層問題。
-    - 虛擬軌跡爬升 (Virtual Trajectory Ascent)：起飛後以平緩定速 (0.3m/s) 引導爬升至 +10 格，消除階躍誤差暴衝。
-    - 智慧變速探索起飛推力：地面極慢探索 -> 若無動靜平滑加速 -> 一旦有微幅動靜立刻鎖定臨界推力並啟動速度控速爬升。
+    - Airbus A350 ECAM 引擎儀表：全彩渲染 4 軸引擎弧形指針儀表、極限紅線、綠色指針、數位讀數方框與離散訊號。
+    - 智慧變速探索起飛推力：起步極慢 -> 持續無動作則穩健加速加力 (不卡死在低檔) -> 偵測到起飛立刻放緩加力並平滑控速爬升。
+    - 虛擬軌跡巡航爬升：以 0.30 m/s 柔和定速引導爬升至 +10 格懸浮，消除階躍誤差暴衝。
     - 姿態即時反向加力配平：傾斜時立刻對低側加力、高側減力，維持水平。
     - 穩定收斂判定：高度誤差 < 0.5m、垂直速度 < 0.12m/s、姿態傾斜 < 1.0° 連續 5 秒自動鎖定最佳懸停基準！
 --]]
+
+local VERSION = "v3.5.0"
+print(string.format("[DIRECTGPU] Loading Avionics Master %s...", VERSION))
 
 -- ========================================================
 -- 1. 內建 PID 控制器 (Embedded PID)
@@ -105,7 +110,8 @@ end
 -- 3. 四角烏龜引擎節點掃描 (FL, FR, BL, BR)
 -- ========================================================
 local engines = { FL = nil, FR = nil, BL = nil, BR = nil }
-local engineOutputs = { FL = 0, FR = 0, BL = 0, BR = 0 }
+local engineOutputs  = { FL = 0, FR = 0, BL = 0, BR = 0 }
+local virtualOutputs = { FL = 0.0, FR = 0.0, BL = 0.0, BR = 0.0 }
 
 local function matchPrefix(label, prefix)
     local u = string.upper(label)
@@ -188,6 +194,11 @@ local function applyQuadThrust(baseThrust, deltaAlt, deltaPitch, deltaRoll)
     local rawBL = baseThrust + deltaAlt + deltaPitch + deltaRoll
     local rawBR = baseThrust + deltaAlt + deltaPitch - deltaRoll
 
+    virtualOutputs.FL = math.max(0, math.min(15, rawFL))
+    virtualOutputs.FR = math.max(0, math.min(15, rawFR))
+    virtualOutputs.BL = math.max(0, math.min(15, rawBL))
+    virtualOutputs.BR = math.max(0, math.min(15, rawBR))
+
     local function resolvePwmOutput(val)
         if val <= 0.001 then return 0 end
         if val < 1.0 then
@@ -244,10 +255,10 @@ local state = {
     calibTargetAlt = 0,       -- 校正懸停目標 (起飛高度 + 10m)
     calibPhase = "GROUND_SEARCH", -- "GROUND_SEARCH", "SMOOTH_CLIMB", "STABILIZE"
     calibThrottle = 0.0,      -- 校正微調油門 (從 0.0 脈衝起步)
-    rampRate = 0.00005        -- 適應性加力速率 (起步極慢: 0.001/s)
+    rampRate = 0.0001         -- 適應性加力速率 (起步極慢)
 }
 
--- PID 控制器：高度增益限幅在 [-1.5, +1.5]，徹底杜絕階躍大推力暴衝
+-- PID 控制器：高度修正限幅在 [-1.5, +1.5]
 local altPID   = PID.new(0.5, 0.02, 0.6, -1.5, 1.5)
 local pitchPID = PID.new(0.20, 0.01, 0.10, -6, 6)
 local rollPID  = PID.new(0.20, 0.01, 0.10, -6, 6)
@@ -263,73 +274,145 @@ local function addButton(x, y, w, h, text, bg, fg, action)
 end
 
 -- ========================================================
--- 5. DirectGPU 渲染介面 (24-bit True RGB)
+-- 5. DirectGPU 渲染介面 (24-bit True RGB + A350 ECAM Gauges)
 -- ========================================================
+local function drawA350EngineDial(cx, cy, r, val, maxVal, label, sig)
+    -- 1. 儀表標題
+    gpu.drawText(displayId, label, cx - 8, cy - r - 9, 200, 230, 255, "Arial", 8, "bold")
+
+    -- 2. 圓弧刻度 (210° 到 -30°，共 240° 扇形範圍)
+    local arcPts = {}
+    for deg = 210, -30, -15 do
+        local rad = math.rad(deg)
+        table.insert(arcPts, {
+            math.floor(cx + r * math.cos(rad) + 0.5),
+            math.floor(cy - r * math.sin(rad) + 0.5)
+        })
+    end
+    gpu.drawPolylines(displayId, arcPts, 130, 150, 175)
+
+    -- 3. 高推力紅線區 (Redline zone: 13 ~ 15 滿推力紅線標記)
+    local redPts = {}
+    for deg = 10, -30, -10 do
+        local rad = math.rad(deg)
+        table.insert(redPts, {
+            math.floor(cx + r * math.cos(rad) + 0.5),
+            math.floor(cy - r * math.sin(rad) + 0.5)
+        })
+    end
+    gpu.drawPolylines(displayId, redPts, 255, 60, 60)
+
+    -- 紅線極限標記 (A350 Red Limit Tick)
+    local rTickRad = math.rad(-15)
+    gpu.drawLine(displayId,
+        math.floor(cx + (r - 2) * math.cos(rTickRad)),
+        math.floor(cy - (r - 2) * math.sin(rTickRad)),
+        math.floor(cx + (r + 4) * math.cos(rTickRad)),
+        math.floor(cy - (r + 4) * math.sin(rTickRad)),
+        255, 60, 60
+    )
+
+    -- 4. 空巴經典霓虹綠指針 (A350 Neon Green Needle)
+    local ratio = math.min(1.0, math.max(0.0, val / (maxVal or 15.0)))
+    local needleDeg = 210 - ratio * 240
+    local nRad = math.rad(needleDeg)
+    local nx = math.floor(cx + (r - 2) * math.cos(nRad) + 0.5)
+    local ny = math.floor(cy - (r - 2) * math.sin(nRad) + 0.5)
+
+    gpu.drawLine(displayId, cx, cy, nx, ny, 60, 255, 100)
+    gpu.drawCircle(displayId, cx, cy, 2, 200, 220, 240, true)
+
+    -- 5. 底部數位數值讀數框 (A350 Digital Readout Box)
+    local boxW, boxH = 26, 11
+    local boxX = cx - 13
+    local boxY = cy + 4
+    gpu.fillRect(displayId, boxX, boxY, boxW, boxH, 12, 18, 28)
+    gpu.drawPolylines(displayId, {
+        {boxX, boxY},
+        {boxX + boxW, boxY},
+        {boxX + boxW, boxY + boxH},
+        {boxX, boxY + boxH},
+        {boxX, boxY}
+    }, 40, 140, 180)
+
+    local valStr = string.format("%4.1f", val)
+    gpu.drawText(displayId, valStr, boxX + 2, boxY + 2, 80, 255, 120, "Arial", 8, "bold")
+
+    -- 6. 離散輸出訊號 (例如 2/15)
+    gpu.drawText(displayId, string.format("%d/15", sig or 0), cx - 9, boxY + boxH + 2, 140, 180, 210, "Arial", 7, "plain")
+end
+
 local function drawDirectGPU_UI()
     gpu.clear(displayId, 15, 20, 30)
 
-    -- 1. 頂部標題列
-    gpu.fillRect(displayId, 0, 0, screenW, 26, 25, 40, 65)
-    gpu.drawText(displayId, "QUAD-ENGINE AVIONICS - DIRECTGPU", 12, 6, 240, 245, 255, "Arial", 13, "bold")
+    -- 1. 頂部標題列 (包含版本號)
+    gpu.fillRect(displayId, 0, 0, screenW, 24, 25, 40, 65)
+    gpu.drawText(displayId, string.format("QUAD-ENGINE AVIONICS - A350 ECAM %s", VERSION), 10, 5, 240, 245, 255, "Arial", 12, "bold")
 
     local currAlt = altiSensor and altiSensor.getHeight() or 0
     local currVspeed = altiSensor and altiSensor.getVerticalSpeed() or 0
     local currPitch, currRoll = getGimbalData()
 
-    -- 2. 左側高度圓形儀表
-    local gCX, gCY, gR = 50, 75, 34
+    -- 2. 左側高度與飛行狀態卡 (PFD / ALTITUDE)
+    local pfdX = 6
+    local pfdY = 28
+    local pfdW = 108
+    local pfdH = 96
+    gpu.fillRect(displayId, pfdX, pfdY, pfdW, pfdH, 20, 26, 38)
+
+    -- 高度圓形儀表
+    local gCX, gCY, gR = pfdX + 22, pfdY + 30, 19
     gpu.drawCircle(displayId, gCX, gCY, gR, 35, 45, 60, true)
     gpu.drawCircle(displayId, gCX, gCY, gR, 100, 180, 255, false)
-    gpu.drawText(displayId, string.format("%.0f", currAlt), gCX - 13, gCY - 7, 255, 255, 255, "Arial", 15, "bold")
-    gpu.drawText(displayId, "ALT(M)", gCX - 15, gCY + 9, 160, 200, 230, "Arial", 8, "plain")
+    gpu.drawText(displayId, string.format("%.0f", currAlt), gCX - 10, gCY - 6, 255, 255, 255, "Arial", 12, "bold")
+    gpu.drawText(displayId, "ALT(M)", gCX - 12, gCY + 6, 160, 200, 230, "Arial", 7, "plain")
 
-    -- 3. 中間飛行狀態卡 (顯示目標高度、垂直速度、Gimbal 狀態與角度)
-    local cardX = 96
-    local cardW = 108
-    gpu.fillRect(displayId, cardX, 32, cardW, 88, 25, 32, 48)
-    gpu.drawText(displayId, string.format("TGT: %.0fm", state.targetAlt), cardX + 5, 38, 80, 220, 255, "Arial", 10, "bold")
-    gpu.drawText(displayId, string.format("V.S: %+.2fm/s", currVspeed), cardX + 5, 52, 255, 200, 80, "Arial", 10, "bold")
+    -- 狀態文字
+    gpu.drawText(displayId, string.format("TGT: %.0fm", state.targetAlt), pfdX + 46, pfdY + 12, 80, 220, 255, "Arial", 9, "bold")
+    gpu.drawText(displayId, string.format("V.S: %+.2f", currVspeed), pfdX + 46, pfdY + 26, 255, 200, 80, "Arial", 9, "bold")
     
     if gimbalAvailable then
-        gpu.drawText(displayId, string.format("P:%+4.1f* R:%+4.1f*", currPitch, currRoll), cardX + 5, 66, 180, 220, 255, "Arial", 9, "plain")
-        gpu.drawText(displayId, "GIMBAL: ACTIVE", cardX + 5, 80, 80, 255, 120, "Arial", 9, "bold")
+        gpu.drawText(displayId, string.format("P:%+4.1f* R:%+4.1f*", currPitch, currRoll), pfdX + 6, pfdY + 56, 180, 220, 255, "Arial", 8, "plain")
+        gpu.drawText(displayId, "GIMBAL: ACTIVE", pfdX + 6, pfdY + 68, 80, 255, 120, "Arial", 8, "bold")
     else
-        gpu.drawText(displayId, "P: ---   R: ---", cardX + 5, 66, 150, 150, 150, "Arial", 9, "plain")
-        gpu.drawText(displayId, "GIMBAL: NO SENSOR", cardX + 5, 80, 255, 60, 60, "Arial", 9, "bold")
+        gpu.drawText(displayId, "P: ---   R: ---", pfdX + 6, pfdY + 56, 150, 150, 150, "Arial", 8, "plain")
+        gpu.drawText(displayId, "GIMBAL: NO SENSOR", pfdX + 6, pfdY + 68, 255, 60, 60, "Arial", 8, "bold")
     end
     
     local mCol = (state.mode == "HOLD_ALT") and {80, 255, 120} or (state.mode == "CALIBRATING" and {80, 200, 255} or {255, 80, 80})
-    gpu.drawText(displayId, string.format("MODE: %s", state.mode), cardX + 5, 96, mCol[1], mCol[2], mCol[3], "Arial", 9, "bold")
+    gpu.drawText(displayId, string.format("MODE: %s", state.mode), pfdX + 6, pfdY + 82, mCol[1], mCol[2], mCol[3], "Arial", 9, "bold")
 
-    -- 4. 右側四軸烏龜名稱與推力卡 (顯示 Label 名稱)
-    local qCardX = cardX + cardW + 6
-    local qCardW = screenW - qCardX - 6
-    gpu.fillRect(displayId, qCardX, 32, qCardW, 88, 25, 32, 48)
-    gpu.drawText(displayId, "ENGINES (LABEL & SIG)", qCardX + 5, 38, 220, 230, 245, "Arial", 8, "bold")
+    -- 3. 右側四軸空巴 A350 ECAM 引擎儀表區
+    local ecamX = pfdX + pfdW + 6
+    local ecamY = 28
+    local ecamW = screenW - ecamX - 6
+    local ecamH = 96
+    gpu.fillRect(displayId, ecamX, ecamY, ecamW, ecamH, 18, 24, 34)
 
-    local function getEngText(node, def)
-        local lbl = node and (node.label or node.name or def) or (def .. ":OFF")
-        if #lbl > 5 then lbl = lbl:sub(1, 5) end
-        return lbl
+    -- 渲染 4 顆 A350 ECAM 引擎儀表 (FL, FR, BL, BR)
+    local slotW = math.floor((ecamW - 8) / 4)
+    local slots = {"FL", "FR", "BL", "BR"}
+
+    for i, slot in ipairs(slots) do
+        local engCenterX = ecamX + 4 + math.floor((i - 0.5) * slotW)
+        local engCenterY = ecamY + 38
+        local vVal = virtualOutputs[slot] or 0.0
+        local sig  = engineOutputs[slot] or 0
+        local node = engines[slot]
+        local lbl  = node and (node.label or node.name or slot) or slot
+        if #lbl > 4 then lbl = lbl:sub(1, 4) end
+
+        drawA350EngineDial(engCenterX, engCenterY, 14, vVal, 15.0, lbl, sig)
     end
 
-    local flLbl = getEngText(engines.FL, "FL")
-    local frLbl = getEngText(engines.FR, "FR")
-    local blLbl = getEngText(engines.BL, "BL")
-    local brLbl = getEngText(engines.BR, "BR")
-
-    gpu.drawText(displayId, string.format("%s:%2d", flLbl, engineOutputs.FL), qCardX + 5, 52, 120, 240, 150, "Arial", 9, "bold")
-    gpu.drawText(displayId, string.format("%s:%2d", frLbl, engineOutputs.FR), qCardX + 50, 52, 120, 240, 150, "Arial", 9, "bold")
-    gpu.drawText(displayId, string.format("%s:%2d", blLbl, engineOutputs.BL), qCardX + 5, 67, 120, 240, 150, "Arial", 9, "bold")
-    gpu.drawText(displayId, string.format("%s:%2d", brLbl, engineOutputs.BR), qCardX + 50, 67, 120, 240, 150, "Arial", 9, "bold")
-    gpu.drawText(displayId, string.format("BASE: %4.3f", state.baseThrottle), qCardX + 5, 83, 200, 220, 255, "Arial", 9, "plain")
-    
+    -- ECAM 儀表底層狀態文字
+    gpu.drawText(displayId, string.format("BASE: %4.3f", state.baseThrottle), ecamX + 8, ecamY + ecamH - 12, 200, 220, 255, "Arial", 8, "plain")
     local autoLvlCol = (state.autoLevel and gimbalAvailable) and {80, 255, 120} or {255, 90, 90}
-    gpu.drawText(displayId, string.format("AUTO-LVL: %s", (state.autoLevel and gimbalAvailable) and "ON" or "OFF"), qCardX + 5, 96, autoLvlCol[1], autoLvlCol[2], autoLvlCol[3], "Arial", 8, "bold")
+    gpu.drawText(displayId, string.format("AUTO-LVL: %s", (state.autoLevel and gimbalAvailable) and "ON" or "OFF"), ecamX + ecamW - 75, ecamY + ecamH - 12, autoLvlCol[1], autoLvlCol[2], autoLvlCol[3], "Arial", 8, "bold")
 
-    -- 狀態訊息小橫條
-    gpu.fillRect(displayId, 6, 124, screenW - 12, 16, 20, 26, 38)
-    gpu.drawText(displayId, string.format("STATUS: %s", state.statusMsg), 10, 127, 240, 240, 240, "Arial", 9, "plain")
+    -- 4. 狀態訊息橫條
+    gpu.fillRect(displayId, 6, 126, screenW - 12, 16, 18, 24, 34)
+    gpu.drawText(displayId, string.format("STATUS: %s", state.statusMsg), 10, 129, 240, 240, 240, "Arial", 9, "plain")
 
     -- 5. 觸控按鈕區
     buttons = {}
@@ -391,7 +474,7 @@ local function drawDirectGPU_UI()
         state.calibPhase = "GROUND_SEARCH"
         state.calibThrottle = 0.0
         state.baseThrottle = 0.0
-        state.rampRate = 0.00005 -- 極慢起步加力速率 (每秒僅 +0.001)
+        state.rampRate = 0.0001 -- 極慢起步加力速率 (每秒僅 +0.002)
         state.mode = "CALIBRATING"
         state.stableTimer = 0
         altPID:reset()
@@ -495,38 +578,46 @@ local function flightControlLoop()
                 state.calibThrottle = math.min(15.0, state.calibThrottle + state.rampRate)
                 state.baseThrottle = math.floor(state.calibThrottle * 1000 + 0.5) / 1000
 
-                -- 若持續靜止，緩慢提升探索速率
-                if climbDist < 0.03 and math.abs(currVspeed) < 0.02 then
-                    state.rampRate = math.min(0.0006, state.rampRate + 0.000005)
+                -- 若一直都沒動作（高度無明顯上升且垂直速度 < 0.08），穩健逐步加快增加推力速度！
+                if climbDist < 0.10 and currVspeed < 0.08 then
+                    state.rampRate = math.min(0.005, state.rampRate + 0.00002)
                 end
 
                 applyQuadThrust(state.baseThrottle, 0, deltaPitch, deltaRoll)
-                state.statusMsg = string.format("Search: %4.3f (Rate:%5.4f)", state.baseThrottle, state.rampRate * 20)
+                state.statusMsg = string.format("Search: %4.2f/15 (R:%5.4f)", state.baseThrottle, state.rampRate * 20)
 
-                -- 判定有變動了！(微幅動靜即刻捕捉)
-                if climbDist >= 0.03 or currVspeed >= 0.02 then
-                    state.rampRate = 0.0
+                -- 直到有動作（高度上升 >= 0.15m 或 垂直速度 >= 0.08m/s）：立刻放緩增加速度！
+                if climbDist >= 0.15 or currVspeed >= 0.08 then
+                    state.rampRate = 0.0001 -- 立刻放緩加力速率
                     state.virtualAlt = currAlt
                     state.calibPhase = "SMOOTH_CLIMB"
                     altPID:reset()
-                    state.statusMsg = string.format("Lifted! Smooth Climb to +10m (B:%4.3f)", state.baseThrottle)
+                    state.statusMsg = string.format("Lifted! Smooth Climb to +10m (B:%4.2f)", state.baseThrottle)
                 end
 
             elseif state.calibPhase == "SMOOTH_CLIMB" then
-                -- 階段 2: 虛擬軌跡平滑定速爬升 (目標速度 0.30 m/s = 0.015m / tick)
+                -- 階段 2: 平滑定速爬升 (目標速度 0.30 m/s)
+                -- 速度不足時 (V < 0.15 m/s 且尚未到達目標)，再次緩慢增加基礎推力以防卡死掉速
+                if currVspeed < 0.15 and climbDist < 8.5 and state.baseThrottle < 14 then
+                    state.calibThrottle = math.min(15.0, state.calibThrottle + 0.0002)
+                    state.baseThrottle = math.floor(state.calibThrottle * 1000 + 0.5) / 1000
+                elseif currVspeed > 0.40 and state.baseThrottle > 0.02 then
+                    -- 速度過快時，主動微幅回調
+                    state.calibThrottle = math.max(0.01, state.calibThrottle - 0.0005)
+                    state.baseThrottle = math.floor(state.calibThrottle * 1000 + 0.5) / 1000
+                end
+
                 state.virtualAlt = math.min(state.calibTargetAlt, state.virtualAlt + 0.015)
                 local altError = state.virtualAlt - currAlt
                 local deltaAlt = altPID:update(altError)
 
-                -- 主動控速防暴衝阻尼
-                if currVspeed > 0.35 then
-                    deltaAlt = deltaAlt - 0.25
-                end
+                -- 速度阻尼
+                if currVspeed > 0.35 then deltaAlt = deltaAlt - 0.25 end
 
                 applyQuadThrust(state.baseThrottle, deltaAlt, deltaPitch, deltaRoll)
                 state.statusMsg = string.format("Climbing: %5.1f / %5.1fm (V:%+.2f)", currAlt, state.calibTargetAlt, currVspeed)
 
-                -- 接近目標高度
+                -- 接近 +10m 目標高度 (距目標 < 0.5m 或 climbDist >= 9.5m)
                 if currAlt >= state.calibTargetAlt - 0.5 or climbDist >= 9.5 then
                     state.calibPhase = "STABILIZE"
                     state.virtualAlt = state.calibTargetAlt
@@ -558,7 +649,7 @@ local function flightControlLoop()
                         state.mode = "HOLD_ALT"
                         state.targetAlt = state.calibTargetAlt
                         state.virtualAlt = state.calibTargetAlt
-                        state.statusMsg = string.format("Calibrated! Hover Base: %.3f", state.baseThrottle)
+                        state.statusMsg = string.format("Calibrated! Hover Base: %.2f", state.baseThrottle)
                     end
                 else
                     state.stableTimer = 0
@@ -567,7 +658,7 @@ local function flightControlLoop()
                     elseif altError < -0.5 and state.baseThrottle > 0.01 and currVspeed > -0.10 then
                         state.baseThrottle = math.max(0.005, state.baseThrottle - 0.001)
                     end
-                    state.statusMsg = string.format("Hover Trim: %5.1fm (B:%4.3f)", state.calibTargetAlt, state.baseThrottle)
+                    state.statusMsg = string.format("Hover Trim: %5.1fm (B:%4.2f)", state.calibTargetAlt, state.baseThrottle)
                 end
             end
             
