@@ -6,7 +6,7 @@
     支援規格:
     - 專為 Tom's Peripherals 的 GPU 方塊 (tm_gpu / gpu) 與 Bitmap Monitors 打造。
     - 全面啟用 64x64 高畫質解析度 (gpu.setSize(64))。
-    - 完整 32-bit ARGB (0xAARRGGBB) 顏色不透明度校正 (Alpha = 0xFF)，解決文字與刻度隱形問題。
+    - 內建 5x7 像素點陣字體引擎 (Pixel Bitmap Font Engine)，徹底根治 Tom's GPU 官方 drawText 隱形問題。
     - A350 ECAM 全彩航空儀表：採用 GPU 平滑弧線 (lineS)、多色指針與數位讀數方框。
     - 穩健起飛偵測 (抗雜訊)：持續平穩爬坡加力，離地判定 (高度上升 >= 0.6m 或 垂直速度 >= 0.18m/s)。
     - 升力校準至 200m：平穩爬升至 200m，懸停自穩 5 秒自動鎖定並記錄懸停基準推力！
@@ -66,14 +66,13 @@ function PID:update(error)
 end
 
 -- ========================================================
--- 2. Tom's Peripherals GPU 初始化與 32-bit ARGB 安全繪圖模組
+-- 2. Tom's Peripherals GPU 初始化與 5x7 像素字體模組
 -- ========================================================
 local gpu = peripheral.find("tm_gpu") or peripheral.find("gpu")
 if not gpu then
     error("未找到 Tom's Peripherals GPU 設備！請確保電腦相鄰放置了 GPU 方塊並連接 Bitmap Monitors。")
 end
 
--- 啟用 64x64 高畫質點陣螢幕解析度
 pcall(function()
     if gpu.setSize then
         gpu.setSize(64)
@@ -93,7 +92,6 @@ end
 
 updateScreenSize()
 
--- 32-bit ARGB 顏色轉換 (強制注入 100% Alpha 不透明度 0xFF000000)
 local function toARGB(col)
     if type(col) ~= "number" then return 0xFFFFFFFF end
     if col <= 0x00FFFFFF then
@@ -165,19 +163,85 @@ local function safeLineS(x1, y1, x2, y2, color)
     end)
 end
 
-local function safeDrawText(x, y, text, textColor, bgColor, size)
-    x = clampX(x)
-    y = clampY(y)
-    text = tostring(text or "")
-    local fgARGB = toARGB(textColor or 0xFFFFFF)
-    local bgARGB = bgColor and toARGB(bgColor) or nil
-    pcall(function()
-        if gpu.drawTextSmart then
-            gpu.drawTextSmart(x, y, text, fgARGB, bgARGB, false, size or 1)
-        elseif gpu.drawText then
-            gpu.drawText(x, y, text, fgARGB, bgARGB, size or 1)
+-- 內建 5x7 點陣字體表
+local FONT_5X7 = {
+    ['0'] = {0x3E, 0x51, 0x49, 0x45, 0x3E},
+    ['1'] = {0x00, 0x42, 0x7F, 0x40, 0x00},
+    ['2'] = {0x42, 0x61, 0x51, 0x49, 0x46},
+    ['3'] = {0x21, 0x41, 0x45, 0x4B, 0x31},
+    ['4'] = {0x18, 0x14, 0x12, 0x7F, 0x10},
+    ['5'] = {0x27, 0x45, 0x45, 0x45, 0x39},
+    ['6'] = {0x3C, 0x4A, 0x49, 0x49, 0x30},
+    ['7'] = {0x01, 0x71, 0x09, 0x05, 0x03},
+    ['8'] = {0x36, 0x49, 0x49, 0x49, 0x36},
+    ['9'] = {0x06, 0x49, 0x49, 0x29, 0x1E},
+    ['A'] = {0x7E, 0x11, 0x11, 0x11, 0x7E},
+    ['B'] = {0x7F, 0x49, 0x49, 0x49, 0x36},
+    ['C'] = {0x3E, 0x41, 0x41, 0x41, 0x22},
+    ['D'] = {0x7F, 0x41, 0x41, 0x22, 0x1C},
+    ['E'] = {0x7F, 0x49, 0x49, 0x49, 0x41},
+    ['F'] = {0x7F, 0x09, 0x09, 0x09, 0x01},
+    ['G'] = {0x3E, 0x41, 0x49, 0x49, 0x7A},
+    ['H'] = {0x7F, 0x08, 0x08, 0x08, 0x7F},
+    ['I'] = {0x00, 0x41, 0x7F, 0x41, 0x00},
+    ['J'] = {0x20, 0x40, 0x41, 0x3F, 0x01},
+    ['K'] = {0x7F, 0x08, 0x14, 0x22, 0x41},
+    ['L'] = {0x7F, 0x40, 0x40, 0x40, 0x40},
+    ['M'] = {0x7F, 0x02, 0x0C, 0x02, 0x7F},
+    ['N'] = {0x7F, 0x04, 0x08, 0x10, 0x7F},
+    ['O'] = {0x3E, 0x41, 0x41, 0x41, 0x3E},
+    ['P'] = {0x7F, 0x09, 0x09, 0x09, 0x06},
+    ['Q'] = {0x3E, 0x41, 0x51, 0x21, 0x5E},
+    ['R'] = {0x7F, 0x09, 0x19, 0x29, 0x46},
+    ['S'] = {0x46, 0x49, 0x49, 0x49, 0x31},
+    ['T'] = {0x01, 0x01, 0x7F, 0x01, 0x01},
+    ['U'] = {0x3F, 0x40, 0x40, 0x40, 0x3F},
+    ['V'] = {0x1F, 0x20, 0x40, 0x20, 0x1F},
+    ['W'] = {0x7F, 0x20, 0x18, 0x20, 0x7F},
+    ['X'] = {0x63, 0x14, 0x08, 0x14, 0x63},
+    ['Y'] = {0x07, 0x08, 0x70, 0x08, 0x07},
+    ['Z'] = {0x61, 0x51, 0x49, 0x45, 0x43},
+    ['+'] = {0x08, 0x08, 0x3E, 0x08, 0x08},
+    ['-'] = {0x08, 0x08, 0x08, 0x08, 0x08},
+    ['.'] = {0x00, 0x60, 0x60, 0x00, 0x00},
+    [':'] = {0x00, 0x36, 0x36, 0x00, 0x00},
+    ['/'] = {0x20, 0x10, 0x08, 0x04, 0x02},
+    ['*'] = {0x14, 0x08, 0x3E, 0x08, 0x14},
+    ['['] = {0x00, 0x7F, 0x41, 0x41, 0x00},
+    [']'] = {0x00, 0x41, 0x41, 0x7F, 0x00},
+    ['('] = {0x00, 0x1C, 0x22, 0x41, 0x00},
+    [')'] = {0x00, 0x41, 0x22, 0x1C, 0x00},
+    ['%'] = {0x23, 0x13, 0x08, 0x64, 0x62},
+    ['>'] = {0x41, 0x22, 0x14, 0x08, 0x00},
+    ['<'] = {0x00, 0x08, 0x14, 0x22, 0x41},
+    ['='] = {0x14, 0x14, 0x14, 0x14, 0x14},
+    ['!'] = {0x00, 0x00, 0x5F, 0x00, 0x00},
+    [' '] = {0x00, 0x00, 0x00, 0x00, 0x00}
+}
+
+local function safeDrawText(startX, startY, text, color, bgColor, scale)
+    scale = scale or 1
+    text = string.upper(tostring(text or ""))
+    local curX = startX
+    local argb = toARGB(color)
+
+    for i = 1, #text do
+        local ch = text:sub(i, i)
+        local glyph = FONT_5X7[ch] or FONT_5X7[' ']
+        for col = 1, 5 do
+            local colBits = glyph[col] or 0
+            for row = 0, 6 do
+                if bit32.band(colBits, bit32.lshift(1, row)) ~= 0 then
+                    local px = curX + (col - 1) * scale
+                    local py = startY + row * scale
+                    if px >= 1 and py >= 1 and px + scale - 1 <= screenW and py + scale - 1 <= screenH then
+                        pcall(function() gpu.filledRectangle(px, py, scale, scale, argb) end)
+                    end
+                end
+            end
         end
-    end)
+        curX = curX + 6 * scale
+    end
 end
 
 local altiSensor   = peripheral.find("altitude_sensor")
@@ -350,13 +414,11 @@ local function applyQuadThrust(baseThrust, deltaAlt, deltaPitch, deltaRoll)
     engineOutputs.BL = resolvePwmOutput(rawBL)
     engineOutputs.BR = resolvePwmOutput(rawBR)
 
-    -- 1. 雙重輸出 A：透過有線網路向 Turtle/Relay 周邊呼叫
     outputToEngine(engines.FL, engineOutputs.FL)
     outputToEngine(engines.FR, engineOutputs.FR)
     outputToEngine(engines.BL, engineOutputs.BL)
     outputToEngine(engines.BR, engineOutputs.BR)
 
-    -- 2. 雙重輸出 B：透過 Modem 廣播 (頻道 100) 給運行 turtle_startup 的烏龜
     if not masterModem then
         masterModem = peripheral.find("modem")
     end
@@ -390,9 +452,7 @@ local state = {
     rampRate = 0.0001         -- 適應性加力速率
 }
 
--- PID 控制器：高度修正限幅在 [-1.5, +1.5]
 local altPID = PID.new(0.5, 0.02, 0.6, -1.5, 1.5)
-
 local buttons = {}
 
 local function addButton(x, y, w, h, text, bgCol, fgCol, action)
@@ -407,9 +467,9 @@ end
 -- 6. Airbus A350 ECAM 引擎儀表全彩渲染函式 (Tom's Peripherals GPU)
 -- ========================================================
 local function drawA350EngineDial(cx, cy, r, val, maxVal, label, sig)
-    -- 1. 儀表上方名稱標籤 (大字體)
-    local labelSize = (screenW >= 280) and 2 or 1
-    safeDrawText(cx - #label * 4 * labelSize, cy - r - 16, label, 0xC8E6FF, nil, labelSize)
+    -- 1. 儀表上方名稱標籤 (點陣大字體)
+    local labelSize = (screenW >= 320) and 2 or 1
+    safeDrawText(cx - math.floor(#label * 3 * labelSize), cy - r - 12 * labelSize, label, 0xC8E6FF, nil, labelSize)
 
     -- 2. 刻度弧 (210° ~ -30°)
     drawArc(cx, cy, r, 210, -30, 8, 0x8CA0B4)
@@ -458,11 +518,11 @@ local function drawA350EngineDial(cx, cy, r, val, maxVal, label, sig)
     safeRectangle(boxX, boxY, boxW, boxH, 0x2896C8)
 
     local valStr = string.format("%4.1f", val)
-    safeDrawText(boxX + 4, boxY + 2, valStr, 0x46FF78, nil, 1)
+    safeDrawText(boxX + math.floor((boxW - #valStr * 6) / 2), boxY + 4, valStr, 0x46FF78, nil, 1)
 
     -- 6. 離散紅石訊號 (如 2/15)
     local sigStr = string.format("%d/15", sig or 0)
-    safeDrawText(cx - #sigStr * 3, boxY + boxH + 3, sigStr, 0x96BEE1, nil, 1)
+    safeDrawText(cx - math.floor(#sigStr * 3), boxY + boxH + 3, sigStr, 0x96BEE1, nil, 1)
 end
 
 -- ========================================================
@@ -474,11 +534,11 @@ local function drawTomsUI()
     -- 1. 背景清除 (深航空藍黑)
     safeFill(0x0F141E)
 
-    -- 2. 頂部標題列 (1-indexed 邊界保護)
+    -- 2. 頂部標題列
     local headerH = math.max(24, math.floor(screenH * 0.08))
     safeFilledRectangle(1, 1, screenW, headerH, 0x192841)
     local titleSize = (screenW >= 300) and 2 or 1
-    safeDrawText(12, math.floor((headerH - 8 * titleSize) / 2) + 1, string.format("QUAD-ENGINE AVIONICS - TOMS GPU %s", VERSION), 0xF0F5FF, nil, titleSize)
+    safeDrawText(12, math.floor((headerH - 7 * titleSize) / 2) + 1, string.format("QUAD-ENGINE AVIONICS - TOMS GPU %s", VERSION), 0xF0F5FF, nil, titleSize)
 
     local currAlt = altiSensor and altiSensor.getHeight() or 0
     local currVspeed = altiSensor and altiSensor.getVerticalSpeed() or 0
@@ -504,13 +564,13 @@ local function drawTomsUI()
     drawCircle(gCX, gCY, gR, 0x50AAF0, false)
     local altText = string.format("%.0f", currAlt)
     local altSize = (gR >= 26) and 2 or 1
-    safeDrawText(gCX - math.floor(#altText * 3.5 * altSize), gCY - 4 * altSize, altText, 0xFFFFFF, nil, altSize)
-    safeDrawText(gCX - 12, gCY + math.floor(gR * 0.36), "ALT(M)", 0xA0CDF0, nil, 1)
+    safeDrawText(gCX - math.floor(#altText * 3 * altSize), gCY - math.floor(3.5 * altSize), altText, 0xFFFFFF, nil, altSize)
+    safeDrawText(gCX - 16, gCY + math.floor(gR * 0.40), "ALT(M)", 0xA0CDF0, nil, 1)
 
-    -- 狀態文字讀數 (支援大字體)
+    -- 狀態文字讀數
     local textX = pfdX + math.floor(leftW * 0.52)
     local rowSpacing = math.floor((instH - 24) / 5)
-    local textSize = (instH >= 120) and 2 or 1
+    local textSize = (instH >= 130 and screenW >= 360) and 2 or 1
 
     safeDrawText(textX, instY + 16, string.format("TGT: %.0fm", state.targetAlt), 0x50E6FF, nil, textSize)
     safeDrawText(textX, instY + 16 + rowSpacing, string.format("V.S: %+.2f", currVspeed), 0xFFCD4B, nil, textSize)
@@ -532,7 +592,6 @@ local function drawTomsUI()
     safeFilledRectangle(ecamX, instY, ecamW, instH, 0x121822)
     safeRectangle(ecamX, instY, ecamW, instH, 0x283850)
 
-    -- 渲染 4 具 A350 ECAM 引擎儀表 (FL, FR, BL, BR)
     local slotW = math.floor((ecamW - 8) / 4)
     local slots = {"FL", "FR", "BL", "BR"}
 
@@ -555,7 +614,7 @@ local function drawTomsUI()
     local statH = math.max(18, math.floor(screenH * 0.06))
     safeFilledRectangle(pfdX, statY, screenW - 12, statH, 0x1E2432)
     safeRectangle(pfdX, statY, screenW - 12, statH, 0x3C4B64)
-    safeDrawText(pfdX + 8, statY + math.floor((statH - 8) / 2), string.format("STATUS: %s", state.statusMsg), 0x50E6FF, nil, 1)
+    safeDrawText(pfdX + 8, statY + math.floor((statH - 7) / 2), string.format("STATUS: %s", state.statusMsg), 0x50E6FF, nil, 1)
 
     -- 5. 觸控按鈕區 (響應式下半部排版)
     buttons = {}
@@ -653,7 +712,7 @@ local function drawTomsUI()
         safeFilledRectangle(btn.x, btn.y, btn.w, btn.h, btn.bg)
         safeRectangle(btn.x, btn.y, btn.w, btn.h, 0x8CA0B4)
         local tx = btn.x + math.max(2, math.floor((btn.w - #btn.text * 6 * btnTextSize) / 2))
-        local ty = btn.y + math.floor((btn.h - 8 * btnTextSize) / 2)
+        local ty = btn.y + math.floor((btn.h - 7 * btnTextSize) / 2)
         safeDrawText(tx, ty, btn.text, btn.fg, nil, btnTextSize)
     end
 

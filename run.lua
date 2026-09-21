@@ -6,6 +6,7 @@
     架構說明 (Decoupled Architecture):
     - 飛控核心與動力控制 (Flight Core): 獨立封裝 PID、感測器獲取、PWM 集體升力混控、200m 標定演算法與烏龜通訊。
     - 顯示驅動模組 (Display Drivers): 獨立分流，支援 DirectGPU、Tom's Peripherals 與 原生 Monitor/Terminal。
+    - 內建向量點陣字體引擎 (5x7 Pixel Font Engine): 保證在任何版本 Tom's GPU 均能 100% 完美顯現文字與數值。
     - 單檔整合發布 (Single-File Distribution): 下載此檔案即可支援所有硬體，支援自動探測或命令列指定驅動。
 
     使用方式:
@@ -587,8 +588,63 @@ Drivers.directgpu = {
 }
 
 -- --------------------------------------------------------
--- 2.2 驅動 B: Tom's Peripherals 全彩點陣向量儀表
+-- 2.2 驅動 B: Tom's Peripherals 全彩點陣向量儀表 (內建 5x7 像素字體)
 -- --------------------------------------------------------
+local FONT_5X7 = {
+    ['0'] = {0x3E, 0x51, 0x49, 0x45, 0x3E},
+    ['1'] = {0x00, 0x42, 0x7F, 0x40, 0x00},
+    ['2'] = {0x42, 0x61, 0x51, 0x49, 0x46},
+    ['3'] = {0x21, 0x41, 0x45, 0x4B, 0x31},
+    ['4'] = {0x18, 0x14, 0x12, 0x7F, 0x10},
+    ['5'] = {0x27, 0x45, 0x45, 0x45, 0x39},
+    ['6'] = {0x3C, 0x4A, 0x49, 0x49, 0x30},
+    ['7'] = {0x01, 0x71, 0x09, 0x05, 0x03},
+    ['8'] = {0x36, 0x49, 0x49, 0x49, 0x36},
+    ['9'] = {0x06, 0x49, 0x49, 0x29, 0x1E},
+    ['A'] = {0x7E, 0x11, 0x11, 0x11, 0x7E},
+    ['B'] = {0x7F, 0x49, 0x49, 0x49, 0x36},
+    ['C'] = {0x3E, 0x41, 0x41, 0x41, 0x22},
+    ['D'] = {0x7F, 0x41, 0x41, 0x22, 0x1C},
+    ['E'] = {0x7F, 0x49, 0x49, 0x49, 0x41},
+    ['F'] = {0x7F, 0x09, 0x09, 0x09, 0x01},
+    ['G'] = {0x3E, 0x41, 0x49, 0x49, 0x7A},
+    ['H'] = {0x7F, 0x08, 0x08, 0x08, 0x7F},
+    ['I'] = {0x00, 0x41, 0x7F, 0x41, 0x00},
+    ['J'] = {0x20, 0x40, 0x41, 0x3F, 0x01},
+    ['K'] = {0x7F, 0x08, 0x14, 0x22, 0x41},
+    ['L'] = {0x7F, 0x40, 0x40, 0x40, 0x40},
+    ['M'] = {0x7F, 0x02, 0x0C, 0x02, 0x7F},
+    ['N'] = {0x7F, 0x04, 0x08, 0x10, 0x7F},
+    ['O'] = {0x3E, 0x41, 0x41, 0x41, 0x3E},
+    ['P'] = {0x7F, 0x09, 0x09, 0x09, 0x06},
+    ['Q'] = {0x3E, 0x41, 0x51, 0x21, 0x5E},
+    ['R'] = {0x7F, 0x09, 0x19, 0x29, 0x46},
+    ['S'] = {0x46, 0x49, 0x49, 0x49, 0x31},
+    ['T'] = {0x01, 0x01, 0x7F, 0x01, 0x01},
+    ['U'] = {0x3F, 0x40, 0x40, 0x40, 0x3F},
+    ['V'] = {0x1F, 0x20, 0x40, 0x20, 0x1F},
+    ['W'] = {0x7F, 0x20, 0x18, 0x20, 0x7F},
+    ['X'] = {0x63, 0x14, 0x08, 0x14, 0x63},
+    ['Y'] = {0x07, 0x08, 0x70, 0x08, 0x07},
+    ['Z'] = {0x61, 0x51, 0x49, 0x45, 0x43},
+    ['+'] = {0x08, 0x08, 0x3E, 0x08, 0x08},
+    ['-'] = {0x08, 0x08, 0x08, 0x08, 0x08},
+    ['.'] = {0x00, 0x60, 0x60, 0x00, 0x00},
+    [':'] = {0x00, 0x36, 0x36, 0x00, 0x00},
+    ['/'] = {0x20, 0x10, 0x08, 0x04, 0x02},
+    ['*'] = {0x14, 0x08, 0x3E, 0x08, 0x14},
+    ['['] = {0x00, 0x7F, 0x41, 0x41, 0x00},
+    [']'] = {0x00, 0x41, 0x41, 0x7F, 0x00},
+    ['('] = {0x00, 0x1C, 0x22, 0x41, 0x00},
+    [')'] = {0x00, 0x41, 0x22, 0x1C, 0x00},
+    ['%'] = {0x23, 0x13, 0x08, 0x64, 0x62},
+    ['>'] = {0x41, 0x22, 0x14, 0x08, 0x00},
+    ['<'] = {0x00, 0x08, 0x14, 0x22, 0x41},
+    ['='] = {0x14, 0x14, 0x14, 0x14, 0x14},
+    ['!'] = {0x00, 0x00, 0x5F, 0x00, 0x00},
+    [' '] = {0x00, 0x00, 0x00, 0x00, 0x00}
+}
+
 Drivers.toms = {
     name = "Tom's Peripherals GPU (A350 ECAM)",
     isAvailable = function()
@@ -606,6 +662,31 @@ Drivers.toms = {
         if type(col) ~= "number" then return 0xFFFFFFFF end
         if col <= 0x00FFFFFF then return col + 0xFF000000 end
         return col
+    end,
+    drawBitmapText = function(self, startX, startY, text, color, scale)
+        scale = scale or 1
+        text = string.upper(tostring(text or ""))
+        local curX = startX
+        local argb = self:toARGB(color)
+        local sw, sh = self.screenW, self.screenH
+
+        for i = 1, #text do
+            local ch = text:sub(i, i)
+            local glyph = FONT_5X7[ch] or FONT_5X7[' ']
+            for col = 1, 5 do
+                local colBits = glyph[col] or 0
+                for row = 0, 6 do
+                    if bit32.band(colBits, bit32.lshift(1, row)) ~= 0 then
+                        local px = curX + (col - 1) * scale
+                        local py = startY + row * scale
+                        if px >= 1 and py >= 1 and px + scale - 1 <= sw and py + scale - 1 <= sh then
+                            pcall(function() self.gpu.filledRectangle(px, py, scale, scale, argb) end)
+                        end
+                    end
+                end
+            end
+            curX = curX + 6 * scale
+        end
     end,
     draw = function(self)
         local ok, w, h = pcall(function() return self.gpu.getSize() end)
@@ -633,11 +714,8 @@ Drivers.toms = {
                 else self.gpu.line(math.max(1, math.min(sw, x1)), math.max(1, math.min(sh, y1)), math.max(1, math.min(sw, x2)), math.max(1, math.min(sh, y2)), toARGB(c)) end
             end)
         end
-        local function sTxt(x, y, txt, fc, bc, sz)
-            pcall(function()
-                if self.gpu.drawTextSmart then self.gpu.drawTextSmart(math.max(1, math.min(sw, x)), math.max(1, math.min(sh, y)), tostring(txt), toARGB(fc), bc and toARGB(bc) or nil, false, sz or 1)
-                elseif self.gpu.drawText then self.gpu.drawText(math.max(1, math.min(sw, x)), math.max(1, math.min(sh, y)), tostring(txt), toARGB(fc), bc and toARGB(bc) or nil, sz or 1) end
-            end)
+        local function sTxt(x, y, txt, fc, sz)
+            self:drawBitmapText(x, y, txt, fc, sz or 1)
         end
         local function sArc(cx, cy, r, startD, endD, stepD, c)
             local px, py = nil, nil
@@ -654,7 +732,7 @@ Drivers.toms = {
         local headerH = math.max(24, math.floor(sh * 0.08))
         sFR(1, 1, sw, headerH, 0x192841)
         local titleSize = (sw >= 300) and 2 or 1
-        sTxt(12, math.floor((headerH - 8 * titleSize) / 2) + 1, string.format("QUAD-ENGINE AVIONICS - TOMS GPU %s", VERSION), 0xF0F5FF, nil, titleSize)
+        sTxt(12, math.floor((headerH - 7 * titleSize) / 2) + 1, string.format("QUAD-ENGINE AVIONICS - TOMS GPU %s", VERSION), 0xF0F5FF, titleSize)
 
         local currAlt = FlightCore.altiSensor and FlightCore.altiSensor.getHeight() or 0
         local currVspeed = FlightCore.altiSensor and FlightCore.altiSensor.getVerticalSpeed() or 0
@@ -667,7 +745,7 @@ Drivers.toms = {
 
         sFR(pfdX, instY, leftW, instH, 0x141A26)
         sR(pfdX, instY, leftW, instH, 0x283850)
-        sTxt(pfdX + 8, instY + 6, "PRIMARY FLIGHT DISPLAY", 0xAAD2E6, nil, 1)
+        sTxt(pfdX + 8, instY + 6, "PRIMARY FLIGHT DISPLAY", 0xAAD2E6, 1)
 
         local gR = math.min(32, math.floor(instH * 0.28))
         local gCX = pfdX + math.floor(leftW * 0.26)
@@ -680,19 +758,19 @@ Drivers.toms = {
 
         local altText = string.format("%.0f", currAlt)
         local altSize = (gR >= 26) and 2 or 1
-        sTxt(gCX - math.floor(#altText * 3.5 * altSize), gCY - 4 * altSize, altText, 0xFFFFFF, nil, altSize)
-        sTxt(gCX - 12, gCY + math.floor(gR * 0.36), "ALT(M)", 0xA0CDF0, nil, 1)
+        sTxt(gCX - math.floor(#altText * 3 * altSize), gCY - math.floor(3.5 * altSize), altText, 0xFFFFFF, altSize)
+        sTxt(gCX - 16, gCY + math.floor(gR * 0.40), "ALT(M)", 0xA0CDF0, 1)
 
         local textX = pfdX + math.floor(leftW * 0.52)
         local rowSpacing = math.floor((instH - 24) / 5)
-        local textSize = (instH >= 120) and 2 or 1
-        sTxt(textX, instY + 16, string.format("TGT: %.0fm", FlightCore.state.targetAlt), 0x50E6FF, nil, textSize)
-        sTxt(textX, instY + 16 + rowSpacing, string.format("V.S: %+.2f", currVspeed), 0xFFCD4B, nil, textSize)
+        local textSize = (instH >= 130 and sw >= 360) and 2 or 1
+        sTxt(textX, instY + 16, string.format("TGT: %.0fm", FlightCore.state.targetAlt), 0x50E6FF, textSize)
+        sTxt(textX, instY + 16 + rowSpacing, string.format("V.S: %+.2f", currVspeed), 0xFFCD4B, textSize)
         local mCol = (FlightCore.state.mode == "HOLD_ALT") and 0x50FF78 or (FlightCore.state.mode == "CALIBRATING" and 0x50C8FF or 0xFF5050)
-        sTxt(textX, instY + 16 + rowSpacing * 2, string.format("MODE: %s", FlightCore.state.mode:sub(1,7)), mCol, nil, textSize)
-        sTxt(textX, instY + 16 + rowSpacing * 3, string.format("P:%+4.1f R:%+4.1f", currPitch, currRoll), 0xB4DCFF, nil, 1)
-        if FlightCore.gimbalAvailable then sTxt(textX, instY + 16 + rowSpacing * 4, "GIMBAL: ACTIVE", 0x50FF78, nil, 1)
-        else sTxt(textX, instY + 16 + rowSpacing * 4, "GIMBAL: NO SENSOR", 0xFF3C3C, nil, 1) end
+        sTxt(textX, instY + 16 + rowSpacing * 2, string.format("MODE: %s", FlightCore.state.mode:sub(1,7)), mCol, textSize)
+        sTxt(textX, instY + 16 + rowSpacing * 3, string.format("P:%+4.1f R:%+4.1f", currPitch, currRoll), 0xB4DCFF, 1)
+        if FlightCore.gimbalAvailable then sTxt(textX, instY + 16 + rowSpacing * 4, "GIMBAL: ACTIVE", 0x50FF78, 1)
+        else sTxt(textX, instY + 16 + rowSpacing * 4, "GIMBAL: NO SENSOR", 0xFF3C3C, 1) end
 
         local ecamX = pfdX + leftW + 6
         local ecamW = sw - ecamX - 6
@@ -713,8 +791,8 @@ Drivers.toms = {
             local val = FlightCore.virtualOutputs[slot] or 0.0
             local sig = FlightCore.engineOutputs[slot] or 0
 
-            local lblSz = (sw >= 280) and 2 or 1
-            sTxt(cx - #lbl * 4 * lblSz, cy - dialR - 16, lbl, 0xC8E6FF, nil, lblSz)
+            local lblSz = (sw >= 320) and 2 or 1
+            sTxt(cx - math.floor(#lbl * 3 * lblSz), cy - dialR - 12 * lblSz, lbl, 0xC8E6FF, lblSz)
             sArc(cx, cy, dialR, 210, -30, 8, 0x8CA0B4)
             sArc(cx, cy, dialR + 1, 210, -30, 8, 0x506478)
             for _, deg in ipairs({210, 90, -30}) do
@@ -733,16 +811,19 @@ Drivers.toms = {
             local boxY = cy + math.floor(dialR * 0.28)
             sFR(boxX, boxY, boxW, boxH, 0x0C121C)
             sR(boxX, boxY, boxW, boxH, 0x2896C8)
-            sTxt(boxX + 4, boxY + 2, string.format("%4.1f", val), 0x46FF78, nil, 1)
+            
+            local valStr = string.format("%4.1f", val)
+            sTxt(boxX + math.floor((boxW - #valStr * 6) / 2), boxY + 4, valStr, 0x46FF78, 1)
+            
             local sigStr = string.format("%d/15", sig)
-            sTxt(cx - #sigStr * 3, boxY + boxH + 3, sigStr, 0x96BEE1, nil, 1)
+            sTxt(cx - math.floor(#sigStr * 3), boxY + boxH + 3, sigStr, 0x96BEE1, 1)
         end
 
         local statY = instY + instH + 6
         local statH = math.max(18, math.floor(sh * 0.06))
         sFR(pfdX, statY, sw - 12, statH, 0x1E2432)
         sR(pfdX, statY, sw - 12, statH, 0x3C4B64)
-        sTxt(pfdX + 8, statY + math.floor((statH - 8) / 2), string.format("STATUS: %s", FlightCore.state.statusMsg), 0x50E6FF, nil, 1)
+        sTxt(pfdX + 8, statY + math.floor((statH - 7) / 2), string.format("STATUS: %s", FlightCore.state.statusMsg), 0x50E6FF, 1)
 
         self.buttons = {}
         local btnAreaY = statY + statH + 6
@@ -779,8 +860,8 @@ Drivers.toms = {
             sFR(btn.x, btn.y, btn.w, btn.h, btn.bg)
             sR(btn.x, btn.y, btn.w, btn.h, 0x8CA0B4)
             local tx = btn.x + math.max(2, math.floor((btn.w - #btn.text * 6 * btnTextSize) / 2))
-            local ty = btn.y + math.floor((btn.h - 8 * btnTextSize) / 2)
-            sTxt(tx, ty, btn.text, btn.fg, nil, btnTextSize)
+            local ty = btn.y + math.floor((btn.h - 7 * btnTextSize) / 2)
+            sTxt(tx, ty, btn.text, btn.fg, btnTextSize)
         end
 
         pcall(function() if self.gpu.sync then self.gpu.sync() end end)
@@ -807,7 +888,7 @@ Drivers.toms = {
 Drivers.normal = {
     name = "CC: Tweaked Native Monitor (A350 ECAM)",
     isAvailable = function()
-        return true -- 永遠可用 (至少有 terminal)
+        return true
     end,
     init = function(self)
         self.mon = peripheral.find("monitor")
