@@ -4,6 +4,7 @@
     Version: v3.5.0
     
     升力校準與定高邏輯:
+    - 智慧全螢幕響應式比例排版：100% 垂直與水平自適應填滿，杜絕大螢幕留白或擠壓問題！
     - 移植 A350 ECAM 引擎儀表：在一般螢幕/終端機上以彩色字元繪製弧形刻度錶、高溫紅線區、連續浮點推力讀數與離散紅石訊號。
     - 穩健起飛偵測 (抗雜訊)：徹底杜絕 V+0.01 輕微抖動就誤判或重置加速，持續加速加力直到飛艇確鑿離地 (高度上升 >= 0.6m 或 垂直速度 >= 0.18m/s)。
     - 升力校準至 200m：上升中不增加多餘功率，到達 200m 懸停自穩 5 秒並記錄最佳基準推力！
@@ -63,13 +64,18 @@ function PID:update(error)
 end
 
 -- ========================================================
--- 2. 螢幕與調色盤初始化
+-- 2. 螢幕與調色盤初始化 (智慧適應縮放)
 -- ========================================================
 local mon = peripheral.find("monitor")
 local display = mon or term.current()
 
 if mon then
-    mon.setTextScale(0.5)
+    -- 預設採用 1.0 文字縮放以確保字體清晰易讀；若螢幕較小則自動切換 0.5
+    mon.setTextScale(1.0)
+    local mw, mh = mon.getSize()
+    if mw < 38 or mh < 14 then
+        mon.setTextScale(0.5)
+    end
 end
 
 if display.setPaletteColor then
@@ -291,32 +297,109 @@ local function addButton(x, y, w, h, text, bgBlit, fgBlit, action)
 end
 
 -- ========================================================
--- 6. Airbus A350 ECAM 引擎文字儀表渲染模組
+-- 6. Airbus A350 ECAM 引擎文字儀表渲染模組 (高度自適應)
 -- ========================================================
 local function drawECAMDial(dx, dy, dw, dh, slot, label, val, sig)
     val = val or 0.0
     sig = sig or 0
     local ratio = math.max(0, math.min(1.0, val / 15.0))
     local lbl = label or slot
-    if #lbl > 4 then lbl = lbl:sub(1, 4) end
+    if #lbl > 6 then lbl = lbl:sub(1, 6) end
 
-    -- 繪製背景底框
+    -- 繪製背景底框 (深灰 7)
     for row = 0, dh - 1 do
         safeBlit(dx, dy + row, string.rep(" ", dw), "0", "7")
     end
 
-    if dh >= 6 then
-        -- 【完整大尺寸 A350 ECAM 儀表】(>= 6 行)
-        -- 行 1: 標題列 +-- FL --+
+    if dh >= 8 then
+        -- 【超高解析大尺寸 A350 ECAM 儀表】 (dh >= 8)
+        -- 行 1: 頂部標題列
+        local topBar = string.format("+-- %s --+", lbl)
+        if #topBar < dw then
+            local padL = math.floor((dw - #topBar) / 2)
+            local padR = dw - #topBar - padL
+            topBar = string.rep("-", padL) .. topBar .. string.rep("-", padR)
+        end
+        safeBlit(dx, dy, topBar:sub(1, dw), "9", "8")
+
+        -- 行 2: 頂部弧形外圈
+        local arcW = math.max(4, dw - 4)
+        local arcTop = string.rep("=", arcW)
+        local padTopL = math.floor((dw - (arcW + 2)) / 2)
+        local padTopR = dw - (arcW + 2) - padTopL
+        local topArcLine = string.rep(" ", padTopL) .. "/" .. arcTop .. "\\" .. string.rep(" ", padTopR)
+        safeBlit(dx, dy + 1, topArcLine:sub(1, dw), "8", "7")
+
+        -- 行 3: 弧形刻度錶本體 (/■■■■··\)
+        local fillCount = math.floor(ratio * (arcW - 1) + 0.5)
+        local arcChars = "/"
+        local arcFg = "8"
+        for k = 1, arcW - 2 do
+            if k <= fillCount then
+                arcChars = arcChars .. "="
+                if k > (arcW - 2) * 0.85 then
+                    arcFg = arcFg .. "e" -- 紅線極限區
+                elseif k > (arcW - 2) * 0.65 then
+                    arcFg = arcFg .. "4" -- 黃色過載區
+                else
+                    arcFg = arcFg .. "5" -- 綠色正常區
+                end
+            else
+                arcChars = arcChars .. "."
+                arcFg = arcFg .. "8" -- 灰色刻度
+            end
+        end
+        arcChars = arcChars .. "\\"
+        arcFg = arcFg .. "e"
+
+        local mainArcLine = string.rep(" ", padTopL) .. arcChars .. string.rep(" ", padTopR)
+        local mainArcFg = string.rep("0", padTopL) .. arcFg .. string.rep("0", padTopR)
+        safeBlit(dx, dy + 2, mainArcLine:sub(1, dw), mainArcFg:sub(1, dw), "7")
+
+        -- 行 4: 刻度下邊界
+        local baseArcLine = string.rep(" ", padTopL) .. "\\" .. string.rep("-", arcW) .. "/" .. string.rep(" ", padTopR)
+        safeBlit(dx, dy + 3, baseArcLine:sub(1, dw), "8", "7")
+
+        -- 行 5: 數位讀數外框頂部
+        local boxW = math.min(dw - 2, 12)
+        local boxPadL = math.floor((dw - boxW) / 2)
+        local boxPadR = dw - boxW - boxPadL
+        local boxTop = string.rep(" ", boxPadL) .. "+" .. string.rep("-", boxW - 2) .. "+" .. string.rep(" ", boxPadR)
+        safeBlit(dx, dy + 4, boxTop:sub(1, dw), "9", "7")
+
+        -- 行 6: 數位連續推力讀數 | > 2.30 < |
+        local valStr = string.format(">%4.1f<", val)
+        local valPadInnerL = math.floor((boxW - 2 - #valStr) / 2)
+        local valPadInnerR = boxW - 2 - #valStr - valPadInnerL
+        local valRow = string.rep(" ", boxPadL) .. "|" .. string.rep(" ", valPadInnerL) .. valStr .. string.rep(" ", valPadInnerR) .. "|" .. string.rep(" ", boxPadR)
+        local valRowFg = string.rep("0", boxPadL) .. "9" .. string.rep("0", valPadInnerL) .. "955559" .. string.rep("0", valPadInnerR) .. "9" .. string.rep("0", boxPadR)
+        safeBlit(dx, dy + 5, valRow:sub(1, dw), valRowFg:sub(1, dw), "f")
+
+        -- 行 7: 數位讀數外框底部
+        safeBlit(dx, dy + 6, boxTop:sub(1, dw), "9", "7")
+
+        -- 行 8: 離散紅石訊號 SIG: 2/15
+        local sigStr = string.format("SIG: %2d/15", sig)
+        local sigPadL = math.floor((dw - #sigStr) / 2)
+        local sigPadR = dw - #sigStr - sigPadL
+        local sigLine = string.rep(" ", sigPadL) .. sigStr .. string.rep(" ", sigPadR)
+        local sigFg = string.rep("0", sigPadL) .. "8888" .. "33333" .. string.rep("0", sigPadR)
+        safeBlit(dx, dy + 7, sigLine:sub(1, dw), sigFg:sub(1, dw), "7")
+
+        -- 底部邊框
+        local btmBar = "+" .. string.rep("-", math.max(0, dw - 2)) .. "+"
+        safeBlit(dx, dy + dh - 1, btmBar:sub(1, dw), "8", "7")
+
+    elseif dh >= 6 then
+        -- 【標準大尺寸 A350 ECAM 儀表】 (6 <= dh < 8)
+        -- 行 1: 標題列
         local topBar = string.format("+--%s--+", lbl)
         if #topBar < dw then
             local padL = math.floor((dw - #topBar) / 2)
             local padR = dw - #topBar - padL
             topBar = string.rep("-", padL) .. topBar .. string.rep("-", padR)
-        elseif #topBar > dw then
-            topBar = topBar:sub(1, dw)
         end
-        safeBlit(dx, dy, topBar, "9", "8")
+        safeBlit(dx, dy, topBar:sub(1, dw), "9", "8")
 
         -- 行 2: 弧形刻度錶 (/====..\\)
         local arcLen = math.max(4, dw - 4)
@@ -327,19 +410,19 @@ local function drawECAMDial(dx, dy, dw, dh, slot, label, val, sig)
             if k <= fillCount then
                 arcChars = arcChars .. "="
                 if k > (arcLen - 2) * 0.85 then
-                    arcFg = arcFg .. "e" -- 高推力紅線區
+                    arcFg = arcFg .. "e"
                 elseif k > (arcLen - 2) * 0.65 then
-                    arcFg = arcFg .. "4" -- 黃色警戒區
+                    arcFg = arcFg .. "4"
                 else
-                    arcFg = arcFg .. "5" -- 綠色正常區
+                    arcFg = arcFg .. "5"
                 end
             else
                 arcChars = arcChars .. "."
-                arcFg = arcFg .. "7" -- 暗灰空刻度
+                arcFg = arcFg .. "8"
             end
         end
         arcChars = arcChars .. "\\"
-        arcFg = arcFg .. "e" -- 紅線極限標記
+        arcFg = arcFg .. "e"
 
         local arcLine = "|" .. arcChars .. "|"
         if #arcLine < dw then
@@ -348,7 +431,7 @@ local function drawECAMDial(dx, dy, dw, dh, slot, label, val, sig)
             arcLine = string.rep(" ", padL) .. arcLine .. string.rep(" ", padR)
             arcFg = string.rep("0", padL) .. "8" .. arcFg .. "8" .. string.rep("0", padR)
         end
-        safeBlit(dx, dy + 1, arcLine, arcFg, "7")
+        safeBlit(dx, dy + 1, arcLine:sub(1, dw), arcFg:sub(1, dw), "7")
 
         -- 行 3: 連續浮點數值讀數方框 [ 2.30 ]
         local valText = string.format("[%4.1f]", val)
@@ -356,7 +439,7 @@ local function drawECAMDial(dx, dy, dw, dh, slot, label, val, sig)
         local valPadR = math.max(0, dw - #valText - valPadL)
         local valLine = string.rep(" ", valPadL) .. valText .. string.rep(" ", valPadR)
         local valFg = string.rep("0", valPadL) .. "955559" .. string.rep("0", valPadR)
-        safeBlit(dx, dy + 2, valLine, valFg, "f")
+        safeBlit(dx, dy + 2, valLine:sub(1, dw), valFg:sub(1, dw), "f")
 
         -- 行 4: 離散紅石訊號 2/15
         local sigText = string.format("%2d/15", sig)
@@ -364,14 +447,14 @@ local function drawECAMDial(dx, dy, dw, dh, slot, label, val, sig)
         local sigPadR = math.max(0, dw - #sigText - sigPadL)
         local sigLine = string.rep(" ", sigPadL) .. sigText .. string.rep(" ", sigPadR)
         local sigFg = string.rep("0", sigPadL) .. "33333" .. string.rep("0", sigPadR)
-        safeBlit(dx, dy + 3, sigLine, sigFg, "7")
+        safeBlit(dx, dy + 3, sigLine:sub(1, dw), sigFg:sub(1, dw), "7")
 
         -- 行 5: 底部框線
         local btmBar = "+" .. string.rep("-", math.max(0, dw - 2)) .. "+"
         safeBlit(dx, dy + dh - 1, btmBar:sub(1, dw), "8", "7")
 
     else
-        -- 【緊湊型 A350 ECAM 儀表】(< 6 行)
+        -- 【緊湊型 A350 ECAM 儀表】 (dh < 6)
         -- 行 1: 標籤與刻度 [FL] /==.\
         local arcLen = math.max(3, dw - 6)
         local fillCount = math.floor(ratio * arcLen + 0.5)
@@ -399,7 +482,7 @@ local function drawECAMDial(dx, dy, dw, dh, slot, label, val, sig)
 end
 
 -- ========================================================
--- 7. 螢幕繪製主介面 (A350 ECAM 風格)
+-- 7. 螢幕繪製主介面 (A350 ECAM 風格 - 100% 全螢幕響應式適應)
 -- ========================================================
 local function drawQuadUI()
     local w, h = display.getSize()
@@ -417,50 +500,63 @@ local function drawQuadUI()
     local currVspeed = altiSensor and altiSensor.getVerticalSpeed() or 0
     local currPitch, currRoll = getGimbalData()
 
-    -- 2. 佈局尺寸分配 (左側 PFD 儀表 + 右側 4 軸 A350 引擎卡片)
-    local cardH = math.max(6, math.min(9, h - 11))
-    local leftW = math.max(20, math.floor(w * 0.38))
+    -- 2. 佈局尺寸動態計算 (自適應利用 100% 垂直高度)
+    -- 上半部儀表區高度佔可用高度的 ~50%
+    local instY = 3
+    local availH = h - instY
+    local cardH = math.max(6, math.floor(availH * 0.48))
+    local leftW = math.max(22, math.floor(w * 0.35))
     local rightX = leftW + 3
     local rightW = w - rightX
 
     -- [左側 PFD / 飛行數據卡片]
-    for y = 3, 2 + cardH do
+    for y = instY, instY + cardH - 1 do
         safeBlit(2, y, string.rep(" ", leftW), "0", "8")
     end
-    safeBlit(3, 3, "PFD / TELEMETRY", "9", "8")
-    
-    local altStr = string.format("ALT:%5.1fm (TGT:%4.0f)", currAlt, state.targetAlt)
+    safeBlit(3, instY, "PFD / TELEMETRY", "9", "8")
+
+    local altStr = string.format("ALT: %5.1fm (TGT:%4.0f)", currAlt, state.targetAlt)
     if #altStr > leftW - 2 then altStr = string.format("A:%5.1f T:%4.0f", currAlt, state.targetAlt) end
-    safeBlit(3, 4, altStr:sub(1, leftW - 2), "0", "8")
     
     local vspeedStr = string.format("V.SPD: %+5.2f m/s", currVspeed)
-    safeBlit(3, 5, vspeedStr:sub(1, leftW - 2), "4", "8")
-
-    -- 姿態角度與陀螺儀狀態 (保留顯示)
-    local attStr = string.format("P:%+4.1f* R:%+4.1f*", currPitch, currRoll)
-    safeBlit(3, 6, attStr:sub(1, leftW - 2), "3", "8")
-
-    if gimbalAvailable then
-        safeBlit(3, 7, "GIMBAL: ACTIVE [OK]", "5", "8")
-    else
-        safeBlit(3, 7, "GIMBAL: NO SENSOR!", "e", "8")
-    end
-    
+    local attStr = string.format("P: %+4.1f*  R: %+4.1f*", currPitch, currRoll)
+    local gimbalStr = gimbalAvailable and "GIMBAL: ACTIVE [OK]" or "GIMBAL: NO SENSOR!"
+    local gimbalCol = gimbalAvailable and "5" or "e"
     local modeFg = (state.mode == "HOLD_ALT") and "5" or (state.mode == "CALIBRATING" and "4" or "e")
-    local modeRow = string.format("MODE:%-5s B:%4.2f", state.mode:sub(1,5), state.baseThrottle)
-    safeBlit(3, 8, modeRow:sub(1, leftW - 2), modeFg, "8")
+    local modeRow = string.format("MODE: %-5s  B:%4.2f", state.mode:sub(1,5), state.baseThrottle)
+
+    if cardH >= 10 then
+        -- 垂直空間寬裕時進行等距分佈
+        local step = math.max(1, math.floor((cardH - 2) / 6))
+        safeBlit(3, instY + step * 1, altStr:sub(1, leftW - 2), "0", "8")
+        safeBlit(3, instY + step * 2, vspeedStr:sub(1, leftW - 2), "4", "8")
+        safeBlit(3, instY + step * 3, attStr:sub(1, leftW - 2), "3", "8")
+        safeBlit(3, instY + step * 4, gimbalStr:sub(1, leftW - 2), gimbalCol, "8")
+        safeBlit(3, instY + step * 5, modeRow:sub(1, leftW - 2), modeFg, "8")
+        safeBlit(3, instY + step * 6, "COLLECTIVE LIFT ONLY", "9", "8")
+    else
+        -- 緊湊模式
+        safeBlit(3, instY + 1, altStr:sub(1, leftW - 2), "0", "8")
+        safeBlit(3, instY + 2, vspeedStr:sub(1, leftW - 2), "4", "8")
+        safeBlit(3, instY + 3, attStr:sub(1, leftW - 2), "3", "8")
+        safeBlit(3, instY + 4, gimbalStr:sub(1, leftW - 2), gimbalCol, "8")
+        safeBlit(3, instY + 5, modeRow:sub(1, leftW - 2), modeFg, "8")
+        if cardH >= 7 then
+            safeBlit(3, instY + 6, "COLLECTIVE LIFT ONLY", "9", "8")
+        end
+    end
 
     -- [右側 A350 ECAM 四軸引擎儀表區]
     local slots = {"FL", "FR", "BL", "BR"}
 
-    if rightW >= 40 then
+    if rightW >= 36 then
         -- 橫向排布 4 具 A350 引擎儀表 (1x4)
         local dialW = math.floor((rightW - 3) / 4)
         for i, slot in ipairs(slots) do
             local dx = rightX + (i - 1) * (dialW + 1)
             local node = engines[slot]
             local lbl = node and (node.label or node.name or slot) or slot
-            drawECAMDial(dx, 3, dialW, cardH, slot, lbl, virtualOutputs[slot], engineOutputs[slot])
+            drawECAMDial(dx, instY, dialW, cardH, slot, lbl, virtualOutputs[slot], engineOutputs[slot])
         end
     else
         -- 2x2 矩陣排布 A350 引擎儀表 (FL, FR / BL, BR)
@@ -470,29 +566,31 @@ local function drawQuadUI()
         -- 上排: FL, FR
         local flNode = engines.FL
         local frNode = engines.FR
-        drawECAMDial(rightX, 3, dialW, dialH, "FL", flNode and flNode.label or "FL", virtualOutputs.FL, engineOutputs.FL)
-        drawECAMDial(rightX + dialW + 1, 3, dialW, dialH, "FR", frNode and frNode.label or "FR", virtualOutputs.FR, engineOutputs.FR)
+        drawECAMDial(rightX, instY, dialW, dialH, "FL", flNode and flNode.label or "FL", virtualOutputs.FL, engineOutputs.FL)
+        drawECAMDial(rightX + dialW + 1, instY, dialW, dialH, "FR", frNode and frNode.label or "FR", virtualOutputs.FR, engineOutputs.FR)
 
         -- 下排: BL, BR
         local blNode = engines.BL
         local brNode = engines.BR
-        local dy2 = 3 + dialH
+        local dy2 = instY + dialH
         drawECAMDial(rightX, dy2, dialW, dialH, "BL", blNode and blNode.label or "BL", virtualOutputs.BL, engineOutputs.BL)
         drawECAMDial(rightX + dialW + 1, dy2, dialW, dialH, "BR", brNode and brNode.label or "BR", virtualOutputs.BR, engineOutputs.BR)
     end
 
-    -- 4. 狀態訊息列
-    local statusY = 3 + cardH + 1
+    -- 3. 狀態訊息列 (中間橫幅)
+    local statusY = instY + cardH + 1
     local statusRow = string.format("STATUS: %-40s", state.statusMsg):sub(1, w - 2)
     safeBlit(2, statusY, statusRow, "0", "f")
 
-    -- 5. 觸控按鈕區
+    -- 4. 觸控按鈕區 (自適應拉伸佔滿下半部剩餘空間)
     buttons = {}
+    local bAreaY = statusY + 2
+    local bAreaH = math.max(3, h - bAreaY)
+    local bH = math.max(1, math.floor((bAreaH - 2) / 3))
 
     -- 第一排：目標高度調整 (+10m, +1m, -1m, -10m, SET CURR)
-    local bY1 = statusY + 2
+    local bY1 = bAreaY
     local bW1 = math.floor((w - 6) / 5)
-    local bH = (h >= 24) and 2 or 1
 
     addButton(2, bY1, bW1, bH, "+10m", "d", "0", function()
         state.targetAlt = state.targetAlt + 10
@@ -551,10 +649,10 @@ local function drawQuadUI()
         state.statusMsg = "Calib: Searching Lift to 200m..."
     end)
 
-    -- 第三排：主要飛控模式按鈕
+    -- 第三排：主要飛控模式按鈕 (拉伸填滿至螢幕最底)
     local bY3 = bY2 + bH + 1
     local mainBW = math.floor((w - 3) / 2)
-    local mainBH = (h >= 24) and 3 or 2
+    local mainBH = math.max(bH, h - bY3)
 
     local holdBg = (state.mode == "HOLD_ALT") and "5" or "d"
     addButton(2, bY3, mainBW, mainBH, " [ HOLD ALT ] ", holdBg, "0", function()
