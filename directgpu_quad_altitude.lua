@@ -4,7 +4,7 @@
     
     智慧校準與姿態自穩邏輯:
     - 內建 Gimbal Sensor 防呆與熱插拔檢測機制 (無感測器時自動降級防崩潰)。
-    - 啟動 CALIBRATE 時，以極微小 PWM 脈衝緩慢均勻加力起飛，目標鎖定在 (起飛高度 + 10格) 懸浮。
+    - 智慧變速探索起飛推力：先非常慢地加力 -> 若無動靜慢慢加速 -> 一旦有高度/速度變動立刻降速並平滑控速爬升至 +10 格懸浮。
     - 爬升與飛行途中即時姿態反向補償：任一側傾斜立刻對低側加力、高側減力，維持水平姿態。
     - 當高度誤差 < 0.6m、垂直速度 < 0.15m/s、姿態傾斜 < 1.0° 持續穩定 5 秒，自動鎖定基準推力並切換定高！
     - 支援自由自訂目標高度 (Target Altitude) 或一鍵同步當前高度 (SET CURR)。
@@ -172,7 +172,8 @@ local function outputToEngine(node, signal)
 end
 
 local function applyQuadThrust(baseThrust, deltaAlt, deltaPitch, deltaRoll)
-    pwmTick = (pwmTick + 1) % 10
+    -- 20 ticks (1.0s 週期) 超高解析度 PWM 佔空比計數器 (0 ~ 19)
+    pwmTick = (pwmTick + 1) % 20
 
     -- 四軸混控公式：
     -- Pitch > 0 (前傾/低頭) => deltaPitch < 0 => 前部 FL/FR 增加推力，後部 BL/BR 減少推力
@@ -183,9 +184,9 @@ local function applyQuadThrust(baseThrust, deltaAlt, deltaPitch, deltaRoll)
     local rawBR = baseThrust + deltaAlt + deltaPitch - deltaRoll
 
     local function resolvePwmOutput(val)
-        if val <= 0 then return 0 end
+        if val <= 0.001 then return 0 end
         if val < 1.0 then
-            local activeThreshold = math.floor(val * 10 + 0.5)
+            local activeThreshold = math.floor(val * 20 + 0.5)
             if pwmTick < activeThreshold then
                 return 1
             else
@@ -227,20 +228,21 @@ end
 -- 4. 飛控狀態與 PID 控制器
 -- ========================================================
 local state = {
-    mode = "IDLE",       -- "IDLE", "HOLD_ALT", "CALIBRATING"
-    targetAlt = 100.0,   -- 全局目標高度
-    baseThrottle = 1.0,  -- 支援浮點推力 (0.01 ~ 15.0)，< 1 自動進入 PWM 脈衝模式
-    autoLevel = true,    -- 自動水平姿態開關
+    mode = "IDLE",            -- "IDLE", "HOLD_ALT", "CALIBRATING"
+    targetAlt = 100.0,        -- 全局目標高度
+    baseThrottle = 1.0,       -- 支援浮點推力 (0.01 ~ 15.0)，< 1 自動進入 PWM 脈衝模式
+    autoLevel = true,         -- 自動水平姿態開關
     statusMsg = "System Ready",
-    stableTimer = 0,     -- 穩定計時器 (秒)
-    calibStartAlt = 0,   -- 校正啟動高度
-    calibTargetAlt = 0,  -- 校正懸停目標 (起飛高度 + 10m)
-    calibPhase = "RAMP", -- "RAMP" (緩慢脈衝加力), "STABILIZE" (保持定高自穩)
-    calibThrottle = 0.02 -- 校正微調油門 (從極微小 0.02 脈衝起步)
+    stableTimer = 0,          -- 穩定計時器 (秒)
+    calibStartAlt = 0,        -- 校正啟動高度
+    calibTargetAlt = 0,       -- 校正懸停目標 (起飛高度 + 10m)
+    calibPhase = "GROUND_SEARCH", -- "GROUND_SEARCH", "SMOOTH_CLIMB", "STABILIZE"
+    calibThrottle = 0.0,      -- 校正微調油門 (從 0.0 脈衝起步)
+    rampRate = 0.0001         -- 適應性加力速率 (起步極慢)
 }
 
 -- PID 控制器：針對姿態失衡加大反應速度與增益
-local altPID   = PID.new(0.7, 0.05, 0.8, -8, 8)
+local altPID   = PID.new(0.6, 0.04, 0.7, -6, 6)
 local pitchPID = PID.new(0.25, 0.01, 0.12, -8, 8)
 local rollPID  = PID.new(0.25, 0.01, 0.12, -8, 8)
 
@@ -378,18 +380,19 @@ local function drawDirectGPU_UI()
         state.calibStartAlt = cur
         state.calibTargetAlt = cur + 10.0 -- 懸停在 +10格 (起飛高度 + 10m)
         state.targetAlt = cur + 10.0
-        state.calibPhase = "RAMP"
-        state.calibThrottle = 0.02 -- 從極微小脈衝起步
-        state.baseThrottle = 0.02
+        state.calibPhase = "GROUND_SEARCH"
+        state.calibThrottle = 0.0
+        state.baseThrottle = 0.0
+        state.rampRate = 0.0001 -- 極慢起步加力速率 (每秒僅 +0.002)
         state.mode = "CALIBRATING"
         state.stableTimer = 0
         altPID:reset()
         pitchPID:reset()
         rollPID:reset()
         if not gimbalAvailable then
-            state.statusMsg = "[WARN] No Gimbal! Calib Ramping..."
+            state.statusMsg = "[WARN] No Gimbal! Soft Probing Lift..."
         else
-            state.statusMsg = "Calib: Auto-Level Ramping (+10m)..."
+            state.statusMsg = "Calib: Soft Probing Lift..."
         end
     end)
 
@@ -459,7 +462,6 @@ local function flightControlLoop()
             applyQuadThrust(state.baseThrottle, deltaAlt, deltaPitch, deltaRoll)
 
         elseif state.mode == "CALIBRATING" then
-            -- 姿態水平微調 (途中不平衡立刻對另一邊增加推力補償)
             local deltaPitch = 0
             local deltaRoll = 0
             if state.autoLevel and gimbalAvailable then
@@ -469,29 +471,56 @@ local function flightControlLoop()
 
             local climbDist = currAlt - state.calibStartAlt
 
-            if state.calibPhase == "RAMP" then
-                -- 階段 1: 緩慢平均增加推力功率 (從 0.02 脈衝開始，每秒增加約 0.04)
-                state.calibThrottle = math.min(15.0, state.calibThrottle + 0.002)
-                state.baseThrottle = math.floor(state.calibThrottle * 100 + 0.5) / 100
+            if state.calibPhase == "GROUND_SEARCH" then
+                -- 階段 1: 地面靜態尋找起飛點
+                -- 先非常慢的增加，若持續未動則慢慢加快加力速率
+                state.calibThrottle = math.min(15.0, state.calibThrottle + state.rampRate)
+                state.baseThrottle = math.floor(state.calibThrottle * 1000 + 0.5) / 1000
 
-                -- 輸出四軸推力：加力爬升途中，若有傾斜立即對另一側加力配平
+                -- 若依然在地面靜止，慢慢加速增加推力的速率 (平滑加速)
+                if climbDist < 0.05 and math.abs(currVspeed) < 0.03 then
+                    state.rampRate = math.min(0.0015, state.rampRate + 0.00001)
+                end
+
                 applyQuadThrust(state.baseThrottle, 0, deltaPitch, deltaRoll)
+                state.statusMsg = string.format("Search: %4.3f (Rate:%5.4f)", state.baseThrottle, state.rampRate * 20)
 
-                state.statusMsg = string.format("Ramping: %4.2f/15 (+%.1f/+10m)", state.baseThrottle, climbDist)
+                -- 判定有變動了！(高度上升 >= 0.05m 或 垂直速度 >= 0.03m/s)
+                if climbDist >= 0.05 or currVspeed >= 0.03 then
+                    -- 立刻變慢/停止盲目加力，並切入平滑控速爬升！
+                    state.rampRate = 0.0001
+                    state.calibPhase = "SMOOTH_CLIMB"
+                    altPID:reset()
+                    state.statusMsg = string.format("Lifted! Smooth Climb to +10m (B:%4.2f)", state.baseThrottle)
+                end
 
-                -- 判定起飛上升到達 +10m (或偵測到起飛明顯垂直爬升速度 > 0.6 m/s):
-                -- 立即停止增加基礎推力，無縫切入 +10m 定高懸停自穩階段！
-                if climbDist >= 10.0 or (climbDist >= 0.8 and currVspeed > 0.6) then
+            elseif state.calibPhase == "SMOOTH_CLIMB" then
+                -- 階段 2: 離地後平滑控速爬升至 +10m (不再盲目暴衝加力)
+                -- 若垂直速度過快 (> 0.4 m/s)，主動微幅回退油門以抑制衝力
+                if currVspeed > 0.4 and state.baseThrottle > 0.02 then
+                    state.baseThrottle = math.max(0.01, state.baseThrottle - 0.001)
+                elseif currVspeed < 0.05 and climbDist < 8.0 and state.baseThrottle < 14 then
+                    -- 若離地後又掉速，極微慢補充微小推力
+                    state.baseThrottle = math.min(15.0, state.baseThrottle + 0.0003)
+                end
+
+                local altError = state.calibTargetAlt - currAlt
+                local deltaAlt = altPID:update(altError)
+
+                applyQuadThrust(state.baseThrottle, deltaAlt, deltaPitch, deltaRoll)
+                state.statusMsg = string.format("Climbing: %5.1f/%5.1fm (V:%+.1f)", currAlt, state.calibTargetAlt, currVspeed)
+
+                -- 到達 +10m 目標高度附近 (距目標 < 0.6m 或 climbDist >= 9.5m)
+                if currAlt >= state.calibTargetAlt - 0.6 or climbDist >= 9.5 then
                     state.calibPhase = "STABILIZE"
-                    state.targetAlt = state.calibTargetAlt
                     state.stableTimer = 0
                     altPID:reset()
-                    state.statusMsg = string.format("Lifted! Hovering at +10m (%.1fm)", state.targetAlt)
+                    state.statusMsg = string.format("Approached +10m! Stabilizing...")
                 end
 
             elseif state.calibPhase == "STABILIZE" then
-                -- 階段 2: 保持在 (起飛高度 + 10m) 懸停，PID 自動調節並尋找最佳懸停推力
-                local altError = state.targetAlt - currAlt
+                -- 階段 3: 保持在 (起飛高度 + 10m) 懸停，高精度自穩收斂
+                local altError = state.calibTargetAlt - currAlt
                 local deltaAlt = altPID:update(altError)
 
                 applyQuadThrust(state.baseThrottle, deltaAlt, deltaPitch, deltaRoll)
@@ -504,22 +533,23 @@ local function flightControlLoop()
                 local attOk = (not gimbalAvailable) or (attDiff < 1.0)
                 if altDiff < 0.6 and vDiff < 0.15 and attOk then
                     state.stableTimer = state.stableTimer + 0.05
-                    state.statusMsg = string.format("Hover Stabilizing... (%.1f/5.0s)", state.stableTimer)
+                    state.statusMsg = string.format("Hover Stabilizing (%.1f/5.0s)", state.stableTimer)
                     
                     if state.stableTimer >= 5.0 then
                         -- 連續 5 秒懸停平穩，鎖定當前基準檔位！
                         state.mode = "HOLD_ALT"
+                        state.targetAlt = state.calibTargetAlt
                         state.statusMsg = string.format("Calibrated! Hover Base: %.2f", state.baseThrottle)
                     end
                 else
                     state.stableTimer = 0
                     -- 若微幅掉高或過衝，以極細微步長修正基準
-                    if altError > 0.6 and state.baseThrottle < 14 and currVspeed < 0.2 then
-                        state.baseThrottle = math.min(15.0, state.baseThrottle + 0.003)
-                    elseif altError < -0.6 and state.baseThrottle > 0.02 and currVspeed > -0.2 then
-                        state.baseThrottle = math.max(0.01, state.baseThrottle - 0.003)
+                    if altError > 0.6 and state.baseThrottle < 14 and currVspeed < 0.15 then
+                        state.baseThrottle = math.min(15.0, state.baseThrottle + 0.002)
+                    elseif altError < -0.6 and state.baseThrottle > 0.02 and currVspeed > -0.15 then
+                        state.baseThrottle = math.max(0.01, state.baseThrottle - 0.002)
                     end
-                    state.statusMsg = string.format("Balancing at %.1fm (B:%4.2f)", state.targetAlt, state.baseThrottle)
+                    state.statusMsg = string.format("Hover Trim: %5.1fm (B:%4.2f)", state.calibTargetAlt, state.baseThrottle)
                 end
             end
             
