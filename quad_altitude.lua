@@ -13,7 +13,7 @@
 --]]
 
 local VERSION = "v3.5.0"
-print(string.format("[AVIONICS] Loading Quad-Engine Flight Controller (A350 ECAM) %s...", VERSION))
+print(string.format("[AVIONICS] Loading VTOL Airship %s (normal)...", VERSION))
 
 -- ========================================================
 -- 1. 內建 PID 控制器 (Embedded PID)
@@ -508,8 +508,8 @@ local function drawQuadUI()
     display.setBackgroundColor(colors.black)
     display.clear()
 
-    -- 1. 頂部標題列 (顯示 A350 ECAM 版本號)
-    local titleText = string.format("  QUAD-ENGINE AVIONICS - A350 ECAM %s  ", VERSION)
+    -- 1. 頂部標題列
+    local titleText = string.format("  VTOL Airship %s (normal)  ", VERSION)
     local padL = math.floor((w - #titleText) / 2)
     local padR = w - #titleText - padL
     local header = string.rep(" ", math.max(0, padL)) .. titleText .. string.rep(" ", math.max(0, padR))

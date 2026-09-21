@@ -11,7 +11,7 @@
 --]]
 
 local VERSION = "v3.5.0"
-print(string.format("[DIRECTGPU] Loading Avionics Master %s...", VERSION))
+print(string.format("[AVIONICS] Loading VTOL Airship %s (DirectGPU)...", VERSION))
 
 -- ========================================================
 -- 1. 內建 PID 控制器 (Embedded PID)
@@ -378,7 +378,7 @@ local function drawDirectGPU_UI()
     local headerH = math.max(28, math.floor(screenH * 0.09))
     gpu.fillRect(displayId, 0, 0, screenW, headerH, 25, 40, 65)
     local titleFontSize = math.max(13, math.floor(headerH * 0.50))
-    gpu.drawText(displayId, string.format("QUAD-ENGINE AVIONICS - A350 ECAM %s", VERSION), 12, math.floor((headerH - titleFontSize) / 2), 240, 245, 255, "Arial", titleFontSize, "bold")
+    gpu.drawText(displayId, string.format("VTOL Airship %s (DirectGPU)", VERSION), 12, math.floor((headerH - titleFontSize) / 2), 240, 245, 255, "Arial", titleFontSize, "bold")
 
     local currAlt = altiSensor and altiSensor.getHeight() or 0
     local currVspeed = altiSensor and altiSensor.getVerticalSpeed() or 0

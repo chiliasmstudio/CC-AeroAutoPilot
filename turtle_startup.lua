@@ -24,8 +24,8 @@ end
 term.clear()
 term.setCursorPos(1, 1)
 print("================================")
-print("  AVIONICS TURTLE ENGINE NODE   ")
-print("        Firmware " .. VERSION .. "         ")
+print("     VTOL Airship " .. VERSION .. "     ")
+print("        Engine Node             ")
 print("================================")
 print("ID: " .. os.getComputerID() .. " | Label: " .. (label ~= "" and label or "(None)"))
 print("Role: [" .. role .. "] | Ver: " .. VERSION)
@@ -82,7 +82,7 @@ while true do
             applySignal(sig)
             term.setCursorPos(1, 7)
             term.clearLine()
-            term.write(string.format("[%s] %s | Sig: %2d/15", role, VERSION, sig))
+            term.write(string.format("[%s] VTOL %s | Sig: %2d/15", role, VERSION, sig))
         end
     end
 end

@@ -403,7 +403,7 @@ local Drivers = {}
 -- 2.1 驅動 A: CC-DirectGPU-Mod 全彩航空儀表
 -- --------------------------------------------------------
 Drivers.directgpu = {
-    name = "CC-DirectGPU-Mod (A350 ECAM)",
+    name = "VTOL Airship " .. VERSION .. " (DirectGPU)",
     isAvailable = function()
         return peripheral.find("directgpu") ~= nil
     end,
@@ -471,7 +471,7 @@ Drivers.directgpu = {
         local headerH = math.max(28, math.floor(screenH * 0.09))
         self.gpu.fillRect(self.displayId, 0, 0, screenW, headerH, 25, 40, 65)
         local titleFontSize = math.max(13, math.floor(headerH * 0.50))
-        self.gpu.drawText(self.displayId, string.format("QUAD-ENGINE AVIONICS - DIRECTGPU %s", VERSION), 12, math.floor((headerH - titleFontSize) / 2), 240, 245, 255, "Arial", titleFontSize, "bold")
+        self.gpu.drawText(self.displayId, string.format("VTOL Airship %s (DirectGPU)", VERSION), 12, math.floor((headerH - titleFontSize) / 2), 240, 245, 255, "Arial", titleFontSize, "bold")
 
         local currAlt = FlightCore.altiSensor and FlightCore.altiSensor.getHeight() or 0
         local currVspeed = FlightCore.altiSensor and FlightCore.altiSensor.getVerticalSpeed() or 0
@@ -668,7 +668,7 @@ local FONT_5X7 = {
 }
 
 Drivers.toms = {
-    name = "Tom's Peripherals GPU (A350 ECAM)",
+    name = "VTOL Airship " .. VERSION .. " (Tom)",
     isAvailable = function()
         return (peripheral.find("tm_gpu") or peripheral.find("gpu")) ~= nil
     end,
@@ -754,7 +754,7 @@ Drivers.toms = {
         local headerH = math.max(24, math.floor(sh * 0.08))
         sFR(1, 1, sw, headerH, 0x192841)
         local titleSize = (sw >= 300) and 2 or 1
-        sTxt(12, math.floor((headerH - 7 * titleSize) / 2) + 1, string.format("QUAD-ENGINE AVIONICS - TOMS GPU %s", VERSION), 0xF0F5FF, titleSize)
+        sTxt(12, math.floor((headerH - 7 * titleSize) / 2) + 1, string.format("VTOL Airship %s (Tom)", VERSION), 0xF0F5FF, titleSize)
 
         local currAlt = FlightCore.altiSensor and FlightCore.altiSensor.getHeight() or 0
         local currVspeed = FlightCore.altiSensor and FlightCore.altiSensor.getVerticalSpeed() or 0
@@ -928,7 +928,7 @@ Drivers.toms = {
 -- 2.3 驅動 C: CC: Tweaked 原生螢幕 / 終端機自適應文字儀表
 -- --------------------------------------------------------
 Drivers.normal = {
-    name = "CC: Tweaked Native Monitor (A350 ECAM)",
+    name = "VTOL Airship " .. VERSION .. " (normal)",
     isAvailable = function()
         return true
     end,
@@ -1051,7 +1051,7 @@ Drivers.normal = {
         self.display.setBackgroundColor(colors.black)
         self.display.clear()
 
-        local titleText = string.format("  QUAD-ENGINE AVIONICS - A350 ECAM %s  ", VERSION)
+        local titleText = string.format("  VTOL Airship %s (normal)  ", VERSION)
         local padL = math.floor((w - #titleText) / 2)
         local header = string.rep(" ", math.max(0, padL)) .. titleText .. string.rep(" ", math.max(0, w - #titleText - padL))
         self:safeBlit(1, 1, header:sub(1, w), "0", "b")

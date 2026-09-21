@@ -15,7 +15,7 @@
 --]]
 
 local VERSION = "v3.5.0"
-print(string.format("[TOMS-PERIPHERALS] Loading Avionics Master %s...", VERSION))
+print(string.format("[AVIONICS] Loading VTOL Airship %s (Tom)...", VERSION))
 
 -- ========================================================
 -- 1. 內建 PID 控制器 (Embedded PID)
@@ -538,7 +538,7 @@ local function drawTomsUI()
     local headerH = math.max(24, math.floor(screenH * 0.08))
     safeFilledRectangle(1, 1, screenW, headerH, 0x192841)
     local titleSize = (screenW >= 300) and 2 or 1
-    safeDrawText(12, math.floor((headerH - 7 * titleSize) / 2) + 1, string.format("QUAD-ENGINE AVIONICS - TOMS GPU %s", VERSION), 0xF0F5FF, nil, titleSize)
+    safeDrawText(12, math.floor((headerH - 7 * titleSize) / 2) + 1, string.format("VTOL Airship %s (Tom)", VERSION), 0xF0F5FF, nil, titleSize)
 
     local currAlt = altiSensor and altiSensor.getHeight() or 0
     local currVspeed = altiSensor and altiSensor.getVerticalSpeed() or 0
