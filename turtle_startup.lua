@@ -50,11 +50,10 @@ end
 local outputSides = {"bottom", "top", "left", "right", "back"}
 
 local function applySignal(power)
+    -- 純類比紅石輸出 (0 ~ 15)，絕不呼叫 setOutput(true) 避免訊號被強制放大為 15 滿功率暴衝
     power = math.max(0, math.min(15, math.floor(power + 0.5)))
-    local digital = (power > 0)
     for _, s in ipairs(outputSides) do
         rs.setAnalogOutput(s, power)
-        rs.setOutput(s, digital)
     end
 end
 
