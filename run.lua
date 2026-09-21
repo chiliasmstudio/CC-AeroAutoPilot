@@ -572,13 +572,35 @@ Drivers.directgpu = {
 
         self.gpu.updateDisplay(self.displayId)
     end,
-    handleEvent = function(self, event, p1, p2, p3)
-        if event == "directgpu_touch" or event == "monitor_touch" or event == "mouse_click" then
-            local clickX, clickY = p2, p3
-            if event == "directgpu_touch" then clickX, clickY = p2, p3 end
+    handleEvent = function(self, event, p1, p2, p3, p4)
+        local clickX, clickY = nil, nil
+        if event == "directgpu_touch" then
+            if type(p1) == "number" and type(p2) == "number" then
+                clickX, clickY = p1, p2
+            elseif type(p2) == "number" and type(p3) == "number" then
+                clickX, clickY = p2, p3
+            end
+        elseif event == "monitor_touch" then
+            if type(p2) == "number" and type(p3) == "number" then
+                local mon = peripheral.find("monitor")
+                local mw, mh = (mon and mon.getSize()) or term.getSize()
+                clickX = math.floor(((p2 - 0.5) / mw) * self.screenW)
+                clickY = math.floor(((p3 - 0.5) / mh) * self.screenH)
+            end
+        elseif event == "mouse_click" then
+            if type(p1) == "table" and p1.x and p1.y then
+                clickX, clickY = p1.x, p1.y
+            elseif type(p2) == "number" and type(p3) == "number" then
+                local tw, th = term.getSize()
+                clickX = math.floor(((p2 - 0.5) / tw) * self.screenW)
+                clickY = math.floor(((p3 - 0.5) / th) * self.screenH)
+            end
+        end
+
+        if clickX and clickY then
             for _, btn in ipairs(self.buttons) do
-                if clickX >= btn.x and clickX < btn.x + btn.w and clickY >= btn.y and clickY < btn.y + btn.h then
-                    btn.action()
+                if clickX >= btn.x and clickX <= btn.x + btn.w and clickY >= btn.y and clickY <= btn.y + btn.h then
+                    pcall(btn.action)
                     self:draw()
                     break
                 end
@@ -866,14 +888,34 @@ Drivers.toms = {
 
         pcall(function() if self.gpu.sync then self.gpu.sync() end end)
     end,
-    handleEvent = function(self, event, p1, p2, p3)
+    handleEvent = function(self, event, p1, p2, p3, p4)
         local clickX, clickY = nil, nil
-        if event == "tm_monitor_touch" then clickX, clickY = p1, p2
-        elseif event == "monitor_touch" or event == "mouse_click" then clickX, clickY = p2, p3 end
+        if event == "tm_monitor_touch" then
+            -- tm_monitor_touch returns (side, x, y, soft)
+            if type(p1) == "number" and type(p2) == "number" then
+                clickX, clickY = p1, p2
+            elseif type(p2) == "number" and type(p3) == "number" then
+                clickX, clickY = p2, p3
+            end
+        elseif event == "monitor_touch" then
+            if type(p2) == "number" and type(p3) == "number" then
+                local mon = peripheral.find("monitor")
+                local mw, mh = (mon and mon.getSize()) or term.getSize()
+                clickX = math.floor(((p2 - 0.5) / mw) * self.screenW)
+                clickY = math.floor(((p3 - 0.5) / mh) * self.screenH)
+            end
+        elseif event == "mouse_click" then
+            if type(p2) == "number" and type(p3) == "number" then
+                local tw, th = term.getSize()
+                clickX = math.floor(((p2 - 0.5) / tw) * self.screenW)
+                clickY = math.floor(((p3 - 0.5) / th) * self.screenH)
+            end
+        end
+
         if clickX and clickY then
             for _, btn in ipairs(self.buttons) do
-                if clickX >= btn.x and clickX < btn.x + btn.w and clickY >= btn.y and clickY < btn.y + btn.h then
-                    btn.action()
+                if clickX >= btn.x and clickX <= btn.x + btn.w and clickY >= btn.y and clickY <= btn.y + btn.h then
+                    pcall(btn.action)
                     self:draw()
                     break
                 end
@@ -1121,10 +1163,9 @@ Drivers.normal = {
     handleEvent = function(self, event, p1, p2, p3)
         if event == "monitor_touch" or event == "mouse_click" then
             local clickX, clickY = p2, p3
-            if event == "mouse_click" then clickX, clickY = p2, p3 end
             for _, btn in ipairs(self.buttons) do
-                if clickX >= btn.x and clickX < btn.x + btn.w and clickY >= btn.y and clickY < btn.y + btn.h then
-                    btn.action()
+                if clickX >= btn.x and clickX <= btn.x + btn.w - 1 and clickY >= btn.y and clickY <= btn.y + btn.h - 1 then
+                    pcall(btn.action)
                     self:draw()
                     break
                 end

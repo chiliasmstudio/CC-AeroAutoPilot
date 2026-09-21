@@ -733,7 +733,11 @@ local function touchEventLoop()
         local event, p1, p2, p3 = os.pullEvent()
 
         if event == "directgpu_touch" then
-            processClick(p2, p3)
+            if type(p1) == "number" and type(p2) == "number" then
+                processClick(p1, p2)
+            elseif type(p2) == "number" and type(p3) == "number" then
+                processClick(p2, p3)
+            end
         elseif event == "monitor_touch" then
             if not mon then mon = peripheral.find("monitor") end
             if mon then monCharW, monCharH = mon.getSize() end
