@@ -1,11 +1,19 @@
 --[[
     Create: Avionics & CC: Tweaked
     Unified Quad-Engine Avionics Flight Computer (四軸有線模組化統一飛控大腦)
-    Version: v3.5.0
+    Version: v3.6.0
     
-    架構說明 (Decoupled Architecture):
-    - 飛控核心與動力控制 (Flight Core): 獨立封裝 PID、感測器獲取、PWM 集體升力混控、200m 標定演算法與烏龜通訊。
-    - 顯示驅動模組 (Display Drivers): 獨立分流，支援 DirectGPU、Tom's Peripherals 與 原生 Monitor/Terminal。
+    架構說明 (Decoupled PHP+Vue Architecture):
+    - 飛控核心與動力後端 (Flight Core - Backend): 獨立封裝 PID、感測器獲取、PWM 集體升力混控、200m 標定演算法與烏龜通訊。
+    - 顯示驅動與視圖前端 (Display Drivers - Frontend Views): 獨立分流，支援 DirectGPU、Tom's Peripherals 與 原生 Monitor/Terminal。
+    - 全螢幕二級視圖選單 (Full-Screen View Selector Menu):
+        * 右上角常駐 [ ☰ MENU ] / [ ✕ CLOSE ] 按鈕。
+        * 點擊後全螢幕展開 5 大獨立視圖切換：
+          1. OVERVIEW (全功能總覽儀表)
+          2. PFD (主飛行儀表：大姿態 + 大高度)
+          3. ECAM (發動機動力監控：4 具大圓錶 + 200m 校正專區)
+          4. NAV (快速導航與預設高度：0m/80m/150m/200m/300m/鎖定)
+          5. SYS (系統診斷與硬體自檢：4 軸烏龜即時狀態)
     - 內建向量點陣字體引擎 (5x7 Pixel Font Engine): 保證在任何版本 Tom's GPU 均能 100% 完美顯現文字與數值。
     - 單檔整合發布 (Single-File Distribution): 下載此檔案即可支援所有硬體，支援自動探測或命令列指定驅動。
 
@@ -16,12 +24,12 @@
       run.lua normal       (強制使用 CC: Tweaked 原生螢幕/終端機驅動)
 --]]
 
-local VERSION = "v3.5.0"
+local VERSION = "v3.6.0"
 local args = {...}
 local requestedDriver = args[1] and string.lower(args[1]) or "auto"
 
 -- ========================================================
--- PART 1: 飛控與動力控制核心 (FLIGHT & PROPULSION CORE)
+-- PART 1: 飛控與動力控制核心 (FLIGHT & PROPULSION CORE - BACKEND)
 -- ========================================================
 local FlightCore = {}
 
@@ -99,8 +107,8 @@ FlightCore.masterModem = nil
 FlightCore.outputSides = {"bottom", "top", "left", "right", "back"}
 FlightCore.pwmTick = 0
 
-local function matchPrefix(label, prefix)
-    local u = string.upper(label)
+local function matchPrefix(lbl, prefix)
+    local u = string.upper(lbl or "")
     return u == prefix or u:sub(1, #prefix + 1) == (prefix .. "_") or u:sub(1, #prefix + 1) == (prefix .. "-") or u:sub(1, #prefix + 1) == (prefix .. " ")
 end
 
@@ -159,64 +167,60 @@ function FlightCore.scanQuadTurtles()
     end
 
     local slots = {"FL", "FR", "BL", "BR"}
-    local uIdx = 1
     for _, slot in ipairs(slots) do
-        if not FlightCore.engines[slot] and unmapped[uIdx] then
-            FlightCore.engines[slot] = unmapped[uIdx]
-            uIdx = uIdx + 1
+        if not FlightCore.engines[slot] and #unmapped > 0 then
+            local fallbackNode = table.remove(unmapped, 1)
+            FlightCore.engines[slot] = fallbackNode
         end
     end
 end
 
-local function outputToEngine(node, signal)
-    if not node or not node.p then return end
-    signal = math.max(0, math.min(15, math.floor(signal + 0.5)))
-    for _, side in ipairs(FlightCore.outputSides) do
-        pcall(function()
-            if node.p.setAnalogOutput then
-                node.p.setAnalogOutput(side, signal)
-            elseif node.p.setOutput then
-                node.p.setOutput(side, signal > 0)
-            end
-        end)
+function FlightCore.resolvePwmOutput(val)
+    if val <= 0.0001 then return 0 end
+    if val >= 14.999 then return 15 end
+    local base = math.floor(val)
+    local frac = val - base
+    local threshold = frac * 20
+    if FlightCore.pwmTick < threshold then
+        return math.min(15, base + 1)
+    else
+        return base
     end
+end
+
+function FlightCore.outputToEngine(node, power)
+    if not node or not node.p then return end
+    pcall(function()
+        if node.p.setAnalogOutput then
+            for _, s in ipairs(FlightCore.outputSides) do
+                node.p.setAnalogOutput(s, power)
+            end
+        end
+    end)
 end
 
 function FlightCore.applyQuadThrust(baseThrust, deltaAlt, deltaPitch, deltaRoll)
     FlightCore.pwmTick = (FlightCore.pwmTick + 1) % 20
 
-    deltaPitch = deltaPitch or 0
-    deltaRoll  = deltaRoll or 0
+    local rawFL = math.max(0.0, math.min(15.0, baseThrust + deltaAlt))
+    local rawFR = math.max(0.0, math.min(15.0, baseThrust + deltaAlt))
+    local rawBL = math.max(0.0, math.min(15.0, baseThrust + deltaAlt))
+    local rawBR = math.max(0.0, math.min(15.0, baseThrust + deltaAlt))
 
-    local rawFL = baseThrust + deltaAlt - deltaPitch + deltaRoll
-    local rawFR = baseThrust + deltaAlt - deltaPitch - deltaRoll
-    local rawBL = baseThrust + deltaAlt + deltaPitch + deltaRoll
-    local rawBR = baseThrust + deltaAlt + deltaPitch - deltaRoll
+    FlightCore.virtualOutputs.FL = rawFL
+    FlightCore.virtualOutputs.FR = rawFR
+    FlightCore.virtualOutputs.BL = rawBL
+    FlightCore.virtualOutputs.BR = rawBR
 
-    FlightCore.virtualOutputs.FL = math.max(0, math.min(15, rawFL))
-    FlightCore.virtualOutputs.FR = math.max(0, math.min(15, rawFR))
-    FlightCore.virtualOutputs.BL = math.max(0, math.min(15, rawBL))
-    FlightCore.virtualOutputs.BR = math.max(0, math.min(15, rawBR))
+    FlightCore.engineOutputs.FL = FlightCore.resolvePwmOutput(rawFL)
+    FlightCore.engineOutputs.FR = FlightCore.resolvePwmOutput(rawFR)
+    FlightCore.engineOutputs.BL = FlightCore.resolvePwmOutput(rawBL)
+    FlightCore.engineOutputs.BR = FlightCore.resolvePwmOutput(rawBR)
 
-    local function resolvePwmOutput(val)
-        if val <= 0.001 then return 0 end
-        if val < 1.0 then
-            local activeThreshold = math.floor(val * 20 + 0.5)
-            if FlightCore.pwmTick < activeThreshold then return 1 else return 0 end
-        else
-            return math.max(0, math.min(15, math.floor(val + 0.5)))
-        end
-    end
-
-    FlightCore.engineOutputs.FL = resolvePwmOutput(rawFL)
-    FlightCore.engineOutputs.FR = resolvePwmOutput(rawFR)
-    FlightCore.engineOutputs.BL = resolvePwmOutput(rawBL)
-    FlightCore.engineOutputs.BR = resolvePwmOutput(rawBR)
-
-    outputToEngine(FlightCore.engines.FL, FlightCore.engineOutputs.FL)
-    outputToEngine(FlightCore.engines.FR, FlightCore.engineOutputs.FR)
-    outputToEngine(FlightCore.engines.BL, FlightCore.engineOutputs.BL)
-    outputToEngine(FlightCore.engines.BR, FlightCore.engineOutputs.BR)
+    FlightCore.outputToEngine(FlightCore.engines.FL, FlightCore.engineOutputs.FL)
+    FlightCore.outputToEngine(FlightCore.engines.FR, FlightCore.engineOutputs.FR)
+    FlightCore.outputToEngine(FlightCore.engines.BL, FlightCore.engineOutputs.BL)
+    FlightCore.outputToEngine(FlightCore.engines.BR, FlightCore.engineOutputs.BR)
 
     if not FlightCore.masterModem then
         FlightCore.masterModem = peripheral.find("modem")
@@ -233,7 +237,12 @@ function FlightCore.applyQuadThrust(baseThrust, deltaAlt, deltaPitch, deltaRoll)
     end
 end
 
--- 飛控對外操作指令
+-- 飛控對外操作指令 (API)
+function FlightCore.setTargetAlt(alt)
+    FlightCore.state.targetAlt = math.max(0, alt)
+    FlightCore.state.statusMsg = string.format("Target Altitude set: %.0fm", FlightCore.state.targetAlt)
+end
+
 function FlightCore.adjustTargetAlt(delta)
     FlightCore.state.targetAlt = math.max(0, FlightCore.state.targetAlt + delta)
 end
@@ -338,45 +347,39 @@ function FlightCore.step()
                 FlightCore.state.baseThrottle = math.floor(FlightCore.state.calibThrottle * 1000 + 0.5) / 1000
             end
 
-            FlightCore.state.virtualAlt = math.min(200.0, FlightCore.state.virtualAlt + 0.03)
-            local altError = FlightCore.state.virtualAlt - currAlt
-            local deltaAlt = FlightCore.altPID:update(altError)
-
-            if currVspeed > 0.50 then deltaAlt = deltaAlt - 0.3 end
-
-            FlightCore.applyQuadThrust(FlightCore.state.baseThrottle, deltaAlt, 0, 0)
-            FlightCore.state.statusMsg = string.format("Climbing to 200m: %5.1f/200m (V:%+.2f)", currAlt, currVspeed)
-
-            if currAlt >= 198.5 then
-                FlightCore.state.calibPhase = "STABILIZE_200"
+            if currAlt >= 195.0 then
                 FlightCore.state.virtualAlt = 200.0
-                FlightCore.state.targetAlt = 200.0
+                FlightCore.state.calibPhase = "STABILIZE_200"
                 FlightCore.state.stableTimer = 0
                 FlightCore.altPID:reset()
-                FlightCore.state.statusMsg = "Reached 200m! Stabilizing & Recording..."
+            else
+                FlightCore.state.virtualAlt = math.min(200.0, currAlt + 1.0)
             end
 
+            local altError = FlightCore.state.virtualAlt - currAlt
+            local deltaAlt = FlightCore.altPID:update(altError)
+            FlightCore.applyQuadThrust(FlightCore.state.baseThrottle, deltaAlt, 0, 0)
+            FlightCore.state.statusMsg = string.format("Climbing: %.0f/200m (B:%4.2f V:%+.2f)", currAlt, FlightCore.state.baseThrottle, currVspeed)
+
         elseif FlightCore.state.calibPhase == "STABILIZE_200" then
+            FlightCore.state.virtualAlt = 200.0
             local altError = 200.0 - currAlt
             local deltaAlt = FlightCore.altPID:update(altError)
 
-            if currVspeed > 0.20 then deltaAlt = deltaAlt - 0.2 end
-            if currVspeed < -0.20 then deltaAlt = deltaAlt + 0.2 end
+            if currVspeed > 0.6 then deltaAlt = deltaAlt - 0.25 end
+            if currVspeed < -0.6 then deltaAlt = deltaAlt + 0.25 end
 
             FlightCore.applyQuadThrust(FlightCore.state.baseThrottle, deltaAlt, 0, 0)
 
-            local altDiff = math.abs(altError)
-            local vDiff = math.abs(currVspeed)
-
-            if altDiff < 0.6 and vDiff < 0.15 then
+            if math.abs(altError) <= 1.0 and math.abs(currVspeed) <= 0.20 then
                 FlightCore.state.stableTimer = FlightCore.state.stableTimer + 0.05
-                FlightCore.state.statusMsg = string.format("200m Hover Stabilizing (%.1f/5.0s)", FlightCore.state.stableTimer)
+                FlightCore.state.statusMsg = string.format("200m Steady Hover: %2.1fs/5.0s", FlightCore.state.stableTimer)
 
                 if FlightCore.state.stableTimer >= 5.0 then
                     FlightCore.state.mode = "HOLD_ALT"
                     FlightCore.state.targetAlt = 200.0
                     FlightCore.state.virtualAlt = 200.0
-                    FlightCore.state.statusMsg = string.format("Calibrated at 200m! Hover Base: %.2f", FlightCore.state.baseThrottle)
+                    FlightCore.state.statusMsg = string.format("CALIB COMPLETE! Best Base: %4.2f", FlightCore.state.baseThrottle)
                 end
             else
                 FlightCore.state.stableTimer = 0
@@ -395,7 +398,7 @@ function FlightCore.step()
 end
 
 -- ========================================================
--- PART 2: 顯示驅動器模組 (DISPLAY DRIVERS)
+-- PART 2: 顯示驅動器模組 (DISPLAY DRIVERS - FRONTEND VIEWS)
 -- ========================================================
 local Drivers = {}
 
@@ -404,6 +407,9 @@ local Drivers = {}
 -- --------------------------------------------------------
 Drivers.directgpu = {
     name = "VTOL Airship " .. VERSION .. " (DirectGPU)",
+    shortTag = "DirectGPU",
+    currentView = "OVERVIEW",
+    isMenuOpen = false,
     isAvailable = function()
         return peripheral.find("directgpu") ~= nil
     end,
@@ -412,6 +418,11 @@ Drivers.directgpu = {
         self.displayId = self.gpu.autoDetectAndCreateDisplay()
         if not self.displayId then error("DirectGPU 未檢測到 Monitor 螢幕！") end
         self.buttons = {}
+        self.currentView = "OVERVIEW"
+        self.isMenuOpen = false
+    end,
+    addBtn = function(self, x, y, w, h, text, bg, fg, act)
+        table.insert(self.buttons, {x=x, y=y, w=w, h=h, text=text, bg=bg, fg=fg, action=act})
     end,
     drawA350Dial = function(self, cx, cy, r, val, maxVal, label, sig)
         local labelSize = math.max(12, math.floor(r * 0.48))
@@ -467,19 +478,89 @@ Drivers.directgpu = {
         local screenW = dispInfo.pixelWidth or 320
         local screenH = dispInfo.pixelHeight or 240
         self.gpu.clear(self.displayId, 15, 20, 30)
+        self.buttons = {}
 
+        -- 1. 頂部標題列與右上角 MENU 切換鈕
         local headerH = math.max(28, math.floor(screenH * 0.09))
         self.gpu.fillRect(self.displayId, 0, 0, screenW, headerH, 25, 40, 65)
-        local titleFontSize = math.max(13, math.floor(headerH * 0.50))
-        self.gpu.drawText(self.displayId, string.format("VTOL Airship %s (DirectGPU)", VERSION), 12, math.floor((headerH - titleFontSize) / 2), 240, 245, 255, "Arial", titleFontSize, "bold")
+        local titleFontSize = math.max(12, math.floor(headerH * 0.48))
+        local viewTag = self.isMenuOpen and "SELECT VIEW" or self.currentView
+        self.gpu.drawText(self.displayId, string.format("VTOL Airship %s - [%s]", VERSION, viewTag), 12, math.floor((headerH - titleFontSize) / 2), 240, 245, 255, "Arial", titleFontSize, "bold")
 
+        local menuBtnW = math.max(70, math.floor(screenW * 0.20))
+        local menuBtnH = headerH - 6
+        local menuBtnX = screenW - menuBtnW - 4
+        local menuBtnY = 3
+        if self.isMenuOpen then
+            self:addBtn(menuBtnX, menuBtnY, menuBtnW, menuBtnH, "[X CLOSE]", {190, 45, 45}, {255, 255, 255}, function() self.isMenuOpen = false end)
+        else
+            self:addBtn(menuBtnX, menuBtnY, menuBtnW, menuBtnH, "[= MENU]", {35, 80, 150}, {255, 255, 255}, function() self.isMenuOpen = true end)
+        end
+
+        -- 2. 視圖分流路由
+        if self.isMenuOpen then
+            self:renderMenu(screenW, screenH, headerH)
+        else
+            if self.currentView == "OVERVIEW" then
+                self:renderOverview(screenW, screenH, headerH)
+            elseif self.currentView == "PFD" then
+                self:renderPFD(screenW, screenH, headerH)
+            elseif self.currentView == "ECAM" then
+                self:renderECAM(screenW, screenH, headerH)
+            elseif self.currentView == "NAV" then
+                self:renderNAV(screenW, screenH, headerH)
+            elseif self.currentView == "SYS" then
+                self:renderSYS(screenW, screenH, headerH)
+            else
+                self:renderOverview(screenW, screenH, headerH)
+            end
+        end
+
+        -- 繪製所有註冊按鈕
+        for _, btn in ipairs(self.buttons) do
+            self.gpu.fillRect(self.displayId, btn.x, btn.y, btn.w, btn.h, btn.bg[1], btn.bg[2], btn.bg[3])
+            local btnFontSize = math.max(11, math.floor(btn.h * 0.44))
+            local tx = btn.x + math.max(2, math.floor((btn.w - #btn.text * (btnFontSize * 0.58)) / 2))
+            local ty = btn.y + math.floor((btn.h - btnFontSize) / 2)
+            self.gpu.drawText(self.displayId, btn.text, tx, ty, btn.fg[1], btn.fg[2], btn.fg[3], "Arial", btnFontSize, "bold")
+        end
+
+        self.gpu.updateDisplay(self.displayId)
+    end,
+    renderMenu = function(self, sw, sh, hh)
+        local cardW = math.floor((sw - 24) / 2)
+        local cardH = math.floor((sh - hh - 28) / 3)
+        local startY = hh + 8
+
+        local function addMenuCard(col, row, title, desc, targetView, color)
+            local cx = 8 + (col - 1) * (cardW + 8)
+            local cy = startY + (row - 1) * (cardH + 6)
+            self:addBtn(cx, cy, cardW, cardH, title, color, {255, 255, 255}, function()
+                self.currentView = targetView
+                self.isMenuOpen = false
+            end)
+        end
+
+        addMenuCard(1, 1, "1. OVERVIEW (ALL-IN-ONE)", "Classic cockpit view", "OVERVIEW", {30, 65, 110})
+        addMenuCard(2, 1, "2. PFD (PRIMARY FLIGHT)", "Large Horizon & Alt", "PFD", {25, 95, 75})
+        addMenuCard(1, 2, "3. ECAM (ENGINES & LIFT)", "4 Big Dials & Calib", "ECAM", {110, 45, 25})
+        addMenuCard(2, 2, "4. NAV (PRESETS & CRUISE)", "0/80/150/200/300m", "NAV", {20, 100, 130})
+
+        local btmW = sw - 16
+        local cy = startY + 2 * (cardH + 6)
+        self:addBtn(8, cy, btmW, cardH, "5. SYS (SYSTEM DIAGNOSTICS & TURTLES)", {75, 45, 110}, {255, 255, 255}, function()
+            self.currentView = "SYS"
+            self.isMenuOpen = false
+        end)
+    end,
+    renderOverview = function(self, sw, sh, hh)
         local currAlt = FlightCore.altiSensor and FlightCore.altiSensor.getHeight() or 0
         local currVspeed = FlightCore.altiSensor and FlightCore.altiSensor.getVerticalSpeed() or 0
         local currPitch, currRoll = FlightCore.getGimbalData()
 
-        local instY = headerH + 6
-        local instH = math.floor((screenH - headerH) * 0.52)
-        local leftW = math.max(140, math.floor(screenW * 0.35))
+        local instY = hh + 6
+        local instH = math.floor((sh - hh) * 0.52)
+        local leftW = math.max(140, math.floor(sw * 0.35))
         local pfdX = 6
 
         self.gpu.fillRect(self.displayId, pfdX, instY, leftW, instH, 20, 26, 38)
@@ -511,7 +592,7 @@ Drivers.directgpu = {
         end
 
         local ecamX = pfdX + leftW + 6
-        local ecamW = screenW - ecamX - 6
+        local ecamW = sw - ecamX - 6
         self.gpu.fillRect(self.displayId, ecamX, instY, ecamW, instH, 18, 24, 34)
 
         local slotW = math.floor((ecamW - 8) / 4)
@@ -528,72 +609,202 @@ Drivers.directgpu = {
         end
 
         local statY = instY + instH + 6
-        local statH = math.max(20, math.floor(screenH * 0.07))
-        self.gpu.fillRect(self.displayId, pfdX, statY, screenW - 12, statH, 25, 32, 45)
+        local statH = math.max(20, math.floor(sh * 0.07))
+        self.gpu.fillRect(self.displayId, pfdX, statY, sw - 12, statH, 25, 32, 45)
         self.gpu.drawText(self.displayId, string.format("STATUS: %s", FlightCore.state.statusMsg), pfdX + 8, statY + 4, 80, 230, 255, "Arial", math.max(11, math.floor(statH * 0.55)), "bold")
 
-        self.buttons = {}
         local btnAreaY = statY + statH + 6
-        local btnAreaH = screenH - btnAreaY - 6
+        local btnAreaH = sh - btnAreaY - 6
         local rowH = math.max(18, math.floor((btnAreaH - 12) / 3))
 
         local bY1 = btnAreaY
-        local bW1 = math.floor((screenW - 12 - 16) / 5)
-        local function addBtn(x, y, w, h, text, bg, fg, act) table.insert(self.buttons, {x=x, y=y, w=w, h=h, text=text, bg=bg, fg=fg, action=act}) end
-
-        addBtn(pfdX, bY1, bW1, rowH, "+10m", {30, 100, 45}, {240, 255, 240}, function() FlightCore.adjustTargetAlt(10) end)
-        addBtn(pfdX + bW1 + 4, bY1, bW1, rowH, "+1m", {45, 130, 55}, {240, 255, 240}, function() FlightCore.adjustTargetAlt(1) end)
-        addBtn(pfdX + (bW1 + 4)*2, bY1, bW1, rowH, "-1m", {210, 95, 20}, {255, 245, 230}, function() FlightCore.adjustTargetAlt(-1) end)
-        addBtn(pfdX + (bW1 + 4)*3, bY1, bW1, rowH, "-10m", {190, 40, 40}, {255, 235, 235}, function() FlightCore.adjustTargetAlt(-10) end)
-        addBtn(pfdX + (bW1 + 4)*4, bY1, bW1, rowH, "SET CURR", {0, 135, 150}, {230, 250, 255}, function() FlightCore.lockCurrentAlt() end)
+        local bW1 = math.floor((sw - 12 - 16) / 5)
+        self:addBtn(pfdX, bY1, bW1, rowH, "+10m", {30, 100, 45}, {240, 255, 240}, function() FlightCore.adjustTargetAlt(10) end)
+        self:addBtn(pfdX + bW1 + 4, bY1, bW1, rowH, "+1m", {45, 130, 55}, {240, 255, 240}, function() FlightCore.adjustTargetAlt(1) end)
+        self:addBtn(pfdX + (bW1 + 4)*2, bY1, bW1, rowH, "-1m", {210, 95, 20}, {255, 245, 230}, function() FlightCore.adjustTargetAlt(-1) end)
+        self:addBtn(pfdX + (bW1 + 4)*3, bY1, bW1, rowH, "-10m", {190, 40, 40}, {255, 235, 235}, function() FlightCore.adjustTargetAlt(-10) end)
+        self:addBtn(pfdX + (bW1 + 4)*4, bY1, bW1, rowH, "SET CURR", {0, 135, 150}, {230, 250, 255}, function() FlightCore.lockCurrentAlt() end)
 
         local bY2 = bY1 + rowH + 6
-        local bW2 = math.floor((screenW - 12 - 12) / 4)
-        addBtn(pfdX, bY2, bW2, rowH, "BASE +", {0, 110, 95}, {230, 250, 245}, function() FlightCore.adjustBaseThrottle(1.0) end)
-        addBtn(pfdX + bW2 + 4, bY2, bW2, rowH, "BASE -", {55, 70, 80}, {235, 240, 245}, function() FlightCore.adjustBaseThrottle(-1.0) end)
-        addBtn(pfdX + (bW2 + 4)*2, bY2, bW2, rowH, "RE-SCAN", {25, 100, 190}, {230, 245, 255}, function() FlightCore.scanQuadTurtles(); FlightCore.state.statusMsg="Hardware Re-scanned!" end)
-        addBtn(pfdX + (bW2 + 4)*3, bY2, bW2, rowH, "CALIBRATE", {110, 30, 155}, {250, 230, 255}, function() FlightCore.startCalibration() end)
+        local bW2 = math.floor((sw - 12 - 12) / 4)
+        self:addBtn(pfdX, bY2, bW2, rowH, "BASE +", {0, 110, 95}, {230, 250, 245}, function() FlightCore.adjustBaseThrottle(1.0) end)
+        self:addBtn(pfdX + bW2 + 4, bY2, bW2, rowH, "BASE -", {55, 70, 80}, {235, 240, 245}, function() FlightCore.adjustBaseThrottle(-1.0) end)
+        self:addBtn(pfdX + (bW2 + 4)*2, bY2, bW2, rowH, "RE-SCAN", {25, 100, 190}, {230, 245, 255}, function() FlightCore.scanQuadTurtles(); FlightCore.state.statusMsg="Hardware Re-scanned!" end)
+        self:addBtn(pfdX + (bW2 + 4)*3, bY2, bW2, rowH, "CALIBRATE", {110, 30, 155}, {250, 230, 255}, function() FlightCore.startCalibration() end)
 
         local bY3 = bY2 + rowH + 6
-        local bW3 = math.floor((screenW - 12 - 6) / 2)
-        local bH3 = math.max(rowH, screenH - bY3 - 6)
+        local bW3 = math.floor((sw - 12 - 6) / 2)
+        local bH3 = math.max(rowH, sh - bY3 - 6)
         local holdBg = (FlightCore.state.mode == "HOLD_ALT") and {45, 140, 60} or {30, 90, 40}
-        addBtn(pfdX, bY3, bW3, bH3, " [ HOLD ALT ] ", holdBg, {255, 255, 255}, function() FlightCore.holdAltitude() end)
+        self:addBtn(pfdX, bY3, bW3, bH3, " [ HOLD ALT ] ", holdBg, {255, 255, 255}, function() FlightCore.holdAltitude() end)
         local stopBg = (FlightCore.state.mode == "IDLE") and {200, 45, 45} or {160, 30, 30}
-        addBtn(pfdX + bW3 + 6, bY3, bW3, bH3, " [ STOP / IDLE ] ", stopBg, {255, 255, 255}, function() FlightCore.stopEngines() end)
+        self:addBtn(pfdX + bW3 + 6, bY3, bW3, bH3, " [ STOP / IDLE ] ", stopBg, {255, 255, 255}, function() FlightCore.stopEngines() end)
+    end,
+    renderPFD = function(self, sw, sh, hh)
+        local currAlt = FlightCore.altiSensor and FlightCore.altiSensor.getHeight() or 0
+        local currVspeed = FlightCore.altiSensor and FlightCore.altiSensor.getVerticalSpeed() or 0
+        local currPitch, currRoll = FlightCore.getGimbalData()
 
-        for _, btn in ipairs(self.buttons) do
-            self.gpu.fillRect(self.displayId, btn.x, btn.y, btn.w, btn.h, btn.bg[1], btn.bg[2], btn.bg[3])
-            local btnFontSize = math.max(12, math.floor(btn.h * 0.42))
-            local tx = btn.x + math.max(2, math.floor((btn.w - #btn.text * (btnFontSize * 0.60)) / 2))
-            local ty = btn.y + math.floor((btn.h - btnFontSize) / 2)
-            self.gpu.drawText(self.displayId, btn.text, tx, ty, btn.fg[1], btn.fg[2], btn.fg[3], "Arial", btnFontSize, "bold")
+        local mainH = math.floor((sh - hh) * 0.65)
+        local mainY = hh + 6
+
+        -- 左半部：超大人工地平線球 (Horizon / Attitude Gyro)
+        local leftW = math.floor(sw * 0.52)
+        self.gpu.fillRect(self.displayId, 6, mainY, leftW, mainH, 20, 26, 38)
+        local hCX = 6 + math.floor(leftW / 2)
+        local hCY = mainY + math.floor(mainH / 2)
+        local hR = math.min(math.floor(leftW * 0.40), math.floor(mainH * 0.42))
+
+        -- 姿態球底色
+        self.gpu.drawCircle(self.displayId, hCX, hCY, hR, 25, 40, 60, true)
+        self.gpu.drawCircle(self.displayId, hCX, hCY, hR, 80, 180, 255, false)
+
+        -- 地平線與橫滾指標
+        local rollRad = math.rad(-currRoll)
+        local lx1 = hCX - math.floor(hR * 0.85 * math.cos(rollRad))
+        local ly1 = hCY - math.floor(hR * 0.85 * math.sin(rollRad))
+        local lx2 = hCX + math.floor(hR * 0.85 * math.cos(rollRad))
+        local ly2 = hCY + math.floor(hR * 0.85 * math.sin(rollRad))
+        self.gpu.drawLine(self.displayId, lx1, ly1, lx2, ly2, 255, 215, 0)
+        self.gpu.drawCircle(self.displayId, hCX, hCY, 4, 255, 80, 80, true)
+
+        self.gpu.drawText(self.displayId, string.format("PITCH: %+5.1f*  ROLL: %+5.1f*", currPitch, currRoll), 12, mainY + mainH - 18, 200, 230, 255, "Arial", 12, "bold")
+
+        -- 右半部：超大高度與垂直速度數值卡片
+        local rightX = 6 + leftW + 6
+        local rightW = sw - rightX - 6
+        self.gpu.fillRect(self.displayId, rightX, mainY, rightW, mainH, 24, 32, 46)
+
+        local cardFontSize = math.max(13, math.floor(mainH * 0.10))
+        self.gpu.drawText(self.displayId, "CURRENT ALTITUDE", rightX + 10, mainY + 12, 160, 200, 240, "Arial", cardFontSize, "plain")
+        local altNumSize = math.max(24, math.floor(mainH * 0.24))
+        self.gpu.drawText(self.displayId, string.format("%.1f m", currAlt), rightX + 10, mainY + 14 + cardFontSize, 255, 255, 255, "Arial", altNumSize, "bold")
+
+        local midY = mainY + 14 + cardFontSize + altNumSize + 8
+        self.gpu.drawText(self.displayId, string.format("TARGET ALT: %.0f m", FlightCore.state.targetAlt), rightX + 10, midY, 80, 230, 255, "Arial", cardFontSize, "bold")
+        self.gpu.drawText(self.displayId, string.format("VERT SPEED: %+.2f m/s", currVspeed), rightX + 10, midY + cardFontSize + 6, 255, 205, 75, "Arial", cardFontSize, "bold")
+        self.gpu.drawText(self.displayId, string.format("STATUS: %s", FlightCore.state.statusMsg), rightX + 10, midY + (cardFontSize + 6) * 2, 100, 255, 150, "Arial", math.max(11, cardFontSize - 1), "bold")
+
+        -- 下半部快捷操作按鈕
+        local bY = mainY + mainH + 6
+        local bH = sh - bY - 6
+        local bW = math.floor((sw - 12 - 20) / 6)
+        self:addBtn(6, bY, bW, bH, "+10m", {30, 100, 45}, {240, 255, 240}, function() FlightCore.adjustTargetAlt(10) end)
+        self:addBtn(6 + (bW+4), bY, bW, bH, "+1m", {45, 130, 55}, {240, 255, 240}, function() FlightCore.adjustTargetAlt(1) end)
+        self:addBtn(6 + (bW+4)*2, bY, bW, bH, "-1m", {210, 95, 20}, {255, 245, 230}, function() FlightCore.adjustTargetAlt(-1) end)
+        self:addBtn(6 + (bW+4)*3, bY, bW, bH, "-10m", {190, 40, 40}, {255, 235, 235}, function() FlightCore.adjustTargetAlt(-10) end)
+        local holdBg = (FlightCore.state.mode == "HOLD_ALT") and {45, 140, 60} or {30, 90, 40}
+        self:addBtn(6 + (bW+4)*4, bY, bW, bH, "HOLD ALT", holdBg, {255, 255, 255}, function() FlightCore.holdAltitude() end)
+        local stopBg = (FlightCore.state.mode == "IDLE") and {200, 45, 45} or {160, 30, 30}
+        self:addBtn(6 + (bW+4)*5, bY, bW, bH, "STOP", stopBg, {255, 255, 255}, function() FlightCore.stopEngines() end)
+    end,
+    renderECAM = function(self, sw, sh, hh)
+        local instY = hh + 6
+        local instH = math.floor((sh - hh) * 0.60)
+        self.gpu.fillRect(self.displayId, 6, instY, sw - 12, instH, 18, 24, 34)
+
+        local slotW = math.floor((sw - 20) / 4)
+        local slots = {"FL", "FR", "BL", "BR"}
+        local dialR = math.min(math.floor(slotW * 0.38), math.floor(instH * 0.34))
+        local engCenterY = instY + math.floor(instH * 0.46)
+
+        for i, slot in ipairs(slots) do
+            local engCenterX = 8 + math.floor((i - 0.5) * slotW)
+            local node = FlightCore.engines[slot]
+            local lbl = node and (node.label or node.name or slot) or slot
+            if #lbl > 6 then lbl = lbl:sub(1, 6) end
+            self:drawA350Dial(engCenterX, engCenterY, dialR, FlightCore.virtualOutputs[slot], 15.0, lbl, FlightCore.engineOutputs[slot])
         end
 
-        self.gpu.updateDisplay(self.displayId)
+        local statY = instY + instH + 6
+        local statH = math.max(20, math.floor(sh * 0.07))
+        self.gpu.fillRect(self.displayId, 6, statY, sw - 12, statH, 25, 32, 45)
+        self.gpu.drawText(self.displayId, string.format("BASE THRUST: %4.2f/15  |  STATUS: %s", FlightCore.state.baseThrottle, FlightCore.state.statusMsg), 12, statY + 4, 80, 230, 255, "Arial", 12, "bold")
+
+        local bY = statY + statH + 6
+        local bH = sh - bY - 6
+        local bW = math.floor((sw - 12 - 20) / 6)
+        self:addBtn(6, bY, bW, bH, "BASE +", {0, 110, 95}, {230, 250, 245}, function() FlightCore.adjustBaseThrottle(1.0) end)
+        self:addBtn(6 + (bW+4), bY, bW, bH, "BASE -", {55, 70, 80}, {235, 240, 245}, function() FlightCore.adjustBaseThrottle(-1.0) end)
+        self:addBtn(6 + (bW+4)*2, bY, bW, bH, "RE-SCAN", {25, 100, 190}, {230, 245, 255}, function() FlightCore.scanQuadTurtles(); FlightCore.state.statusMsg="Hardware Re-scanned!" end)
+        self:addBtn(6 + (bW+4)*3, bY, bW, bH, "CALIB 200m", {110, 30, 155}, {250, 230, 255}, function() FlightCore.startCalibration() end)
+        local holdBg = (FlightCore.state.mode == "HOLD_ALT") and {45, 140, 60} or {30, 90, 40}
+        self:addBtn(6 + (bW+4)*4, bY, bW, bH, "HOLD ALT", holdBg, {255, 255, 255}, function() FlightCore.holdAltitude() end)
+        local stopBg = (FlightCore.state.mode == "IDLE") and {200, 45, 45} or {160, 30, 30}
+        self:addBtn(6 + (bW+4)*5, bY, bW, bH, "STOP", stopBg, {255, 255, 255}, function() FlightCore.stopEngines() end)
+    end,
+    renderNAV = function(self, sw, sh, hh)
+        local currAlt = FlightCore.altiSensor and FlightCore.altiSensor.getHeight() or 0
+        local currVspeed = FlightCore.altiSensor and FlightCore.altiSensor.getVerticalSpeed() or 0
+
+        local statH = 34
+        self.gpu.fillRect(self.displayId, 6, hh + 6, sw - 12, statH, 20, 28, 40)
+        self.gpu.drawText(self.displayId, string.format("ALT: %.1fm  ->  TARGET: %.0fm  (V.S: %+.2f m/s)", currAlt, FlightCore.state.targetAlt, currVspeed), 14, hh + 12, 80, 230, 255, "Arial", 13, "bold")
+
+        local gridY = hh + 6 + statH + 8
+        local btnAreaH = sh - gridY - 6
+        local rowH = math.floor((btnAreaH - 12) / 3)
+        local colW = math.floor((sw - 12 - 8) / 2)
+
+        self:addBtn(6, gridY, colW, rowH, "[ 0m LANDING ]", {160, 50, 50}, {255, 255, 255}, function() FlightCore.setTargetAlt(0) end)
+        self:addBtn(6 + colW + 8, gridY, colW, rowH, "[ 80m TREETOP ]", {35, 110, 60}, {255, 255, 255}, function() FlightCore.setTargetAlt(80) end)
+
+        self:addBtn(6, gridY + rowH + 6, colW, rowH, "[ 150m CRUISE ]", {25, 90, 140}, {255, 255, 255}, function() FlightCore.setTargetAlt(150) end)
+        self:addBtn(6 + colW + 8, gridY + rowH + 6, colW, rowH, "[ 200m CALIBRATE ]", {100, 40, 140}, {255, 255, 255}, function() FlightCore.setTargetAlt(200) end)
+
+        self:addBtn(6, gridY + (rowH + 6)*2, colW, rowH, "[ 300m HIGH-ALT ]", {20, 110, 150}, {255, 255, 255}, function() FlightCore.setTargetAlt(300) end)
+        self:addBtn(6 + colW + 8, gridY + (rowH + 6)*2, colW, rowH, "[ LOCK CURRENT ALT ]", {130, 90, 20}, {255, 255, 255}, function() FlightCore.lockCurrentAlt() end)
+    end,
+    renderSYS = function(self, sw, sh, hh)
+        local cardW = math.floor((sw - 20) / 2)
+        local cardH = math.floor((sh - hh - 50) / 2)
+        local startY = hh + 6
+
+        local slots = {
+            {slot="FL", col=1, row=1, name="Front-Left Turtle"},
+            {slot="FR", col=2, row=1, name="Front-Right Turtle"},
+            {slot="BL", col=1, row=2, name="Back-Left Turtle"},
+            {slot="BR", col=2, row=2, name="Back-Right Turtle"}
+        }
+
+        for _, s in ipairs(slots) do
+            local cx = 6 + (s.col - 1) * (cardW + 8)
+            local cy = startY + (s.row - 1) * (cardH + 6)
+            local node = FlightCore.engines[s.slot]
+            local online = node ~= nil
+            local bg = online and {20, 35, 30} or {40, 20, 20}
+            self.gpu.fillRect(self.displayId, cx, cy, cardW, cardH, bg[1], bg[2], bg[3])
+
+            local tagCol = online and {80, 255, 120} or {255, 80, 80}
+            self.gpu.drawText(self.displayId, string.format("[%s] %s", s.slot, s.name), cx + 8, cy + 8, 220, 235, 255, "Arial", 12, "bold")
+            self.gpu.drawText(self.displayId, string.format("STATUS: %s", online and "ONLINE (PAIRED)" or "OFFLINE / MISSING"), cx + 8, cy + 26, tagCol[1], tagCol[2], tagCol[3], "Arial", 11, "bold")
+            local lbl = node and (node.label or node.name) or "None"
+            self.gpu.drawText(self.displayId, string.format("NODE: %s | PWM: %d/15", lbl, FlightCore.engineOutputs[s.slot]), cx + 8, cy + 44, 160, 190, 220, "Arial", 10, "plain")
+        end
+
+        local btmY = startY + cardH * 2 + 14
+        local btmW = math.floor((sw - 16) / 2)
+        self:addBtn(6, btmY, btmW, 28, "RE-SCAN HARDWARE", {25, 100, 190}, {255, 255, 255}, function() FlightCore.scanQuadTurtles(); FlightCore.state.statusMsg="Hardware Re-scanned!" end)
+        self:addBtn(6 + btmW + 4, btmY, btmW, 28, "STOP ALL ENGINES", {190, 40, 40}, {255, 255, 255}, function() FlightCore.stopEngines() end)
     end,
     handleEvent = function(self, event, p1, p2, p3, p4)
         local clickX, clickY = nil, nil
         if event == "directgpu_touch" then
-            if type(p1) == "number" and type(p2) == "number" then
-                clickX, clickY = p1, p2
-            elseif type(p2) == "number" and type(p3) == "number" then
-                clickX, clickY = p2, p3
-            end
+            if type(p1) == "number" and type(p2) == "number" then clickX, clickY = p1, p2
+            elseif type(p2) == "number" and type(p3) == "number" then clickX, clickY = p2, p3 end
         elseif event == "monitor_touch" then
             if type(p2) == "number" and type(p3) == "number" then
                 local mon = peripheral.find("monitor")
                 local mw, mh = (mon and mon.getSize()) or term.getSize()
-                clickX = math.floor(((p2 - 0.5) / mw) * self.screenW)
-                clickY = math.floor(((p3 - 0.5) / mh) * self.screenH)
+                clickX = math.floor(((p2 - 0.5) / mw) * (self.screenW or 320))
+                clickY = math.floor(((p3 - 0.5) / mh) * (self.screenH or 240))
             end
         elseif event == "mouse_click" then
-            if type(p1) == "table" and p1.x and p1.y then
-                clickX, clickY = p1.x, p1.y
+            if type(p1) == "table" and p1.x and p1.y then clickX, clickY = p1.x, p1.y
             elseif type(p2) == "number" and type(p3) == "number" then
                 local tw, th = term.getSize()
-                clickX = math.floor(((p2 - 0.5) / tw) * self.screenW)
-                clickY = math.floor(((p3 - 0.5) / th) * self.screenH)
+                clickX = math.floor(((p2 - 0.5) / tw) * (self.screenW or 320))
+                clickY = math.floor(((p3 - 0.5) / th) * (self.screenH or 240))
             end
         end
 
@@ -669,6 +880,9 @@ local FONT_5X7 = {
 
 Drivers.toms = {
     name = "VTOL Airship " .. VERSION .. " (Tom)",
+    shortTag = "Tom",
+    currentView = "OVERVIEW",
+    isMenuOpen = false,
     isAvailable = function()
         return (peripheral.find("tm_gpu") or peripheral.find("gpu")) ~= nil
     end,
@@ -679,6 +893,8 @@ Drivers.toms = {
         sleep(0.05)
         self.screenW, self.screenH = 320, 240
         self.buttons = {}
+        self.currentView = "OVERVIEW"
+        self.isMenuOpen = false
     end,
     toARGB = function(self, col)
         if type(col) ~= "number" then return 0xFFFFFFFF end
@@ -691,13 +907,11 @@ Drivers.toms = {
         local argb = self:toARGB(color)
         local sw, sh = self.screenW, self.screenH
 
-        -- 1. 原生高速文字路徑 (Native drawText Fast Path)
         if self.gpu.drawText and scale == 1 then
             local ok = pcall(self.gpu.drawText, math.max(1, math.min(sw, startX)), math.max(1, math.min(sh, startY)), text, argb)
             if ok then return end
         end
 
-        -- 2. 向量點陣垂直合併極速繪製 (Vertical Run-Length Merging)
         text = string.upper(text)
         local curX = startX
         local gpu_fr = self.gpu.filledRectangle
@@ -775,134 +989,337 @@ Drivers.toms = {
             end
         end
 
+        local function addBtn(x, y, bw, bh, text, bg, fg, act)
+            table.insert(self.buttons, {x=x, y=y, w=bw, h=bh, text=text, bg=bg, fg=fg, action=act})
+        end
+
         sFill(0x0F141E)
+        self.buttons = {}
+
+        -- 1. 頂部標題列與右上角 MENU 按鈕
         local headerH = math.max(24, math.floor(sh * 0.08))
         sFR(1, 1, sw, headerH, 0x192841)
         local titleSize = (sw >= 300) and 2 or 1
-        sTxt(12, math.floor((headerH - 7 * titleSize) / 2) + 1, string.format("VTOL Airship %s (Tom)", VERSION), 0xF0F5FF, titleSize)
+        local viewTag = self.isMenuOpen and "SELECT VIEW" or self.currentView
+        sTxt(12, math.floor((headerH - 7 * titleSize) / 2) + 1, string.format("VTOL Airship %s - [%s]", VERSION, viewTag), 0xF0F5FF, titleSize)
 
-        local currAlt = FlightCore.altiSensor and FlightCore.altiSensor.getHeight() or 0
-        local currVspeed = FlightCore.altiSensor and FlightCore.altiSensor.getVerticalSpeed() or 0
-        local currPitch, currRoll = FlightCore.getGimbalData()
-
-        local instY = headerH + 6
-        local instH = math.floor((sh - headerH) * 0.52)
-        local leftW = math.max(130, math.floor(sw * 0.35))
-        local pfdX = 6
-
-        sFR(pfdX, instY, leftW, instH, 0x141A26)
-        sR(pfdX, instY, leftW, instH, 0x283850)
-        sTxt(pfdX + 8, instY + 6, "PRIMARY FLIGHT DISPLAY", 0xAAD2E6, 1)
-
-        local gR = math.min(32, math.floor(instH * 0.28))
-        local gCX = pfdX + math.floor(leftW * 0.26)
-        local gCY = instY + math.floor(instH * 0.54)
-        for dy = -gR, gR do
-            local dx = math.floor(math.sqrt(math.max(0, gR*gR - dy*dy)) + 0.5)
-            sL(gCX - dx, gCY + dy, gCX + dx, gCY + dy, 0x1E2837)
+        local menuBtnW = (sw >= 300) and 70 or 50
+        local menuBtnH = headerH - 4
+        local menuBtnX = sw - menuBtnW - 4
+        local menuBtnY = 3
+        if self.isMenuOpen then
+            addBtn(menuBtnX, menuBtnY, menuBtnW, menuBtnH, "[X CLOSE]", 0x992222, 0xFFFFFF, function() self.isMenuOpen = false end)
+        else
+            addBtn(menuBtnX, menuBtnY, menuBtnW, menuBtnH, "[= MENU]", 0x224488, 0xFFFFFF, function() self.isMenuOpen = true end)
         end
-        sArc(gCX, gCY, gR, 0, 360, 10, 0x50AAF0)
 
-        local altText = string.format("%.0f", currAlt)
-        local altSize = (gR >= 26) and 2 or 1
-        sTxt(gCX - math.floor(#altText * 3 * altSize), gCY - math.floor(3.5 * altSize), altText, 0xFFFFFF, altSize)
-        sTxt(gCX - 16, gCY + math.floor(gR * 0.40), "ALT(M)", 0xA0CDF0, 1)
+        -- 2. 視圖分流路由
+        if self.isMenuOpen then
+            local cardW = math.floor((sw - 24) / 2)
+            local cardH = math.floor((sh - headerH - 24) / 3)
+            local startY = headerH + 6
 
-        local textX = pfdX + math.floor(leftW * 0.52)
-        local rowSpacing = math.floor((instH - 24) / 5)
-        local textSize = (instH >= 130 and sw >= 360) and 2 or 1
-        sTxt(textX, instY + 16, string.format("TGT: %.0fm", FlightCore.state.targetAlt), 0x50E6FF, textSize)
-        sTxt(textX, instY + 16 + rowSpacing, string.format("V.S: %+.2f", currVspeed), 0xFFCD4B, textSize)
-        local mCol = (FlightCore.state.mode == "HOLD_ALT") and 0x50FF78 or (FlightCore.state.mode == "CALIBRATING" and 0x50C8FF or 0xFF5050)
-        sTxt(textX, instY + 16 + rowSpacing * 2, string.format("MODE: %s", FlightCore.state.mode:sub(1,7)), mCol, textSize)
-        sTxt(textX, instY + 16 + rowSpacing * 3, string.format("P:%+4.1f R:%+4.1f", currPitch, currRoll), 0xB4DCFF, 1)
-        if FlightCore.gimbalAvailable then sTxt(textX, instY + 16 + rowSpacing * 4, "GIMBAL: ACTIVE", 0x50FF78, 1)
-        else sTxt(textX, instY + 16 + rowSpacing * 4, "GIMBAL: NO SENSOR", 0xFF3C3C, 1) end
-
-        local ecamX = pfdX + leftW + 6
-        local ecamW = sw - ecamX - 6
-        sFR(ecamX, instY, ecamW, instH, 0x121822)
-        sR(ecamX, instY, ecamW, instH, 0x283850)
-
-        local slotW = math.floor((ecamW - 8) / 4)
-        local slots = {"FL", "FR", "BL", "BR"}
-        local dialR = math.min(math.floor(slotW * 0.35), math.floor(instH * 0.30))
-        local engCenterY = instY + math.floor(instH * 0.44)
-
-        for i, slot in ipairs(slots) do
-            local cx = ecamX + 4 + math.floor((i - 0.5) * slotW)
-            local cy = engCenterY
-            local node = FlightCore.engines[slot]
-            local lbl = node and (node.label or node.name or slot) or slot
-            if #lbl > 5 then lbl = lbl:sub(1, 5) end
-            local val = FlightCore.virtualOutputs[slot] or 0.0
-            local sig = FlightCore.engineOutputs[slot] or 0
-
-            local lblSz = (sw >= 320) and 2 or 1
-            sTxt(cx - math.floor(#lbl * 3 * lblSz), cy - dialR - 12 * lblSz, lbl, 0xC8E6FF, lblSz)
-            sArc(cx, cy, dialR, 210, -30, 8, 0x8CA0B4)
-            sArc(cx, cy, dialR + 1, 210, -30, 8, 0x506478)
-            for _, deg in ipairs({210, 90, -30}) do
-                local rad = math.rad(deg)
-                sL(cx + (dialR - 3) * math.cos(rad), cy - (dialR - 3) * math.sin(rad), cx + (dialR + 5) * math.cos(rad), cy - (dialR + 5) * math.sin(rad), 0xB4C8DC)
+            local function addMenuCard(col, row, title, targetView, color)
+                local cx = 6 + (col - 1) * (cardW + 8)
+                local cy = startY + (row - 1) * (cardH + 6)
+                addBtn(cx, cy, cardW, cardH, title, color, 0xFFFFFF, function()
+                    self.currentView = targetView
+                    self.isMenuOpen = false
+                end)
             end
-            sArc(cx, cy, dialR, 10, -30, 5, 0xFF3737)
 
-            local ratio = math.min(1.0, math.max(0.0, val / 15.0))
-            local nRad = math.rad(210 - ratio * 240)
-            sLS(cx, cy, cx + (dialR - 2) * math.cos(nRad), cy - (dialR - 2) * math.sin(nRad), 0x32FF64)
+            addMenuCard(1, 1, "1. OVERVIEW", "OVERVIEW", 0x1B3A60)
+            addMenuCard(2, 1, "2. PFD (FLIGHT)", "PFD", 0x145A32)
+            addMenuCard(1, 2, "3. ECAM (ENGINES)", "ECAM", 0x78281F)
+            addMenuCard(2, 2, "4. NAV (PRESETS)", "NAV", 0x117864)
 
-            local boxW = math.max(40, math.floor(dialR * 1.5))
-            local boxH = math.max(16, math.floor(dialR * 0.65))
-            local boxX = cx - math.floor(boxW / 2)
-            local boxY = cy + math.floor(dialR * 0.28)
-            sFR(boxX, boxY, boxW, boxH, 0x0C121C)
-            sR(boxX, boxY, boxW, boxH, 0x2896C8)
-            
-            local valStr = string.format("%4.1f", val)
-            sTxt(boxX + math.floor((boxW - #valStr * 6) / 2), boxY + 4, valStr, 0x46FF78, 1)
-            
-            local sigStr = string.format("%d/15", sig)
-            sTxt(cx - math.floor(#sigStr * 3), boxY + boxH + 3, sigStr, 0x96BEE1, 1)
+            local btmW = sw - 12
+            local cy = startY + 2 * (cardH + 6)
+            addBtn(6, cy, btmW, cardH, "5. SYS (DIAGNOSTICS & TURTLES)", 0x512E5F, 0xFFFFFF, function()
+                self.currentView = "SYS"
+                self.isMenuOpen = false
+            end)
+
+        elseif self.currentView == "OVERVIEW" then
+            local currAlt = FlightCore.altiSensor and FlightCore.altiSensor.getHeight() or 0
+            local currVspeed = FlightCore.altiSensor and FlightCore.altiSensor.getVerticalSpeed() or 0
+            local currPitch, currRoll = FlightCore.getGimbalData()
+
+            local instY = headerH + 6
+            local instH = math.floor((sh - headerH) * 0.52)
+            local leftW = math.max(130, math.floor(sw * 0.35))
+            local pfdX = 6
+
+            sFR(pfdX, instY, leftW, instH, 0x141A26)
+            sR(pfdX, instY, leftW, instH, 0x283850)
+            sTxt(pfdX + 8, instY + 6, "PRIMARY FLIGHT DISPLAY", 0xAAD2E6, 1)
+
+            local gR = math.min(32, math.floor(instH * 0.28))
+            local gCX = pfdX + math.floor(leftW * 0.26)
+            local gCY = instY + math.floor(instH * 0.54)
+            for dy = -gR, gR do
+                local dx = math.floor(math.sqrt(math.max(0, gR*gR - dy*dy)) + 0.5)
+                sL(gCX - dx, gCY + dy, gCX + dx, gCY + dy, 0x1E2837)
+            end
+            sArc(gCX, gCY, gR, 0, 360, 10, 0x50AAF0)
+            local altText = string.format("%.0f", currAlt)
+            local altSize = (gR >= 26) and 2 or 1
+            sTxt(gCX - math.floor(#altText * 3 * altSize), gCY - math.floor(3.5 * altSize), altText, 0xFFFFFF, altSize)
+            sTxt(gCX - 16, gCY + math.floor(gR * 0.40), "ALT(M)", 0xA0CDF0, 1)
+
+            local textX = pfdX + math.floor(leftW * 0.52)
+            local rowSpacing = math.floor((instH - 24) / 5)
+            local textSize = (instH >= 130 and sw >= 360) and 2 or 1
+
+            sTxt(textX, instY + 16, string.format("TGT: %.0fm", FlightCore.state.targetAlt), 0x50E6FF, textSize)
+            sTxt(textX, instY + 16 + rowSpacing, string.format("V.S: %+.2f", currVspeed), 0xFFCD4B, textSize)
+            local mCol = (FlightCore.state.mode == "HOLD_ALT") and 0x50FF78 or (FlightCore.state.mode == "CALIBRATING" and 0x50C8FF or 0xFF5050)
+            sTxt(textX, instY + 16 + rowSpacing * 2, string.format("MOD: %s", FlightCore.state.mode:sub(1,7)), mCol, textSize)
+            sTxt(textX, instY + 16 + rowSpacing * 3, string.format("P:%+3.0f R:%+3.0f", currPitch, currRoll), 0xB4DCFF, 1)
+            sTxt(textX, instY + 16 + rowSpacing * 4, FlightCore.gimbalAvailable and "GIMBAL: OK" or "GIMBAL: N/A", FlightCore.gimbalAvailable and 0x50FF78 or 0xFF5050, 1)
+
+            local ecamX = pfdX + leftW + 6
+            local ecamW = sw - ecamX - 6
+            sFR(ecamX, instY, ecamW, instH, 0x121822)
+            sR(ecamX, instY, ecamW, instH, 0x283850)
+
+            local slotW = math.floor((ecamW - 8) / 4)
+            local slots = {"FL", "FR", "BL", "BR"}
+            local dialR = math.min(math.floor(slotW * 0.35), math.floor(instH * 0.28))
+            local engCenterY = instY + math.floor(instH * 0.44)
+
+            for i, slot in ipairs(slots) do
+                local engCenterX = ecamX + 4 + math.floor((i - 0.5) * slotW)
+                local node = FlightCore.engines[slot]
+                local lbl = node and (node.label or node.name or slot) or slot
+                if #lbl > 5 then lbl = lbl:sub(1, 5) end
+
+                sTxt(engCenterX - math.floor(#lbl * 3), engCenterY - dialR - 12, lbl, 0xC8E6FF, 1)
+                sArc(engCenterX, engCenterY, dialR, 210, -30, 10, 0x8CA0B4)
+                sArc(engCenterX, engCenterY, dialR + 1, 210, -30, 10, 0x5A6E82)
+                sArc(engCenterX, engCenterY, dialR, 10, -30, 10, 0xFF3232)
+
+                local ratio = math.min(1.0, math.max(0.0, FlightCore.virtualOutputs[slot] / 15.0))
+                local nRad = math.rad(210 - ratio * 240)
+                local nx = math.floor(engCenterX + (dialR - 2) * math.cos(nRad) + 0.5)
+                local ny = math.floor(engCenterY - (dialR - 2) * math.sin(nRad) + 0.5)
+                sLS(engCenterX, engCenterY, nx, ny, 0x32FF64)
+                sFR(engCenterX - 2, engCenterY - 2, 5, 5, 0xC8DCF0)
+
+                local boxW = math.max(36, math.floor(dialR * 1.55))
+                local boxH = 14
+                local boxX = engCenterX - math.floor(boxW / 2)
+                local boxY = engCenterY + math.floor(dialR * 0.28)
+                sFR(boxX, boxY, boxW, boxH, 0x0C121C)
+                sR(boxX, boxY, boxW, boxH, 0x2896C8)
+
+                local valStr = string.format("%4.1f", FlightCore.virtualOutputs[slot])
+                sTxt(boxX + math.floor((boxW - #valStr * 6) / 2), boxY + 4, valStr, 0x46FF78, 1)
+
+                local sigStr = string.format("%d/15", FlightCore.engineOutputs[slot] or 0)
+                sTxt(engCenterX - math.floor(#sigStr * 3), boxY + boxH + 3, sigStr, 0x96BEE1, 1)
+            end
+
+            local statY = instY + instH + 6
+            local statH = math.max(18, math.floor(sh * 0.06))
+            sFR(pfdX, statY, sw - 12, statH, 0x1E2432)
+            sR(pfdX, statY, sw - 12, statH, 0x3C4B64)
+            sTxt(pfdX + 8, statY + math.floor((statH - 7) / 2), string.format("STATUS: %s", FlightCore.state.statusMsg), 0x50E6FF, 1)
+
+            local btnAreaY = statY + statH + 6
+            local btnAreaH = sh - btnAreaY - 6
+            local rowH = math.max(16, math.floor((btnAreaH - 12) / 3))
+
+            local bY1 = btnAreaY
+            local bW1 = math.floor((sw - 12 - 16) / 5)
+            addBtn(pfdX, bY1, bW1, rowH, "+10m", 0x1B5E20, 0xE8F5E9, function() FlightCore.adjustTargetAlt(10) end)
+            addBtn(pfdX + bW1 + 4, bY1, bW1, rowH, "+1m", 0x2E7D32, 0xE8F5E9, function() FlightCore.adjustTargetAlt(1) end)
+            addBtn(pfdX + (bW1 + 4)*2, bY1, bW1, rowH, "-1m", 0xE65100, 0xFFF3E0, function() FlightCore.adjustTargetAlt(-1) end)
+            addBtn(pfdX + (bW1 + 4)*3, bY1, bW1, rowH, "-10m", 0xC62828, 0xFFEBEE, function() FlightCore.adjustTargetAlt(-10) end)
+            addBtn(pfdX + (bW1 + 4)*4, bY1, bW1, rowH, "SET CURR", 0x00838F, 0xE0F7FA, function() FlightCore.lockCurrentAlt() end)
+
+            local bY2 = bY1 + rowH + 6
+            local bW2 = math.floor((sw - 12 - 12) / 4)
+            addBtn(pfdX, bY2, bW2, rowH, "BASE +", 0x00695C, 0xE0F2F1, function() FlightCore.adjustBaseThrottle(1.0) end)
+            addBtn(pfdX + bW2 + 4, bY2, bW2, rowH, "BASE -", 0x37474F, 0xECEFF1, function() FlightCore.adjustBaseThrottle(-1.0) end)
+            addBtn(pfdX + (bW2 + 4)*2, bY2, bW2, rowH, "RE-SCAN", 0x1565C0, 0xE3F2FD, function() FlightCore.scanQuadTurtles(); FlightCore.state.statusMsg="Hardware Re-scanned!" end)
+            addBtn(pfdX + (bW2 + 4)*3, bY2, bW2, rowH, "CALIBRATE", 0x6A1B9A, 0xF3E5F5, function() FlightCore.startCalibration() end)
+
+            local bY3 = bY2 + rowH + 6
+            local bW3 = math.floor((sw - 12 - 6) / 2)
+            local bH3 = math.max(rowH, sh - bY3 - 6)
+            local holdBg = (FlightCore.state.mode == "HOLD_ALT") and 0x2E7D32 or 0x1B5E20
+            addBtn(pfdX, bY3, bW3, bH3, " [ HOLD ALT ] ", holdBg, 0xFFFFFF, function() FlightCore.holdAltitude() end)
+            local stopBg = (FlightCore.state.mode == "IDLE") and 0xC62828 or 0xB71C1C
+            addBtn(pfdX + bW3 + 6, bY3, bW3, bH3, " [ STOP / IDLE ] ", stopBg, 0xFFFFFF, function() FlightCore.stopEngines() end)
+
+        elseif self.currentView == "PFD" then
+            local currAlt = FlightCore.altiSensor and FlightCore.altiSensor.getHeight() or 0
+            local currVspeed = FlightCore.altiSensor and FlightCore.altiSensor.getVerticalSpeed() or 0
+            local currPitch, currRoll = FlightCore.getGimbalData()
+
+            local mainH = math.floor((sh - headerH) * 0.65)
+            local mainY = headerH + 6
+
+            local leftW = math.floor(sw * 0.52)
+            sFR(6, mainY, leftW, mainH, 0x141A26)
+            sR(6, mainY, leftW, mainH, 0x283850)
+
+            local hCX = 6 + math.floor(leftW / 2)
+            local hCY = mainY + math.floor(mainH / 2)
+            local hR = math.min(math.floor(leftW * 0.40), math.floor(mainH * 0.40))
+            sArc(hCX, hCY, hR, 0, 360, 10, 0x50AAF0)
+
+            local rollRad = math.rad(-currRoll)
+            local lx1 = hCX - math.floor(hR * 0.85 * math.cos(rollRad))
+            local ly1 = hCY - math.floor(hR * 0.85 * math.sin(rollRad))
+            local lx2 = hCX + math.floor(hR * 0.85 * math.cos(rollRad))
+            local ly2 = hCY + math.floor(hR * 0.85 * math.sin(rollRad))
+            sLS(lx1, ly1, lx2, ly2, 0xFFD700)
+            sFR(hCX - 2, hCY - 2, 5, 5, 0xFF5050)
+            sTxt(12, mainY + mainH - 14, string.format("P:%+4.1f*  R:%+4.1f*", currPitch, currRoll), 0xC8E6FF, 1)
+
+            local rightX = 6 + leftW + 6
+            local rightW = sw - rightX - 6
+            sFR(rightX, mainY, rightW, mainH, 0x18202E)
+            sR(rightX, mainY, rightW, mainH, 0x283850)
+
+            sTxt(rightX + 8, mainY + 8, "CURRENT ALTITUDE", 0x8CA0B4, 1)
+            local altStr = string.format("%.1f m", currAlt)
+            sTxt(rightX + 8, mainY + 22, altStr, 0xFFFFFF, 2)
+
+            sTxt(rightX + 8, mainY + 44, string.format("TARGET: %.0f m", FlightCore.state.targetAlt), 0x50E6FF, 1)
+            sTxt(rightX + 8, mainY + 58, string.format("V.S: %+.2f m/s", currVspeed), 0xFFCD4B, 1)
+            sTxt(rightX + 8, mainY + 72, string.format("STATUS: %s", FlightCore.state.statusMsg:sub(1,18)), 0x50FF78, 1)
+
+            local bY = mainY + mainH + 6
+            local bH = sh - bY - 6
+            local bW = math.floor((sw - 12 - 20) / 6)
+            addBtn(6, bY, bW, bH, "+10m", 0x1B5E20, 0xE8F5E9, function() FlightCore.adjustTargetAlt(10) end)
+            addBtn(6 + (bW+4), bY, bW, bH, "+1m", 0x2E7D32, 0xE8F5E9, function() FlightCore.adjustTargetAlt(1) end)
+            addBtn(6 + (bW+4)*2, bY, bW, bH, "-1m", 0xE65100, 0xFFF3E0, function() FlightCore.adjustTargetAlt(-1) end)
+            addBtn(6 + (bW+4)*3, bY, bW, bH, "-10m", 0xC62828, 0xFFEBEE, function() FlightCore.adjustTargetAlt(-10) end)
+            local holdBg = (FlightCore.state.mode == "HOLD_ALT") and 0x2E7D32 or 0x1B5E20
+            addBtn(6 + (bW+4)*4, bY, bW, bH, "HOLD", holdBg, 0xFFFFFF, function() FlightCore.holdAltitude() end)
+            local stopBg = (FlightCore.state.mode == "IDLE") and 0xC62828 or 0xB71C1C
+            addBtn(6 + (bW+4)*5, bY, bW, bH, "STOP", stopBg, 0xFFFFFF, function() FlightCore.stopEngines() end)
+
+        elseif self.currentView == "ECAM" then
+            local instY = headerH + 6
+            local instH = math.floor((sh - headerH) * 0.60)
+            sFR(6, instY, sw - 12, instH, 0x121822)
+            sR(6, instY, sw - 12, instH, 0x283850)
+
+            local slotW = math.floor((sw - 20) / 4)
+            local slots = {"FL", "FR", "BL", "BR"}
+            local dialR = math.min(math.floor(slotW * 0.38), math.floor(instH * 0.32))
+            local engCenterY = instY + math.floor(instH * 0.44)
+
+            for i, slot in ipairs(slots) do
+                local engCenterX = 8 + math.floor((i - 0.5) * slotW)
+                local node = FlightCore.engines[slot]
+                local lbl = node and (node.label or node.name or slot) or slot
+                if #lbl > 5 then lbl = lbl:sub(1, 5) end
+
+                sTxt(engCenterX - math.floor(#lbl * 3), engCenterY - dialR - 12, lbl, 0xC8E6FF, 1)
+                sArc(engCenterX, engCenterY, dialR, 210, -30, 10, 0x8CA0B4)
+                sArc(engCenterX, engCenterY, dialR, 10, -30, 10, 0xFF3232)
+
+                local ratio = math.min(1.0, math.max(0.0, FlightCore.virtualOutputs[slot] / 15.0))
+                local nRad = math.rad(210 - ratio * 240)
+                local nx = math.floor(engCenterX + (dialR - 2) * math.cos(nRad) + 0.5)
+                local ny = math.floor(engCenterY - (dialR - 2) * math.sin(nRad) + 0.5)
+                sLS(engCenterX, engCenterY, nx, ny, 0x32FF64)
+
+                local boxW = math.max(36, math.floor(dialR * 1.55))
+                local boxH = 14
+                local boxX = engCenterX - math.floor(boxW / 2)
+                local boxY = engCenterY + math.floor(dialR * 0.28)
+                sFR(boxX, boxY, boxW, boxH, 0x0C121C)
+                sR(boxX, boxY, boxW, boxH, 0x2896C8)
+
+                local valStr = string.format("%4.1f", FlightCore.virtualOutputs[slot])
+                sTxt(boxX + math.floor((boxW - #valStr * 6) / 2), boxY + 4, valStr, 0x46FF78, 1)
+
+                local sigStr = string.format("%d/15", FlightCore.engineOutputs[slot] or 0)
+                sTxt(engCenterX - math.floor(#sigStr * 3), boxY + boxH + 3, sigStr, 0x96BEE1, 1)
+            end
+
+            local statY = instY + instH + 6
+            local statH = math.max(18, math.floor(sh * 0.06))
+            sFR(6, statY, sw - 12, statH, 0x1E2432)
+            sR(6, statY, sw - 12, statH, 0x3C4B64)
+            sTxt(12, statY + 4, string.format("BASE: %4.2f/15  |  STATUS: %s", FlightCore.state.baseThrottle, FlightCore.state.statusMsg:sub(1,24)), 0x50E6FF, 1)
+
+            local bY = statY + statH + 6
+            local bH = sh - bY - 6
+            local bW = math.floor((sw - 12 - 20) / 6)
+            addBtn(6, bY, bW, bH, "BASE +", 0x00695C, 0xE0F2F1, function() FlightCore.adjustBaseThrottle(1.0) end)
+            addBtn(6 + (bW+4), bY, bW, bH, "BASE -", 0x37474F, 0xECEFF1, function() FlightCore.adjustBaseThrottle(-1.0) end)
+            addBtn(6 + (bW+4)*2, bY, bW, bH, "RE-SCAN", 0x1565C0, 0xE3F2FD, function() FlightCore.scanQuadTurtles(); FlightCore.state.statusMsg="Hardware Re-scanned!" end)
+            addBtn(6 + (bW+4)*3, bY, bW, bH, "CALIB 200m", 0x6A1B9A, 0xF3E5F5, function() FlightCore.startCalibration() end)
+            local holdBg = (FlightCore.state.mode == "HOLD_ALT") and 0x2E7D32 or 0x1B5E20
+            addBtn(6 + (bW+4)*4, bY, bW, bH, "HOLD", holdBg, 0xFFFFFF, function() FlightCore.holdAltitude() end)
+            local stopBg = (FlightCore.state.mode == "IDLE") and 0xC62828 or 0xB71C1C
+            addBtn(6 + (bW+4)*5, bY, bW, bH, "STOP", stopBg, 0xFFFFFF, function() FlightCore.stopEngines() end)
+
+        elseif self.currentView == "NAV" then
+            local currAlt = FlightCore.altiSensor and FlightCore.altiSensor.getHeight() or 0
+            local currVspeed = FlightCore.altiSensor and FlightCore.altiSensor.getVerticalSpeed() or 0
+
+            local statH = 24
+            sFR(6, headerH + 6, sw - 12, statH, 0x141E28)
+            sR(6, headerH + 6, sw - 12, statH, 0x284864)
+            sTxt(12, headerH + 12, string.format("ALT: %.1fm  ->  TARGET: %.0fm  (V.S: %+.2f)", currAlt, FlightCore.state.targetAlt, currVspeed), 0x50E6FF, 1)
+
+            local gridY = headerH + 6 + statH + 6
+            local btnAreaH = sh - gridY - 6
+            local rowH = math.floor((btnAreaH - 12) / 3)
+            local colW = math.floor((sw - 12 - 8) / 2)
+
+            addBtn(6, gridY, colW, rowH, "[ 0m LANDING ]", 0xA93226, 0xFFFFFF, function() FlightCore.setTargetAlt(0) end)
+            addBtn(6 + colW + 8, gridY, colW, rowH, "[ 80m TREETOP ]", 0x1E8449, 0xFFFFFF, function() FlightCore.setTargetAlt(80) end)
+
+            addBtn(6, gridY + rowH + 6, colW, rowH, "[ 150m CRUISE ]", 0x2471A3, 0xFFFFFF, function() FlightCore.setTargetAlt(150) end)
+            addBtn(6 + colW + 8, gridY + rowH + 6, colW, rowH, "[ 200m CALIBRATE ]", 0x7D3C98, 0xFFFFFF, function() FlightCore.setTargetAlt(200) end)
+
+            addBtn(6, gridY + (rowH + 6)*2, colW, rowH, "[ 300m HIGH-ALT ]", 0x17A589, 0xFFFFFF, function() FlightCore.setTargetAlt(300) end)
+            addBtn(6 + colW + 8, gridY + (rowH + 6)*2, colW, rowH, "[ LOCK CURRENT ALT ]", 0xB7950B, 0xFFFFFF, function() FlightCore.lockCurrentAlt() end)
+
+        elseif self.currentView == "SYS" then
+            local cardW = math.floor((sw - 20) / 2)
+            local cardH = math.floor((sh - headerH - 45) / 2)
+            local startY = headerH + 6
+
+            local slots = {
+                {slot="FL", col=1, row=1, name="Front-Left Turtle"},
+                {slot="FR", col=2, row=1, name="Front-Right Turtle"},
+                {slot="BL", col=1, row=2, name="Back-Left Turtle"},
+                {slot="BR", col=2, row=2, name="Back-Right Turtle"}
+            }
+
+            for _, s in ipairs(slots) do
+                local cx = 6 + (s.col - 1) * (cardW + 8)
+                local cy = startY + (s.row - 1) * (cardH + 6)
+                local node = FlightCore.engines[s.slot]
+                local online = node ~= nil
+                sFR(cx, cy, cardW, cardH, online and 0x14281E or 0x281414)
+                sR(cx, cy, cardW, cardH, online and 0x28643C or 0x642828)
+
+                sTxt(cx + 6, cy + 6, string.format("[%s] %s", s.slot, s.name), 0xF0F5FF, 1)
+                sTxt(cx + 6, cy + 20, string.format("STATUS: %s", online and "ONLINE" or "OFFLINE"), online and 0x50FF78 or 0xFF5050, 1)
+                local lbl = node and (node.label or node.name) or "N/A"
+                sTxt(cx + 6, cy + 34, string.format("NODE: %s | PWM: %d", lbl:sub(1,7), FlightCore.engineOutputs[s.slot]), 0x8CA0B4, 1)
+            end
+
+            local btmY = startY + cardH * 2 + 10
+            local btmW = math.floor((sw - 16) / 2)
+            addBtn(6, btmY, btmW, 24, "RE-SCAN HARDWARE", 0x1565C0, 0xFFFFFF, function() FlightCore.scanQuadTurtles(); FlightCore.state.statusMsg="Hardware Re-scanned!" end)
+            addBtn(6 + btmW + 4, btmY, btmW, 24, "STOP ALL ENGINES", 0xC62828, 0xFFFFFF, function() FlightCore.stopEngines() end)
         end
 
-        local statY = instY + instH + 6
-        local statH = math.max(18, math.floor(sh * 0.06))
-        sFR(pfdX, statY, sw - 12, statH, 0x1E2432)
-        sR(pfdX, statY, sw - 12, statH, 0x3C4B64)
-        sTxt(pfdX + 8, statY + math.floor((statH - 7) / 2), string.format("STATUS: %s", FlightCore.state.statusMsg), 0x50E6FF, 1)
-
-        self.buttons = {}
-        local btnAreaY = statY + statH + 6
-        local btnAreaH = sh - btnAreaY - 6
-        local rowH = math.max(16, math.floor((btnAreaH - 12) / 3))
-
-        local bY1 = btnAreaY
-        local bW1 = math.floor((sw - 12 - 16) / 5)
-        local function addBtn(x, y, w, h, text, bg, fg, act) table.insert(self.buttons, {x=x, y=y, w=w, h=h, text=text, bg=bg, fg=fg, action=act}) end
-
-        addBtn(pfdX, bY1, bW1, rowH, "+10m", 0x1B5E20, 0xE8F5E9, function() FlightCore.adjustTargetAlt(10) end)
-        addBtn(pfdX + bW1 + 4, bY1, bW1, rowH, "+1m", 0x2E7D32, 0xE8F5E9, function() FlightCore.adjustTargetAlt(1) end)
-        addBtn(pfdX + (bW1 + 4)*2, bY1, bW1, rowH, "-1m", 0xE65100, 0xFFF3E0, function() FlightCore.adjustTargetAlt(-1) end)
-        addBtn(pfdX + (bW1 + 4)*3, bY1, bW1, rowH, "-10m", 0xC62828, 0xFFEBEE, function() FlightCore.adjustTargetAlt(-10) end)
-        addBtn(pfdX + (bW1 + 4)*4, bY1, bW1, rowH, "SET CURR", 0x00838F, 0xE0F7FA, function() FlightCore.lockCurrentAlt() end)
-
-        local bY2 = bY1 + rowH + 6
-        local bW2 = math.floor((sw - 12 - 12) / 4)
-        addBtn(pfdX, bY2, bW2, rowH, "BASE +", 0x00695C, 0xE0F2F1, function() FlightCore.adjustBaseThrottle(1.0) end)
-        addBtn(pfdX + bW2 + 4, bY2, bW2, rowH, "BASE -", 0x37474F, 0xECEFF1, function() FlightCore.adjustBaseThrottle(-1.0) end)
-        addBtn(pfdX + (bW2 + 4)*2, bY2, bW2, rowH, "RE-SCAN", 0x1565C0, 0xE3F2FD, function() FlightCore.scanQuadTurtles(); FlightCore.state.statusMsg="Hardware Re-scanned!" end)
-        addBtn(pfdX + (bW2 + 4)*3, bY2, bW2, rowH, "CALIBRATE", 0x6A1B9A, 0xF3E5F5, function() FlightCore.startCalibration() end)
-
-        local bY3 = bY2 + rowH + 6
-        local bW3 = math.floor((sw - 12 - 6) / 2)
-        local bH3 = math.max(rowH, sh - bY3 - 6)
-        local holdBg = (FlightCore.state.mode == "HOLD_ALT") and 0x2E7D32 or 0x1B5E20
-        addBtn(pfdX, bY3, bW3, bH3, " [ HOLD ALT ] ", holdBg, 0xFFFFFF, function() FlightCore.holdAltitude() end)
-        local stopBg = (FlightCore.state.mode == "IDLE") and 0xC62828 or 0xB71C1C
-        addBtn(pfdX + bW3 + 6, bY3, bW3, bH3, " [ STOP / IDLE ] ", stopBg, 0xFFFFFF, function() FlightCore.stopEngines() end)
-
-        local btnTextSize = (rowH >= 24) and 2 or 1
+        -- 繪製所有按鈕
+        local btnTextSize = 1
         for _, btn in ipairs(self.buttons) do
             sFR(btn.x, btn.y, btn.w, btn.h, btn.bg)
             sR(btn.x, btn.y, btn.w, btn.h, 0x8CA0B4)
@@ -916,24 +1333,20 @@ Drivers.toms = {
     handleEvent = function(self, event, p1, p2, p3, p4)
         local clickX, clickY = nil, nil
         if event == "tm_monitor_touch" then
-            -- tm_monitor_touch returns (side, x, y, soft)
-            if type(p1) == "number" and type(p2) == "number" then
-                clickX, clickY = p1, p2
-            elseif type(p2) == "number" and type(p3) == "number" then
-                clickX, clickY = p2, p3
-            end
+            if type(p1) == "number" and type(p2) == "number" then clickX, clickY = p1, p2
+            elseif type(p2) == "number" and type(p3) == "number" then clickX, clickY = p2, p3 end
         elseif event == "monitor_touch" then
             if type(p2) == "number" and type(p3) == "number" then
                 local mon = peripheral.find("monitor")
                 local mw, mh = (mon and mon.getSize()) or term.getSize()
-                clickX = math.floor(((p2 - 0.5) / mw) * self.screenW)
-                clickY = math.floor(((p3 - 0.5) / mh) * self.screenH)
+                clickX = math.floor(((p2 - 0.5) / mw) * (self.screenW or 320))
+                clickY = math.floor(((p3 - 0.5) / mh) * (self.screenH or 240))
             end
         elseif event == "mouse_click" then
             if type(p2) == "number" and type(p3) == "number" then
                 local tw, th = term.getSize()
-                clickX = math.floor(((p2 - 0.5) / tw) * self.screenW)
-                clickY = math.floor(((p3 - 0.5) / th) * self.screenH)
+                clickX = math.floor(((p2 - 0.5) / tw) * (self.screenW or 320))
+                clickY = math.floor(((p3 - 0.5) / th) * (self.screenH or 240))
             end
         end
 
@@ -954,6 +1367,9 @@ Drivers.toms = {
 -- --------------------------------------------------------
 Drivers.normal = {
     name = "VTOL Airship " .. VERSION .. " (normal)",
+    shortTag = "normal",
+    currentView = "OVERVIEW",
+    isMenuOpen = false,
     isAvailable = function()
         return true
     end,
@@ -978,6 +1394,8 @@ Drivers.normal = {
             self.display.setPaletteColor(colors.white, 0xf1f2f6)
         end
         self.buttons = {}
+        self.currentView = "OVERVIEW"
+        self.isMenuOpen = false
     end,
     safeBlit = function(self, x, y, text, fgChar, bgChar)
         text = tostring(text or "")
@@ -994,188 +1412,229 @@ Drivers.normal = {
         elseif #bg > len then bg = bg:sub(1, len) end
         self.display.blit(text, fg, bg)
     end,
-    drawECAMDial = function(self, dx, dy, dw, dh, slot, label, val, sig)
-        val = val or 0.0
-        sig = sig or 0
-        local ratio = math.max(0, math.min(1.0, val / 15.0))
-        local lbl = label or slot
-        if #lbl > 4 then lbl = lbl:sub(1, 4) end
-
-        for row = 0, dh - 1 do
-            self:safeBlit(dx, dy + row, string.rep(" ", dw), "0", "7")
-        end
-
-        if dh >= 6 then
-            local topBar = string.format("+--%s--+", lbl)
-            if #topBar < dw then
-                local padL = math.floor((dw - #topBar) / 2)
-                topBar = string.rep("-", padL) .. topBar .. string.rep("-", dw - #topBar - padL)
-            end
-            self:safeBlit(dx, dy, topBar:sub(1, dw), "9", "8")
-
-            local arcLen = math.max(4, dw - 4)
-            local fillCount = math.floor(ratio * (arcLen - 1) + 0.5)
-            local arcChars, arcFg = "/", "8"
-            for k = 1, arcLen - 2 do
-                if k <= fillCount then
-                    arcChars = arcChars .. "="
-                    arcFg = arcFg .. ((k > (arcLen - 2) * 0.85) and "e" or ((k > (arcLen - 2) * 0.65) and "4" or "5"))
-                else
-                    arcChars = arcChars .. "."
-                    arcFg = arcFg .. "8"
-                end
-            end
-            arcChars = arcChars .. "\\"
-            arcFg = arcFg .. "e"
-
-            local arcLine = "|" .. arcChars .. "|"
-            if #arcLine < dw then
-                local padL = math.floor((dw - #arcLine) / 2)
-                arcLine = string.rep(" ", padL) .. arcLine .. string.rep(" ", dw - #arcLine - padL)
-                arcFg = string.rep("0", padL) .. "8" .. arcFg .. "8" .. string.rep("0", dw - #arcLine - padL)
-            end
-            self:safeBlit(dx, dy + 1, arcLine:sub(1, dw), arcFg:sub(1, dw), "7")
-
-            local valText = string.format("[%4.1f]", val)
-            local valPadL = math.max(0, math.floor((dw - #valText) / 2))
-            local valLine = string.rep(" ", valPadL) .. valText .. string.rep(" ", math.max(0, dw - #valText - valPadL))
-            local valFg = string.rep("0", valPadL) .. "955559" .. string.rep("0", math.max(0, dw - #valText - valPadL))
-            self:safeBlit(dx, dy + 2, valLine:sub(1, dw), valFg:sub(1, dw), "f")
-
-            local sigText = string.format("%2d/15", sig)
-            local sigPadL = math.max(0, math.floor((dw - #sigText) / 2))
-            local sigLine = string.rep(" ", sigPadL) .. sigText .. string.rep(" ", math.max(0, dw - #sigText - sigPadL))
-            local sigFg = string.rep("0", sigPadL) .. "33333" .. string.rep("0", math.max(0, dw - #sigText - sigPadL))
-            self:safeBlit(dx, dy + 3, sigLine:sub(1, dw), sigFg:sub(1, dw), "7")
-
-            local btmBar = "+" .. string.rep("-", math.max(0, dw - 2)) .. "+"
-            self:safeBlit(dx, dy + dh - 1, btmBar:sub(1, dw), "8", "7")
-        else
-            local arcLen = math.max(3, dw - 6)
-            local fillCount = math.floor(ratio * arcLen + 0.5)
-            local arcChars, arcFg = "", ""
-            for k = 1, arcLen do
-                if k <= fillCount then
-                    arcChars = arcChars .. "="
-                    arcFg = arcFg .. ((k > arcLen * 0.85) and "e" or ((k > arcLen * 0.65) and "4" or "5"))
-                else
-                    arcChars = arcChars .. "."
-                    arcFg = arcFg .. "8"
-                end
-            end
-            local r1Text = string.format("%-3s /%s\\", lbl, arcChars):sub(1, dw)
-            local r1Fg = "9998" .. arcFg .. "e"
-            self:safeBlit(dx, dy, r1Text, r1Fg:sub(1, #r1Text), "8")
-            local r2Text = string.format("%4.1f (%d/15)", val, sig):sub(1, dw)
-            local r2Fg = "55553" .. string.rep("3", math.max(0, #r2Text - 5))
-            self:safeBlit(dx, dy + 1, r2Text, r2Fg:sub(1, #r2Text), "f")
-        end
+    addBtn = function(self, x, y, w, h, text, bg, fg, act)
+        table.insert(self.buttons, {x=x, y=y, w=w, h=h, text=text, bg=bg, fg=fg, action=act})
     end,
     draw = function(self)
         local w, h = self.display.getSize()
         self.display.setBackgroundColor(colors.black)
         self.display.clear()
+        self.buttons = {}
 
-        local titleText = string.format("  VTOL Airship %s (normal)  ", VERSION)
-        local padL = math.floor((w - #titleText) / 2)
-        local header = string.rep(" ", math.max(0, padL)) .. titleText .. string.rep(" ", math.max(0, w - #titleText - padL))
-        self:safeBlit(1, 1, header:sub(1, w), "0", "b")
+        -- 1. 頂部標題列與右上角 MENU 按鈕
+        local viewTag = self.isMenuOpen and "MENU" or self.currentView
+        local titleText = string.format(" VTOL %s [%s]", VERSION, viewTag)
+        local menuBtnW = (w >= 38) and 8 or 6
+        local menuBtnX = w - menuBtnW + 1
 
-        local currAlt = FlightCore.altiSensor and FlightCore.altiSensor.getHeight() or 0
-        local currVspeed = FlightCore.altiSensor and FlightCore.altiSensor.getVerticalSpeed() or 0
-        local currPitch, currRoll = FlightCore.getGimbalData()
+        local headerPad = w - #titleText - menuBtnW
+        local header = titleText .. string.rep(" ", math.max(0, headerPad))
+        self:safeBlit(1, 1, header:sub(1, w - menuBtnW), "0", "b")
 
-        local instY = 3
-        local availH = h - instY
-        local cardH = math.max(6, math.floor(availH * 0.48))
-        local leftW = math.max(22, math.floor(w * 0.35))
-        local rightX = leftW + 3
-        local rightW = w - rightX
-
-        for y = instY, instY + cardH - 1 do
-            self:safeBlit(2, y, string.rep(" ", leftW), "0", "8")
-        end
-        self:safeBlit(3, instY, "PFD / TELEMETRY", "9", "8")
-
-        local altStr = string.format("ALT: %5.1fm (TGT:%4.0f)", currAlt, FlightCore.state.targetAlt)
-        local vspeedStr = string.format("V.SPD: %+5.2f m/s", currVspeed)
-        local attStr = string.format("P: %+4.1f*  R: %+4.1f*", currPitch, currRoll)
-        local gimbalStr = FlightCore.gimbalAvailable and "GIMBAL: ACTIVE [OK]" or "GIMBAL: NO SENSOR!"
-        local gimbalCol = FlightCore.gimbalAvailable and "5" or "e"
-        local modeFg = (FlightCore.state.mode == "HOLD_ALT") and "5" or (FlightCore.state.mode == "CALIBRATING" and "4" or "e")
-        local modeRow = string.format("MODE: %-5s  B:%4.2f", FlightCore.state.mode:sub(1,5), FlightCore.state.baseThrottle)
-
-        if cardH >= 10 then
-            local step = math.max(1, math.floor((cardH - 2) / 6))
-            self:safeBlit(3, instY + step * 1, altStr:sub(1, leftW - 2), "0", "8")
-            self:safeBlit(3, instY + step * 2, vspeedStr:sub(1, leftW - 2), "4", "8")
-            self:safeBlit(3, instY + step * 3, attStr:sub(1, leftW - 2), "3", "8")
-            self:safeBlit(3, instY + step * 4, gimbalStr:sub(1, leftW - 2), gimbalCol, "8")
-            self:safeBlit(3, instY + step * 5, modeRow:sub(1, leftW - 2), modeFg, "8")
-            self:safeBlit(3, instY + step * 6, "COLLECTIVE LIFT ONLY", "9", "8")
+        if self.isMenuOpen then
+            self:addBtn(menuBtnX, 1, menuBtnW, 1, "[CLOSE]", "e", "0", function() self.isMenuOpen = false end)
         else
-            self:safeBlit(3, instY + 1, altStr:sub(1, leftW - 2), "0", "8")
-            self:safeBlit(3, instY + 2, vspeedStr:sub(1, leftW - 2), "4", "8")
-            self:safeBlit(3, instY + 3, attStr:sub(1, leftW - 2), "3", "8")
-            self:safeBlit(3, instY + 4, gimbalStr:sub(1, leftW - 2), gimbalCol, "8")
-            self:safeBlit(3, instY + 5, modeRow:sub(1, leftW - 2), modeFg, "8")
-            if cardH >= 7 then self:safeBlit(3, instY + 6, "COLLECTIVE LIFT ONLY", "9", "8") end
+            self:addBtn(menuBtnX, 1, menuBtnW, 1, " [MENU] ", "b", "0", function() self.isMenuOpen = true end)
         end
 
-        local slots = {"FL", "FR", "BL", "BR"}
-        if rightW >= 36 then
-            local dialW = math.floor((rightW - 3) / 4)
+        -- 2. 視圖分流路由
+        if self.isMenuOpen then
+            local cardW = math.floor((w - 3) / 2)
+            local cardH = math.max(2, math.floor((h - 5) / 3))
+            local startY = 3
+
+            local function addMenuCard(col, row, title, targetView, bgCol)
+                local cx = 2 + (col - 1) * (cardW + 1)
+                local cy = startY + (row - 1) * (cardH + 1)
+                self:addBtn(cx, cy, cardW, cardH, title, bgCol, "0", function()
+                    self.currentView = targetView
+                    self.isMenuOpen = false
+                end)
+            end
+
+            addMenuCard(1, 1, "1. OVERVIEW", "OVERVIEW", "3")
+            addMenuCard(2, 1, "2. PFD FLIGHT", "PFD", "5")
+            addMenuCard(1, 2, "3. ECAM ENGINES", "ECAM", "e")
+            addMenuCard(2, 2, "4. NAV PRESETS", "NAV", "9")
+
+            local btmW = w - 2
+            local cy = startY + 2 * (cardH + 1)
+            self:addBtn(2, cy, btmW, cardH, "5. SYS DIAGNOSTICS & TURTLES", "a", "0", function()
+                self.currentView = "SYS"
+                self.isMenuOpen = false
+            end)
+
+        elseif self.currentView == "OVERVIEW" then
+            local currAlt = FlightCore.altiSensor and FlightCore.altiSensor.getHeight() or 0
+            local currVspeed = FlightCore.altiSensor and FlightCore.altiSensor.getVerticalSpeed() or 0
+            local currPitch, currRoll = FlightCore.getGimbalData()
+
+            local instY = 3
+            local availH = h - instY
+            local cardH = math.max(6, math.floor(availH * 0.48))
+            local leftW = math.max(20, math.floor(w * 0.35))
+            local rightX = leftW + 3
+            local rightW = w - rightX
+
+            for y = instY, instY + cardH - 1 do
+                self:safeBlit(2, y, string.rep(" ", leftW), "0", "8")
+            end
+            self:safeBlit(3, instY, "=== PRIMARY FLIGHT ===", "0", "8")
+            self:safeBlit(3, instY + 1, string.format("ALT: %6.1f m", currAlt), "0", "8")
+            self:safeBlit(3, instY + 2, string.format("TGT: %6.1f m", FlightCore.state.targetAlt), "9", "8")
+            self:safeBlit(3, instY + 3, string.format("V.S: %+6.2f m/s", currVspeed), "4", "8")
+            local mCol = (FlightCore.state.mode == "HOLD_ALT") and "5" or (FlightCore.state.mode == "CALIBRATING" and "b" or "e")
+            self:safeBlit(3, instY + 4, string.format("MOD: %-10s", FlightCore.state.mode:sub(1,10)), mCol, "8")
+            if cardH >= 6 then
+                self:safeBlit(3, instY + 5, string.format("ATT: P%+3.0f* R%+3.0f*", currPitch, currRoll), "0", "8")
+            end
+
+            local dialW = math.max(7, math.floor(rightW / 4))
+            local slots = {"FL", "FR", "BL", "BR"}
             for i, slot in ipairs(slots) do
-                local dx = rightX + (i - 1) * (dialW + 1)
+                local dx = rightX + (i - 1) * dialW
                 local node = FlightCore.engines[slot]
                 local lbl = node and (node.label or node.name or slot) or slot
-                self:drawECAMDial(dx, instY, dialW, cardH, slot, lbl, FlightCore.virtualOutputs[slot], FlightCore.engineOutputs[slot])
+                local val = FlightCore.virtualOutputs[slot] or 0.0
+                local sig = FlightCore.engineOutputs[slot] or 0
+
+                for row = 0, cardH - 1 do
+                    self:safeBlit(dx, instY + row, string.rep(" ", dialW - 1), "0", "7")
+                end
+                self:safeBlit(dx, instY, string.format("[%s]", lbl:sub(1, 3)), "9", "8")
+                self:safeBlit(dx, instY + 1, string.format("%4.1f", val), "5", "7")
+                self:safeBlit(dx, instY + 2, string.format("%2d/15", sig), "3", "7")
             end
-        else
-            local dialW = math.floor((rightW - 2) / 2)
-            local dialH = math.max(3, math.floor(cardH / 2))
-            local flNode, frNode = FlightCore.engines.FL, FlightCore.engines.FR
-            self:drawECAMDial(rightX, instY, dialW, dialH, "FL", flNode and flNode.label or "FL", FlightCore.virtualOutputs.FL, FlightCore.engineOutputs.FL)
-            self:drawECAMDial(rightX + dialW + 1, instY, dialW, dialH, "FR", frNode and frNode.label or "FR", FlightCore.virtualOutputs.FR, FlightCore.engineOutputs.FR)
-            local blNode, brNode = FlightCore.engines.BL, FlightCore.engines.BR
-            self:drawECAMDial(rightX, instY + dialH, dialW, dialH, "BL", blNode and blNode.label or "BL", FlightCore.virtualOutputs.BL, FlightCore.engineOutputs.BL)
-            self:drawECAMDial(rightX + dialW + 1, instY + dialH, dialW, dialH, "BR", brNode and brNode.label or "BR", FlightCore.virtualOutputs.BR, FlightCore.engineOutputs.BR)
+
+            local statY = instY + cardH + 1
+            local statText = string.format(" STATUS: %s", FlightCore.state.statusMsg)
+            local statPad = w - #statText
+            self:safeBlit(1, statY, (statText .. string.rep(" ", math.max(0, statPad))):sub(1, w), "0", "7")
+
+            local btnAreaY = statY + 2
+            local remH = h - btnAreaY + 1
+            local bH = math.max(1, math.floor(remH / 3))
+
+            local bY1 = btnAreaY
+            local bW1 = math.floor((w - 6) / 5)
+            self:addBtn(2, bY1, bW1, bH, "+10m", "5", "0", function() FlightCore.adjustTargetAlt(10) end)
+            self:addBtn(3 + bW1, bY1, bW1, bH, "+1m", "5", "0", function() FlightCore.adjustTargetAlt(1) end)
+            self:addBtn(4 + bW1*2, bY1, bW1, bH, "-1m", "4", "0", function() FlightCore.adjustTargetAlt(-1) end)
+            self:addBtn(5 + bW1*3, bY1, bW1, bH, "-10m", "e", "0", function() FlightCore.adjustTargetAlt(-10) end)
+            self:addBtn(6 + bW1*4, bY1, bW1, bH, "SET CURR", "3", "0", function() FlightCore.lockCurrentAlt() end)
+
+            local bY2 = bY1 + bH + 1
+            local bW2 = math.floor((w - 5) / 4)
+            self:addBtn(2, bY2, bW2, bH, "BASE +", "3", "0", function() FlightCore.adjustBaseThrottle(1.0) end)
+            self:addBtn(3 + bW2, bY2, bW2, bH, "BASE -", "9", "0", function() FlightCore.adjustBaseThrottle(-1.0) end)
+            self:addBtn(4 + bW2*2, bY2, bW2, bH, "RE-SCAN", "b", "0", function() FlightCore.scanQuadTurtles(); FlightCore.state.statusMsg="Hardware Re-scanned!" end)
+            self:addBtn(5 + bW2*3, bY2, bW2, bH, "CALIBRATE", "a", "0", function() FlightCore.startCalibration() end)
+
+            local bY3 = bY2 + bH + 1
+            local mainBW = math.floor((w - 3) / 2)
+            local mainBH = math.max(bH, h - bY3 + 1)
+            local holdBg = (FlightCore.state.mode == "HOLD_ALT") and "5" or "d"
+            self:addBtn(2, bY3, mainBW, mainBH, " [ HOLD ALT ] ", holdBg, "0", function() FlightCore.holdAltitude() end)
+            local stopBg = (FlightCore.state.mode == "IDLE") and "e" or "c"
+            self:addBtn(3 + mainBW, bY3, mainBW, mainBH, " [ STOP / IDLE ] ", stopBg, "0", function() FlightCore.stopEngines() end)
+
+        elseif self.currentView == "PFD" then
+            local currAlt = FlightCore.altiSensor and FlightCore.altiSensor.getHeight() or 0
+            local currVspeed = FlightCore.altiSensor and FlightCore.altiSensor.getVerticalSpeed() or 0
+            local currPitch, currRoll = FlightCore.getGimbalData()
+
+            self:safeBlit(2, 3, string.format("CURRENT ALTITUDE : %7.1f m", currAlt), "0", "5")
+            self:safeBlit(2, 5, string.format("TARGET ALTITUDE  : %7.1f m", FlightCore.state.targetAlt), "0", "b")
+            self:safeBlit(2, 7, string.format("VERTICAL SPEED   : %+7.2f m/s", currVspeed), "0", "4")
+            self:safeBlit(2, 9, string.format("ATTITUDE GYRO    : P%+4.1f*  R%+4.1f*", currPitch, currRoll), "0", "8")
+            self:safeBlit(2, 11, string.format("SYSTEM STATUS    : %s", FlightCore.state.statusMsg:sub(1, w - 20)), "0", "7")
+
+            local bY = h - 3
+            local bW = math.floor((w - 7) / 6)
+            self:addBtn(2, bY, bW, 2, "+10m", "5", "0", function() FlightCore.adjustTargetAlt(10) end)
+            self:addBtn(3 + bW, bY, bW, 2, "+1m", "5", "0", function() FlightCore.adjustTargetAlt(1) end)
+            self:addBtn(4 + bW*2, bY, bW, 2, "-1m", "4", "0", function() FlightCore.adjustTargetAlt(-1) end)
+            self:addBtn(5 + bW*3, bY, bW, 2, "-10m", "e", "0", function() FlightCore.adjustTargetAlt(-10) end)
+            self:addBtn(6 + bW*4, bY, bW, 2, "HOLD", "5", "0", function() FlightCore.holdAltitude() end)
+            self:addBtn(7 + bW*5, bY, bW, 2, "STOP", "e", "0", function() FlightCore.stopEngines() end)
+
+        elseif self.currentView == "ECAM" then
+            local slots = {"FL", "FR", "BL", "BR"}
+            local colW = math.floor((w - 5) / 4)
+            for i, slot in ipairs(slots) do
+                local dx = 2 + (i - 1) * (colW + 1)
+                local node = FlightCore.engines[slot]
+                local lbl = node and (node.label or node.name or slot) or slot
+                local val = FlightCore.virtualOutputs[slot] or 0.0
+                local sig = FlightCore.engineOutputs[slot] or 0
+
+                for r = 3, 9 do
+                    self:safeBlit(dx, r, string.rep(" ", colW), "0", "7")
+                end
+                self:safeBlit(dx, 3, string.format(" [%s] ", lbl:sub(1, colW - 4)), "9", "8")
+                self:safeBlit(dx, 5, string.format("THR: %4.1f", val), "5", "7")
+                self:safeBlit(dx, 7, string.format("PWM: %2d", sig), "3", "7")
+            end
+
+            self:safeBlit(2, 11, string.format("BASE THRUST: %4.2f/15  |  STATUS: %s", FlightCore.state.baseThrottle, FlightCore.state.statusMsg:sub(1, w - 30)), "0", "b")
+
+            local bY = h - 3
+            local bW = math.floor((w - 7) / 6)
+            self:addBtn(2, bY, bW, 2, "BASE +", "3", "0", function() FlightCore.adjustBaseThrottle(1.0) end)
+            self:addBtn(3 + bW, bY, bW, 2, "BASE -", "9", "0", function() FlightCore.adjustBaseThrottle(-1.0) end)
+            self:addBtn(4 + bW*2, bY, bW, 2, "RE-SCAN", "b", "0", function() FlightCore.scanQuadTurtles(); FlightCore.state.statusMsg="Hardware Re-scanned!" end)
+            self:addBtn(5 + bW*3, bY, bW, 2, "CALIB 200", "a", "0", function() FlightCore.startCalibration() end)
+            self:addBtn(6 + bW*4, bY, bW, 2, "HOLD", "5", "0", function() FlightCore.holdAltitude() end)
+            self:addBtn(7 + bW*5, bY, bW, 2, "STOP", "e", "0", function() FlightCore.stopEngines() end)
+
+        elseif self.currentView == "NAV" then
+            local currAlt = FlightCore.altiSensor and FlightCore.altiSensor.getHeight() or 0
+            self:safeBlit(2, 3, string.format("ALT: %6.1fm  ->  TARGET: %6.1fm", currAlt, FlightCore.state.targetAlt), "0", "b")
+
+            local gridY = 5
+            local colW = math.floor((w - 3) / 2)
+            local rowH = math.max(2, math.floor((h - gridY - 2) / 3))
+
+            self:addBtn(2, gridY, colW, rowH, "[ 0m LANDING ]", "e", "0", function() FlightCore.setTargetAlt(0) end)
+            self:addBtn(3 + colW, gridY, colW, rowH, "[ 80m TREETOP ]", "5", "0", function() FlightCore.setTargetAlt(80) end)
+
+            self:addBtn(2, gridY + rowH + 1, colW, rowH, "[ 150m CRUISE ]", "3", "0", function() FlightCore.setTargetAlt(150) end)
+            self:addBtn(3 + colW, gridY + rowH + 1, colW, rowH, "[ 200m CALIBRATE ]", "a", "0", function() FlightCore.setTargetAlt(200) end)
+
+            self:addBtn(2, gridY + (rowH + 1)*2, colW, rowH, "[ 300m HIGH-ALT ]", "b", "0", function() FlightCore.setTargetAlt(300) end)
+            self:addBtn(3 + colW, gridY + (rowH + 1)*2, colW, rowH, "[ LOCK CURRENT ]", "4", "0", function() FlightCore.lockCurrentAlt() end)
+
+        elseif self.currentView == "SYS" then
+            local slots = {
+                {slot="FL", col=1, row=1, name="Front-Left Turtle"},
+                {slot="FR", col=2, row=1, name="Front-Right Turtle"},
+                {slot="BL", col=1, row=2, name="Back-Left Turtle"},
+                {slot="BR", col=2, row=2, name="Back-Right Turtle"}
+            }
+            local cardW = math.floor((w - 3) / 2)
+            local cardH = 3
+
+            for _, s in ipairs(slots) do
+                local cx = 2 + (s.col - 1) * (cardW + 1)
+                local cy = 3 + (s.row - 1) * (cardH + 1)
+                local node = FlightCore.engines[s.slot]
+                local online = node ~= nil
+                local bg = online and "5" or "e"
+
+                for r = 0, cardH - 1 do
+                    self:safeBlit(cx, cy + r, string.rep(" ", cardW), "0", bg)
+                end
+                self:safeBlit(cx + 1, cy, string.format("[%s] %s", s.slot, s.name:sub(1, cardW - 6)), "0", bg)
+                self:safeBlit(cx + 1, cy + 1, string.format("STATUS: %s", online and "ONLINE" or "OFFLINE"), "0", bg)
+            end
+
+            local btmY = h - 2
+            local btmW = math.floor((w - 3) / 2)
+            self:addBtn(2, btmY, btmW, 2, "RE-SCAN HARDWARE", "3", "0", function() FlightCore.scanQuadTurtles(); FlightCore.state.statusMsg="Hardware Re-scanned!" end)
+            self:addBtn(3 + btmW, btmY, btmW, 2, "STOP ALL ENGINES", "e", "0", function() FlightCore.stopEngines() end)
         end
 
-        local statusY = instY + cardH + 1
-        local statusRow = string.format("STATUS: %-40s", FlightCore.state.statusMsg):sub(1, w - 2)
-        self:safeBlit(2, statusY, statusRow, "0", "f")
-
-        self.buttons = {}
-        local bAreaY = statusY + 2
-        local bAreaH = math.max(3, h - bAreaY)
-        local bH = math.max(1, math.floor((bAreaH - 2) / 3))
-
-        local bY1 = bAreaY
-        local bW1 = math.floor((w - 6) / 5)
-        local function addBtn(x, y, bw, bh, text, bg, fg, act) table.insert(self.buttons, {x=x, y=y, w=bw, h=bh, text=text, bg=bg, fg=fg, action=act}) end
-
-        addBtn(2, bY1, bW1, bH, "+10m", "d", "0", function() FlightCore.adjustTargetAlt(10) end)
-        addBtn(3 + bW1, bY1, bW1, bH, "+1m", "5", "0", function() FlightCore.adjustTargetAlt(1) end)
-        addBtn(4 + bW1*2, bY1, bW1, bH, "-1m", "1", "0", function() FlightCore.adjustTargetAlt(-1) end)
-        addBtn(5 + bW1*3, bY1, bW1, bH, "-10m", "e", "0", function() FlightCore.adjustTargetAlt(-10) end)
-        addBtn(6 + bW1*4, bY1, bW1, bH, "SET CURR", "3", "0", function() FlightCore.lockCurrentAlt() end)
-
-        local bY2 = bY1 + bH + 1
-        local bW2 = math.floor((w - 5) / 4)
-        addBtn(2, bY2, bW2, bH, "BASE +", "3", "0", function() FlightCore.adjustBaseThrottle(1.0) end)
-        addBtn(3 + bW2, bY2, bW2, bH, "BASE -", "9", "0", function() FlightCore.adjustBaseThrottle(-1.0) end)
-        addBtn(4 + bW2*2, bY2, bW2, bH, "RE-SCAN", "b", "0", function() FlightCore.scanQuadTurtles(); FlightCore.state.statusMsg="Hardware Re-scanned!" end)
-        addBtn(5 + bW2*3, bY2, bW2, bH, "CALIBRATE", "a", "0", function() FlightCore.startCalibration() end)
-
-        local bY3 = bY2 + bH + 1
-        local mainBW = math.floor((w - 3) / 2)
-        local mainBH = math.max(bH, h - bY3)
-        local holdBg = (FlightCore.state.mode == "HOLD_ALT") and "5" or "d"
-        addBtn(2, bY3, mainBW, mainBH, " [ HOLD ALT ] ", holdBg, "0", function() FlightCore.holdAltitude() end)
-        local stopBg = (FlightCore.state.mode == "IDLE") and "e" or "c"
-        addBtn(3 + mainBW, bY3, mainBW, mainBH, " [ STOP / IDLE ] ", stopBg, "0", function() FlightCore.stopEngines() end)
-
+        -- 繪製所有按鈕
         for _, btn in ipairs(self.buttons) do
             for dy = 0, btn.h - 1 do
                 self:safeBlit(btn.x, btn.y + dy, string.rep(" ", btn.w), btn.fg, btn.bg)
