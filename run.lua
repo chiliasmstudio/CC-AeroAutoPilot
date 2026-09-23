@@ -240,7 +240,7 @@ function FlightCore.processModemMessages()
 end
 
 function FlightCore.outputToEngines(sigFL, sigFR, sigBL, sigBR)
-    local targets = { FL = sigFL, FR = sigFR, BL = sigBL, BR = sigBR }
+    local targets = { FL = sigFL, FR = sigFR, BL = sigBR, BR = sigBR }
 
     if FlightCore.masterModem then
         pcall(function()
@@ -507,7 +507,7 @@ Drivers.direct = {
     drawA350Dial = function(self, scr, cx, cy, r, val, maxVal, label, sig, slot)
         local gpu = scr.gpu
         local dispId = scr.displayId
-        local labelSize = math.max(10, math.floor(r * 0.44))
+        local labelSize = math.max(9, math.floor(r * 0.44))
         local lblOffset = math.floor(#label * (labelSize * 0.32))
         gpu.drawText(dispId, label, cx - lblOffset, cy - r - math.floor(labelSize * 1.1), 200, 230, 255, "Arial", labelSize, "bold")
 
@@ -540,16 +540,16 @@ Drivers.direct = {
         gpu.drawLine(dispId, cx, cy, nx, ny, 50, 255, 100)
         gpu.drawCircle(dispId, cx, cy, math.max(2, math.floor(r * 0.14)), 200, 220, 240, true)
 
-        local boxW = math.max(38, math.floor(r * 1.50))
-        local boxH = math.max(15, math.floor(r * 0.58))
+        local boxW = math.max(28, math.floor(r * 1.50))
+        local boxH = math.max(12, math.floor(r * 0.58))
         local boxX = cx - math.floor(boxW / 2)
         local boxY = cy + math.floor(r * 0.28)
         gpu.fillRect(dispId, boxX, boxY, boxW, boxH, 12, 18, 28)
         gpu.drawPolylines(dispId, {{boxX, boxY}, {boxX+boxW, boxY}, {boxX+boxW, boxY+boxH}, {boxX, boxY+boxH}, {boxX, boxY}}, 40, 150, 200)
 
         local valStr = string.format("%4.1f", val)
-        local numFontSize = math.max(10, math.floor(boxH * 0.70))
-        gpu.drawText(dispId, valStr, boxX + 4, boxY + 2, 70, 255, 120, "Arial", numFontSize, "bold")
+        local numFontSize = math.max(9, math.floor(boxH * 0.70))
+        gpu.drawText(dispId, valStr, boxX + 3, boxY + 2, 70, 255, 120, "Arial", numFontSize, "bold")
 
         local sigStr = string.format("PWM:%d", sig or 0)
         local sigFontSize = math.max(8, math.floor(boxH * 0.50))
@@ -566,6 +566,7 @@ Drivers.direct = {
         local dispInfo = gpu.getDisplayInfo(dispId)
         local sw = dispInfo.pixelWidth or 320
         local sh = dispInfo.pixelHeight or 240
+        local isWide = (sw >= 350)
         local isLarge = (sw >= 220 and sh >= 180)
 
         gpu.clear(dispId, 15, 20, 30)
@@ -578,14 +579,14 @@ Drivers.direct = {
         local headerH = isLarge and math.max(24, math.floor(sh * 0.08)) or 18
         gpu.fillRect(dispId, 0, 0, sw, headerH, 25, 40, 65)
 
-        local menuBtnW = isLarge and ((sw >= 260) and 65 or 45) or 32
+        local menuBtnW = (sw >= 240) and 50 or 26
         local menuBtnH = headerH - 4
-        local menuBtnX = sw - menuBtnW - 4
+        local menuBtnX = sw - menuBtnW - 3
         local menuBtnY = 2
         if scr.isMenuOpen then
             addBtn(menuBtnX, menuBtnY, menuBtnW, menuBtnH, "[X]", {190, 45, 45}, {255, 255, 255}, function() scr.isMenuOpen = false end)
         else
-            addBtn(menuBtnX, menuBtnY, menuBtnW, menuBtnH, isLarge and "[MENU]" or "[=]", {35, 80, 150}, {255, 255, 255}, function() scr.isMenuOpen = true end)
+            addBtn(menuBtnX, menuBtnY, menuBtnW, menuBtnH, (sw >= 240) and "[MENU]" or "[=]", {35, 80, 150}, {255, 255, 255}, function() scr.isMenuOpen = true end)
         end
 
         local titleFontSize = isLarge and math.max(10, math.min(14, math.floor(headerH * 0.48))) or 9
@@ -618,7 +619,7 @@ Drivers.direct = {
             local currVspeed = FlightCore.altiSensor and FlightCore.altiSensor.getVerticalSpeed() or 0
             local currPitch, currRoll = FlightCore.getGimbalData()
 
-            if isLarge then
+            if isWide then
                 local instY = headerH + 6
                 local instH = math.floor((sh - headerH) * 0.52)
                 local leftW = math.max(120, math.floor(sw * 0.35))
@@ -687,8 +688,8 @@ Drivers.direct = {
                 local stopBg = (FlightCore.state.mode == "IDLE") and {198, 40, 40} or {183, 28, 28}
                 addBtn(pfdX + bW3 + 4, bY3, bW3, rowH, "[ STOP / IDLE ]", stopBg, {255, 255, 255}, function() FlightCore.stopEngines() end)
             else
-                -- 緊湊小螢幕版 (< 3x3)
-                local instY = headerH + 3
+                -- 緊湊/直立螢幕版 (2x2 Quad Engine 矩陣)
+                local instY = headerH + 4
                 local instH = math.floor((sh - headerH) * 0.54)
                 local colW = math.floor((sw - 14) / 2)
                 local pfdX = 4
@@ -698,13 +699,13 @@ Drivers.direct = {
                 gpu.fillRect(dispId, pfdX, instY, colW, instH, 20, 26, 38)
                 gpu.drawText(dispId, "ALT/ATT", pfdX + 4, instY + 3, 170, 210, 230, "Arial", 9, "bold")
 
-                local gR = math.min(14, math.floor(instH * 0.26))
-                local gCX = pfdX + 16
+                local gR = math.min(16, math.floor(instH * 0.26))
+                local gCX = pfdX + 18
                 local gCY = instY + math.floor(instH * 0.60)
                 gpu.drawCircle(dispId, gCX, gCY, gR, 80, 170, 240, true)
-                gpu.drawText(dispId, string.format("%.0f", currAlt), gCX - 6, gCY - 4, 255, 255, 255, "Arial", 9, "bold")
+                gpu.drawText(dispId, string.format("%.0f", currAlt), gCX - 7, gCY - 4, 255, 255, 255, "Arial", 9, "bold")
 
-                local textX = pfdX + 34
+                local textX = pfdX + 38
                 local rowSpacing = math.floor((instH - 16) / 4)
                 gpu.drawText(dispId, string.format("T:%.0f", FlightCore.state.targetAlt), textX, instY + 12, 80, 230, 255, "Arial", 9, "bold")
                 gpu.drawText(dispId, string.format("V:%+.1f", currVspeed), textX, instY + 12 + rowSpacing, 255, 205, 75, "Arial", 9, "bold")
@@ -728,20 +729,20 @@ Drivers.direct = {
                     local qH = FlightCore.getQuadHealth(ms.slot)
                     local val = FlightCore.virtualOutputs[ms.slot]
                     gpu.fillRect(dispId, sx, sy, subW, subH, 24, 32, 46)
-                    gpu.drawText(dispId, ms.slot, sx + 2, sy + 2, 200, 230, 255, "Arial", 8, "bold")
+                    gpu.drawText(dispId, string.format("%s %dE", ms.slot, qH.total), sx + 2, sy + 2, 200, 230, 255, "Arial", 8, "bold")
                     gpu.drawText(dispId, string.format("%4.1f", val), sx + 2, sy + math.max(10, subH - 9), 70, 255, 120, "Arial", 8, "plain")
                 end
 
                 -- 底部狀態
-                local statY = instY + instH + 3
-                local statH = 14
+                local statY = instY + instH + 4
+                local statH = 15
                 gpu.fillRect(dispId, pfdX, statY, sw - 8, statH, 30, 36, 50)
                 local maxStatChars = math.max(6, math.floor((sw - 20) / 6))
-                gpu.drawText(dispId, string.format("ST: %s", FlightCore.state.statusMsg:sub(1, maxStatChars)), pfdX + 4, statY + 2, 80, 230, 255, "Arial", 9, "bold")
+                gpu.drawText(dispId, string.format("STATUS: %s", FlightCore.state.statusMsg:sub(1, maxStatChars)), pfdX + 4, statY + 3, 80, 230, 255, "Arial", 9, "bold")
 
                 -- 底部按鈕
-                local btnAreaY = statY + statH + 3
-                local btnAreaH = sh - btnAreaY - 2
+                local btnAreaY = statY + statH + 4
+                local btnAreaH = sh - btnAreaY - 3
                 local rowH = math.floor((btnAreaH - 3) / 2)
                 local bW4 = math.floor((sw - 8 - 9) / 4)
                 addBtn(pfdX, btnAreaY, bW4, rowH, "+10", {27, 94, 32}, {255, 255, 255}, function() FlightCore.adjustTargetAlt(10) end)
@@ -826,7 +827,7 @@ Drivers.direct = {
                 local qH = FlightCore.getQuadHealth(q.slot)
                 local online = qH.online > 0
 
-                if isLarge then
+                if isLarge and (quadW >= 110) then
                     local titleCol = online and {180, 230, 255} or {255, 120, 120}
                     gpu.drawText(dispId, q.title, qx + 6, qy + 4, titleCol[1], titleCol[2], titleCol[3], "Arial", 10, "bold")
 
@@ -843,7 +844,7 @@ Drivers.direct = {
                     local statCol = (qH.online > 0) and {80, 255, 120} or {255, 80, 80}
                     gpu.drawText(dispId, statText, qx + 6, qy + quadH - 12, statCol[1], statCol[2], statCol[3], "Arial", 9, "bold")
                 else
-                    -- 緊湊小螢幕版
+                    -- 緊湊/直立螢幕版
                     local qTitle = string.format("[%s] %dE", q.slot, qH.total)
                     local titleCol = online and {180, 230, 255} or {255, 120, 120}
                     gpu.drawText(dispId, qTitle, qx + 3, qy + 3, titleCol[1], titleCol[2], titleCol[3], "Arial", 8, "bold")
@@ -1154,49 +1155,33 @@ Drivers.tom = {
             local bitmap = FONT_5X7[ch] or FONT_5X7['?']
 
             if bitmap then
-                if scale == 1 then
-                    for col = 1, 5 do
-                        local byte = bitmap[col]
-                        local px = curX + col - 1
-                        if px >= 1 and px <= sw then
-                            local runStart = nil
-                            local runLen = 0
-                            for row = 0, 6 do
-                                if (math.floor(byte / POW2[row]) % 2) == 1 then
-                                    local py = y + row
-                                    if py >= 1 and py <= sh then
-                                        if not runStart then runStart = py end
-                                        runLen = runLen + 1
+                for col = 1, 5 do
+                    local byte = bitmap[col]
+                    local px = curX + (col - 1) * scale
+                    if px >= 1 and px <= sw then
+                        local runStart = nil
+                        local runLen = 0
+                        for row = 0, 6 do
+                            if (math.floor(byte / POW2[row]) % 2) == 1 then
+                                if not runStart then runStart = row end
+                                runLen = runLen + 1
+                            else
+                                if runStart then
+                                    local py = y + runStart * scale
+                                    local ph = runLen * scale
+                                    if py <= sh then
+                                        pcall(function() scr.gpu.filledRectangle(px, py, scale, ph, argb) end)
                                     end
-                                else
-                                    if runStart then
-                                        if runLen == 1 then
-                                            pcall(function() scr.gpu.pixel(px, runStart, argb) end)
-                                        else
-                                            pcall(function() scr.gpu.line(px, runStart, px, runStart + runLen - 1, argb) end)
-                                        end
-                                        runStart = nil
-                                        runLen = 0
-                                    end
-                                end
-                            end
-                            if runStart then
-                                if runLen == 1 then
-                                    pcall(function() scr.gpu.pixel(px, runStart, argb) end)
-                                else
-                                    pcall(function() scr.gpu.line(px, runStart, px, runStart + runLen - 1, argb) end)
+                                    runStart = nil
+                                    runLen = 0
                                 end
                             end
                         end
-                    end
-                else
-                    for col = 1, 5 do
-                        local byte = bitmap[col]
-                        local px = curX + (col - 1) * scale
-                        for row = 0, 6 do
-                            if (math.floor(byte / POW2[row]) % 2) == 1 then
-                                local py = y + row * scale
-                                pcall(function() scr.gpu.filledRectangle(px, py, scale, scale, argb) end)
+                        if runStart then
+                            local py = y + runStart * scale
+                            local ph = runLen * scale
+                            if py <= sh then
+                                pcall(function() scr.gpu.filledRectangle(px, py, scale, ph, argb) end)
                             end
                         end
                     end
@@ -1214,6 +1199,7 @@ Drivers.tom = {
         local ok, w, h = pcall(function() return scr.gpu.getSize() end)
         if ok and w and h and w > 0 and h > 0 then scr.screenW, scr.screenH = w, h end
         local sw, sh = scr.screenW, scr.screenH
+        local isWide = (sw >= 350)
         local isLarge = (sw >= 220 and sh >= 180)
 
         local function toARGB(c) return self:toARGB(c) end
@@ -1262,14 +1248,14 @@ Drivers.tom = {
         local headerH = isLarge and math.max(22, math.floor(sh * 0.08)) or 16
         sFR(1, 1, sw, headerH, 0x192841)
 
-        local menuBtnW = isLarge and ((sw >= 260) and 60 or 44) or 26
+        local menuBtnW = (sw >= 240) and 50 or 26
         local menuBtnH = headerH - 3
         local menuBtnX = sw - menuBtnW - 3
         local menuBtnY = 2
         if scr.isMenuOpen then
             addBtn(menuBtnX, menuBtnY, menuBtnW, menuBtnH, "[X]", 0x992222, 0xFFFFFF, function() scr.isMenuOpen = false end)
         else
-            addBtn(menuBtnX, menuBtnY, menuBtnW, menuBtnH, isLarge and "[MENU]" or "[=]", 0x224488, 0xFFFFFF, function() scr.isMenuOpen = true end)
+            addBtn(menuBtnX, menuBtnY, menuBtnW, menuBtnH, (sw >= 240) and "[MENU]" or "[=]", 0x224488, 0xFFFFFF, function() scr.isMenuOpen = true end)
         end
 
         local maxTitleW = menuBtnX - 12
@@ -1307,7 +1293,8 @@ Drivers.tom = {
             local currVspeed = FlightCore.altiSensor and FlightCore.altiSensor.getVerticalSpeed() or 0
             local currPitch, currRoll = FlightCore.getGimbalData()
 
-            if isLarge then
+            if isWide then
+                -- 超寬大型螢幕模式 (橫排 4 儀表)
                 local instY = headerH + 5
                 local instH = math.floor((sh - headerH) * 0.52)
                 local leftW = math.max(120, math.floor(sw * 0.35))
@@ -1404,8 +1391,8 @@ Drivers.tom = {
                 local stopBg = (FlightCore.state.mode == "IDLE") and 0xC62828 or 0xB71C1C
                 addBtn(pfdX + bW3 + 4, bY3, bW3, rowH, "[ STOP / IDLE ]", stopBg, 0xFFFFFF, function() FlightCore.stopEngines() end)
             else
-                -- 緊湊小螢幕版 (< 3x3, e.g. 128x128 ~ 160x160)
-                local instY = headerH + 3
+                -- 緊湊/直式多螢幕自適應模式 (2x2 Quad Engine 矩陣排布，徹底杜絕文字儀表擠壓)
+                local instY = headerH + 4
                 local instH = math.floor((sh - headerH) * 0.54)
                 local colW = math.floor((sw - 14) / 2)
                 local pfdX = 4
@@ -1414,10 +1401,10 @@ Drivers.tom = {
                 -- 左側: PFD / 姿態
                 sFR(pfdX, instY, colW, instH, 0x141A26)
                 sR(pfdX, instY, colW, instH, 0x283850)
-                sTxt(pfdX + 3, instY + 3, "ALT/ATT", 0xAAD2E6, 1)
+                sTxt(pfdX + 4, instY + 3, "ALT/ATT", 0xAAD2E6, 1)
 
-                local gR = math.min(14, math.floor(instH * 0.26))
-                local gCX = pfdX + 16
+                local gR = math.min(18, math.floor(instH * 0.26))
+                local gCX = pfdX + 20
                 local gCY = instY + math.floor(instH * 0.60)
                 for dy = -gR, gR do
                     local dx = math.floor(math.sqrt(math.max(0, gR*gR - dy*dy)) + 0.5)
@@ -1427,7 +1414,7 @@ Drivers.tom = {
                 local altText = string.format("%.0f", currAlt)
                 sTxt(gCX - math.floor(#altText * 3), gCY - 3, altText, 0xFFFFFF, 1)
 
-                local textX = pfdX + 34
+                local textX = pfdX + 42
                 local rowSpacing = math.floor((instH - 16) / 4)
                 sTxt(textX, instY + 12, string.format("T:%.0f", FlightCore.state.targetAlt), 0x50E6FF, 1)
                 sTxt(textX, instY + 12 + rowSpacing, string.format("V:%+.1f", currVspeed), 0xFFCD4B, 1)
@@ -1435,7 +1422,7 @@ Drivers.tom = {
                 sTxt(textX, instY + 12 + rowSpacing * 2, string.format("M:%s", FlightCore.state.mode:sub(1,4)), mCol, 1)
                 sTxt(textX, instY + 12 + rowSpacing * 3, string.format("P:%+.0f", currPitch), 0xB4DCFF, 1)
 
-                -- 右側: 2x2 Mini Quad Engines (完全獨立區塊，絕不擠壓重疊)
+                -- 右側: 2x2 Mini Quad Engines (直觀象限四區塊)
                 sFR(ecamX, instY, colW, instH, 0x121822)
                 sR(ecamX, instY, colW, instH, 0x283850)
 
@@ -1454,21 +1441,21 @@ Drivers.tom = {
                     local val = FlightCore.virtualOutputs[ms.slot]
                     sFR(sx, sy, subW, subH, 0x18202E)
                     sR(sx, sy, subW, subH, (qH.online > 0) and 0x284864 or 0x642828)
-                    sTxt(sx + 2, sy + 2, ms.slot, 0xC8E6FF, 1)
+                    sTxt(sx + 2, sy + 2, string.format("%s %dE", ms.slot, qH.total), 0xC8E6FF, 1)
                     sTxt(sx + 2, sy + math.max(10, subH - 9), string.format("%4.1f", val), 0x46FF78, 1)
                 end
 
                 -- 底部狀態列
-                local statY = instY + instH + 3
-                local statH = 13
+                local statY = instY + instH + 4
+                local statH = 15
                 sFR(pfdX, statY, sw - 8, statH, 0x1E2432)
                 sR(pfdX, statY, sw - 8, statH, 0x3C4B64)
                 local maxStatChars = math.max(6, math.floor((sw - 20) / 6))
-                sTxt(pfdX + 4, statY + 3, string.format("ST: %s", FlightCore.state.statusMsg:sub(1, maxStatChars)), 0x50E6FF, 1)
+                sTxt(pfdX + 4, statY + 4, string.format("STATUS: %s", FlightCore.state.statusMsg:sub(1, maxStatChars)), 0x50E6FF, 1)
 
                 -- 底部按鈕群
-                local btnAreaY = statY + statH + 3
-                local btnAreaH = sh - btnAreaY - 2
+                local btnAreaY = statY + statH + 4
+                local btnAreaH = sh - btnAreaY - 3
                 local rowH = math.floor((btnAreaH - 3) / 2)
                 local bW4 = math.floor((sw - 8 - 9) / 4)
                 addBtn(pfdX, btnAreaY, bW4, rowH, "+10", 0x1B5E20, 0xFFFFFF, function() FlightCore.adjustTargetAlt(10) end)
@@ -1534,7 +1521,7 @@ Drivers.tom = {
             addBtn(6 + (bW+4)*3, bY, bW, bH, "STOP", stopBg, 0xFFFFFF, function() FlightCore.stopEngines() end)
 
         elseif scr.currentView == "ECAM" then
-            -- 2x2 四象限發動機直觀監控 (自適應大小)
+            -- 2x2 四象限發動機直觀監控
             local topY = headerH + 3
             local btmH = isLarge and 22 or 14
             local areaH = sh - topY - btmH - 4
@@ -1557,7 +1544,7 @@ Drivers.tom = {
                 local qH = FlightCore.getQuadHealth(q.slot)
                 local online = qH.online > 0
 
-                if isLarge then
+                if isLarge and (quadW >= 110) then
                     sTxt(qx + 6, qy + 4, q.title, online and 0xC8E6FF or 0xFF7878, 1)
 
                     local engCountStr = string.format("ENG:%d", qH.total)
@@ -1593,7 +1580,7 @@ Drivers.tom = {
                     if qH.total == 0 then statText = "NO ENG" end
                     sTxt(qx + 6, qy + quadH - 10, statText, (qH.online > 0) and 0x50FF78 or 0xFF5050, 1)
                 else
-                    -- 緊湊小螢幕版 (< 3x3): 徹底解決重疊
+                    -- 緊湊/直立螢幕版
                     local qTitle = string.format("[%s] %dE", q.slot, qH.total)
                     sTxt(qx + 3, qy + 3, qTitle, online and 0xC8E6FF or 0xFF7878, 1)
 
@@ -1620,7 +1607,6 @@ Drivers.tom = {
                     local valStr = string.format("%4.1f", FlightCore.virtualOutputs[q.slot])
                     sTxt(boxX + 1, boxY + 1, valStr, 0x46FF78, 1)
 
-                    -- 底部狀態：左邊 PWM，右邊 ACT，絕不上下碰撞
                     local btmLineY = qy + quadH - 9
                     sTxt(qx + 3, btmLineY, string.format("P:%d", FlightCore.engineOutputs[q.slot] or 0), 0x96BEE1, 1)
                     local actStr = string.format("%d/%d", qH.online, qH.total)
@@ -1999,7 +1985,7 @@ Drivers.normal = {
 
         elseif scr.currentView == "CTRL" then
             local currAlt = FlightCore.altiSensor and FlightCore.altiSensor.getHeight() or 0
-            self:safeBlit(scr, 2, 3, string.format("[%s] ALT:%.0f->%.0f | B:%.2f", FlightCore.state.mode:sub(1,6), currAlt, FlightCore.state.targetAlt, FlightCore.state.baseThrottle), "0", "b")
+            self:safeBlit(scr, 2, 3, string.format("[%s] ALT:%.0f->%.0f | B:%.2f", FlightCore.state.mode:sub(1,6)), currAlt, FlightCore.state.targetAlt, FlightCore.state.baseThrottle), "0", "b")
 
             local rowH = math.max(2, math.floor((h - 7) / 3))
 
