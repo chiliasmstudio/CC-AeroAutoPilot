@@ -306,11 +306,10 @@ local Driver = {
                     local val = FlightCore.virtualOutputs[ms.slot]
                     local online = qH.online > 0
 
-                    sFR(sx, sy, subW, subH, 0x18202E)
-                    sR(sx, sy, subW, subH, online and 0x284864 or 0x642828)
-                    sTxt(sx + 4, sy + 3, string.format("[%s] %d ENG", ms.slot, qH.total), 0xC8E6FF, 1)
+                    local slotTitle = (subW < 100) and string.format("[%s]", ms.slot) or string.format("[%s] %d ENG", ms.slot, qH.total)
+                    sTxt(sx + 4, sy + 3, slotTitle, 0xC8E6FF, 1)
                     local onCol = online and 0x50FF78 or 0xFF5050
-                    local onText = string.format("%d/%d ON", qH.online, qH.total)
+                    local onText = (subW < 80) and string.format("%d/%d", qH.online, qH.total) or string.format("%d/%d ON", qH.online, qH.total)
                     sTxt(sx + subW - #onText * 6 - 4, sy + 3, onText, onCol, 1)
 
                     -- 動態油門條
@@ -324,7 +323,8 @@ local Driver = {
                     sR(sx + 4, barY, barW, barH, 0x3C4B64)
 
                     -- 數值指示
-                    sTxt(sx + 4, sy + subH - 10, string.format("THR: %4.1f/15", val), 0x46FF78, 1)
+                    local thrText = (subW < 90) and string.format("%.1f", val) or string.format("THR: %.1f", val)
+                    sTxt(sx + 4, sy + subH - 10, thrText, 0x46FF78, 1)
                     local pwmText = string.format("PWM:%d", FlightCore.engineOutputs[ms.slot] or 0)
                     sTxt(sx + subW - #pwmText * 6 - 4, sy + subH - 10, pwmText, 0x96BEE1, 1)
                 end
@@ -556,9 +556,10 @@ local Driver = {
 
                 if isFull and (quadW >= 110) then
                     local titleCol = online and 0xB4E6FF or 0xFF7878
-                    sTxt(qx + 6, qy + 4, q.title, titleCol, 1)
+                    local titleStr = (quadW < 160) and string.format("[%s] QUAD", q.slot) or q.title
+                    sTxt(qx + 6, qy + 4, titleStr, titleCol, 1)
 
-                    local engCountStr = string.format("ENG:%d", qH.total)
+                    local engCountStr = (quadW < 130) and string.format("%dE", qH.total) or string.format("ENG:%d", qH.total)
                     sTxt(qx + quadW - #engCountStr * 6 - 6, qy + 4, engCountStr, 0x96BEE6, 1)
 
                     -- 圓形刻度盤 (Tom's GPU)
@@ -635,7 +636,8 @@ local Driver = {
 
                 local textOffY = instY + 36
                 local rowSp = math.max(12, math.floor((instH - 42) / 3))
-                sTxt(c1X + 8, textOffY, string.format("TARGET: %5.1fm (DIFF:%+5.1fm)", FlightCore.state.targetAlt, FlightCore.state.targetAlt - currAlt), 0x50E6FF, 1)
+                local tgtStr = (cardW < 170) and string.format("TGT:%.0fm (DIFF:%+.0fm)", FlightCore.state.targetAlt, FlightCore.state.targetAlt - currAlt) or string.format("TARGET: %5.1fm (DIFF:%+5.1fm)", FlightCore.state.targetAlt, FlightCore.state.targetAlt - currAlt)
+                sTxt(c1X + 8, textOffY, tgtStr, 0x50E6FF, 1)
                 local vsCol = (math.abs(currVspeed) < 0.2) and 0x50FF78 or 0xFFCD4B
                 sTxt(c1X + 8, textOffY + rowSp, string.format("V.SPEED: %+5.2f m/s", currVspeed), vsCol, 1)
                 local mCol = (FlightCore.state.mode == "HOLD_ALT") and 0x50FF78 or ((FlightCore.state.mode == "CALIBRATING") and 0xFFCD4B or 0xFF5050)
@@ -645,12 +647,14 @@ local Driver = {
                 sFR(c2X, instY, cardW, instH, 0x141E2B)
                 sR(c2X, instY, cardW, instH, 0x284864)
                 sTxt(c2X + 6, instY + 4, "ATTITUDE & PROPULSION", 0x8CA0B4, 1)
-                sTxt(c2X + 8, instY + 18, string.format("BASE: %4.2f / 15.0", FlightCore.state.baseThrottle), 0x50FF78, 2)
+                local baseStr = (cardW < 170) and string.format("BASE: %4.2f", FlightCore.state.baseThrottle) or string.format("BASE: %4.2f / 15.0", FlightCore.state.baseThrottle)
+                sTxt(c2X + 8, instY + 18, baseStr, 0x50FF78, 2)
                 sTxt(c2X + 8, textOffY, string.format("GYRO: P:%+4.1f*  R:%+4.1f*", currPitch, currRoll), 0xB4DCFF, 1)
 
-                local quadSummary = string.format("FL:%.1f FR:%.1f BL:%.1f BR:%.1f", FlightCore.virtualOutputs.FL, FlightCore.virtualOutputs.FR, FlightCore.virtualOutputs.BL, FlightCore.virtualOutputs.BR)
+                local quadSummary = (cardW < 170) and string.format("F:%.1f,%.1f B:%.1f,%.1f", FlightCore.virtualOutputs.FL, FlightCore.virtualOutputs.FR, FlightCore.virtualOutputs.BL, FlightCore.virtualOutputs.BR) or string.format("FL:%.1f FR:%.1f BL:%.1f BR:%.1f", FlightCore.virtualOutputs.FL, FlightCore.virtualOutputs.FR, FlightCore.virtualOutputs.BL, FlightCore.virtualOutputs.BR)
                 sTxt(c2X + 8, textOffY + rowSp, quadSummary, 0xFFCD4B, 1)
-                sTxt(c2X + 8, textOffY + rowSp * 2, "SYSTEM: BALANCED & SYNCED", 0x50E6FF, 1)
+                local sysSummary = (cardW < 170) and "SYS: BALANCED & SYNCED" or "SYSTEM: BALANCED & SYNCED"
+                sTxt(c2X + 8, textOffY + rowSp * 2, sysSummary, 0x50E6FF, 1)
 
                 -- 中段狀態列
                 sFR(6, statY, sw - 12, statH, 0x1E2432)

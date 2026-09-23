@@ -243,9 +243,10 @@ local Driver = {
                     local online = qH.online > 0
 
                     gpu.fillRect(dispId, sx, sy, subW, subH, 24, 32, 46)
-                    gpu.drawText(dispId, string.format("[%s] %d ENG", ms.slot, qH.total), sx + 4, sy + 3, 200, 230, 255, "Arial", 9, "bold")
+                    local slotTitle = (subW < 100) and string.format("[%s]", ms.slot) or string.format("[%s] %d ENG", ms.slot, qH.total)
+                    gpu.drawText(dispId, slotTitle, sx + 4, sy + 3, 200, 230, 255, "Arial", 9, "bold")
                     local onCol = online and {80, 255, 120} or {255, 80, 80}
-                    local onText = string.format("%d/%d ON", qH.online, qH.total)
+                    local onText = (subW < 80) and string.format("%d/%d", qH.online, qH.total) or string.format("%d/%d ON", qH.online, qH.total)
                     gpu.drawText(dispId, onText, sx + subW - math.floor(#onText * 6) - 4, sy + 3, onCol[1], onCol[2], onCol[3], "Arial", 9, "bold")
 
                     -- 動態油門條
@@ -258,7 +259,8 @@ local Driver = {
                     if fillW > 0 then gpu.fillRect(dispId, sx + 4, barY, fillW, barH, barCol[1], barCol[2], barCol[3]) end
 
                     -- 數值指示
-                    gpu.drawText(dispId, string.format("THR: %4.1f/15", val), sx + 4, sy + subH - 11, 70, 255, 120, "Arial", 9, "bold")
+                    local thrText = (subW < 90) and string.format("%.1f", val) or string.format("THR: %.1f", val)
+                    gpu.drawText(dispId, thrText, sx + 4, sy + subH - 11, 70, 255, 120, "Arial", 9, "bold")
                     local pwmText = string.format("PWM:%d", FlightCore.engineOutputs[ms.slot] or 0)
                     gpu.drawText(dispId, pwmText, sx + subW - math.floor(#pwmText * 6) - 4, sy + subH - 11, 150, 190, 225, "Arial", 8, "plain")
                 end
@@ -474,9 +476,10 @@ local Driver = {
 
                 if isFull and (quadW >= 110) then
                     local titleCol = online and {180, 230, 255} or {255, 120, 120}
-                    gpu.drawText(dispId, q.title, qx + 6, qy + 4, titleCol[1], titleCol[2], titleCol[3], "Arial", 10, "bold")
+                    local titleStr = (quadW < 160) and string.format("[%s] QUAD", q.slot) or q.title
+                    gpu.drawText(dispId, titleStr, qx + 6, qy + 4, titleCol[1], titleCol[2], titleCol[3], "Arial", 10, "bold")
 
-                    local engCountStr = string.format("ENG:%d", qH.total)
+                    local engCountStr = (quadW < 130) and string.format("%dE", qH.total) or string.format("ENG:%d", qH.total)
                     gpu.drawText(dispId, engCountStr, qx + quadW - math.floor(#engCountStr * 6) - 6, qy + 4, 150, 190, 230, "Arial", 9, "plain")
 
                     local dialR = math.min(math.floor(quadW * 0.28), math.floor(quadH * 0.28))
@@ -539,7 +542,8 @@ local Driver = {
 
                 local textOffY = instY + 36
                 local rowSp = math.max(12, math.floor((instH - 42) / 3))
-                gpu.drawText(dispId, string.format("TARGET: %5.1fm (DIFF:%+5.1fm)", FlightCore.state.targetAlt, FlightCore.state.targetAlt - currAlt), c1X + 8, textOffY, 80, 230, 255, "Arial", 9, "bold")
+                local tgtStr = (cardW < 170) and string.format("TGT:%.0fm (DIFF:%+.0fm)", FlightCore.state.targetAlt, FlightCore.state.targetAlt - currAlt) or string.format("TARGET: %5.1fm (DIFF:%+5.1fm)", FlightCore.state.targetAlt, FlightCore.state.targetAlt - currAlt)
+                gpu.drawText(dispId, tgtStr, c1X + 8, textOffY, 80, 230, 255, "Arial", 9, "bold")
                 local vsCol = (math.abs(currVspeed) < 0.2) and {80, 255, 120} or {255, 205, 75}
                 gpu.drawText(dispId, string.format("V.SPEED: %+5.2f m/s", currVspeed), c1X + 8, textOffY + rowSp, vsCol[1], vsCol[2], vsCol[3], "Arial", 9, "bold")
                 local mCol = (FlightCore.state.mode == "HOLD_ALT") and {80, 255, 120} or ((FlightCore.state.mode == "CALIBRATING") and {255, 205, 75} or {255, 80, 80})
@@ -549,12 +553,14 @@ local Driver = {
                 gpu.fillRect(dispId, c2X, instY, cardW, instH, 20, 30, 43)
                 gpu.drawText(dispId, "ATTITUDE & PROPULSION", c2X + 6, instY + 4, 140, 160, 180, "Arial", 9, "bold")
 
-                gpu.drawText(dispId, string.format("BASE: %4.2f / 15.0", FlightCore.state.baseThrottle), c2X + 8, instY + 18, 80, 255, 120, "Arial", 14, "bold")
+                local baseStr = (cardW < 170) and string.format("BASE: %4.2f", FlightCore.state.baseThrottle) or string.format("BASE: %4.2f / 15.0", FlightCore.state.baseThrottle)
+                gpu.drawText(dispId, baseStr, c2X + 8, instY + 18, 80, 255, 120, "Arial", 14, "bold")
                 gpu.drawText(dispId, string.format("GYRO: P:%+4.1f*  R:%+4.1f*", currPitch, currRoll), c2X + 8, textOffY, 180, 220, 255, "Arial", 9, "bold")
 
-                local quadSummary = string.format("FL:%.1f FR:%.1f BL:%.1f BR:%.1f", FlightCore.virtualOutputs.FL, FlightCore.virtualOutputs.FR, FlightCore.virtualOutputs.BL, FlightCore.virtualOutputs.BR)
+                local quadSummary = (cardW < 170) and string.format("F:%.1f,%.1f B:%.1f,%.1f", FlightCore.virtualOutputs.FL, FlightCore.virtualOutputs.FR, FlightCore.virtualOutputs.BL, FlightCore.virtualOutputs.BR) or string.format("FL:%.1f FR:%.1f BL:%.1f BR:%.1f", FlightCore.virtualOutputs.FL, FlightCore.virtualOutputs.FR, FlightCore.virtualOutputs.BL, FlightCore.virtualOutputs.BR)
                 gpu.drawText(dispId, quadSummary, c2X + 8, textOffY + rowSp, 255, 205, 75, "Arial", 9, "bold")
-                gpu.drawText(dispId, "SYSTEM: BALANCED & SYNCED", c2X + 8, textOffY + rowSp * 2, 80, 230, 255, "Arial", 9, "bold")
+                local sysSummary = (cardW < 170) and "SYS: BALANCED & SYNCED" or "SYSTEM: BALANCED & SYNCED"
+                gpu.drawText(dispId, sysSummary, c2X + 8, textOffY + rowSp * 2, 80, 230, 255, "Arial", 9, "bold")
 
                 -- 中段狀態列
                 gpu.fillRect(dispId, 6, statY, sw - 12, statH, 30, 36, 50)
