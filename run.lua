@@ -1,11 +1,11 @@
 --[[
     Create: Avionics & CC: Tweaked
     Unified Multi-Engine Avionics Flight Computer (多軸模組化統一飛控大腦)
-    Version: v3.8.0 (Dual Size Mode: 5x5+ Full Avionics vs 3x3~4x5 Compact Edition)
+    Version: v3.8.2 Modular Bundle
     
     螢幕尺寸自適應分類 (Dual Screen Size Mode):
     - 完整顯示螢幕 (>= 5x5): 啟動超大 A350 儀表、細緻多引擎遙測與 3 排完整控制面板。
-    - 精簡版本螢幕 (3x3 ~ 4x5, 如 3x3, 4x4, 5x4, 4x5): 啟動 2x2 四象限精簡佈局，高度防重疊排版與雙排/單排按鈕。
+    - 精簡版本螢幕 (3x3 ~ 4x5, 如 3x3, 4x4, 5x4, 4x5): 啟動 2x2 四象限精簡佈局，高度防重疊排版與雙排按鈕。
 
     6 大功能視圖 (6 Major Glass Cockpit Views):
       1. OVERVIEW (綜合駕駛艙: 姿態儀 + 四象限動力 + 精簡控制)
@@ -22,13 +22,14 @@
       run.lua normal       (強制使用 CC: Tweaked 原生螢幕/終端機驅動，支援多螢幕)
 --]]
 
-local VERSION = "v3.8.0"
+local VERSION = "v3.8.2"
 local args = {...}
 local requestedDriver = args[1] and string.lower(args[1]) or "auto"
 
 -- ========================================================
 -- PART 1: 飛控與動力控制核心 (FLIGHT & PROPULSION CORE - BACKEND)
 -- ========================================================
+
 local FlightCore = {}
 
 -- 1.1 內建 PID 控制器
@@ -1214,6 +1215,7 @@ Drivers.direct = {
     end
 }
 
+
 -- --------------------------------------------------------
 -- 2.2 驅動 B: Tom's Peripherals 全彩點陣向量儀表 (支援多 GPU 螢幕聯動)
 -- --------------------------------------------------------
@@ -2132,8 +2134,9 @@ Drivers.tom = {
     end
 }
 
+
 -- --------------------------------------------------------
--- 2.3 驅動 C: CC: Tweaked 原生螢幕/終端機 (文字終端與原生 Monitor)
+-- 2.3 驅動 C: CC 原生進階彩色螢幕 (CC: Tweaked Monitor / Terminal)
 -- --------------------------------------------------------
 Drivers.normal = {
     screens = {},
@@ -2585,6 +2588,7 @@ Drivers.normal = {
         end
     end
 }
+
 
 -- ========================================================
 -- PART 3: 主事件循環與初始化 (SYSTEM ORCHESTRATOR)
