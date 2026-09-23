@@ -874,42 +874,120 @@ Drivers.direct = {
             end
 
         elseif scr.currentView == "CTRL" then
-            local topY = headerH + 5
-            local topH = isLarge and 32 or 20
-            gpu.fillRect(dispId, 6, topY, sw - 12, topH, 20, 28, 42)
-            local mCol = (FlightCore.state.mode == "HOLD_ALT") and {80, 255, 120} or {255, 80, 80}
-            gpu.drawText(dispId, string.format("[%s]", FlightCore.state.mode:sub(1,6)), 10, topY + 5, mCol[1], mCol[2], mCol[3], "Arial", 10, "bold")
             local currAlt = FlightCore.altiSensor and FlightCore.altiSensor.getHeight() or 0
-            gpu.drawText(dispId, string.format("ALT:%.0f->%.0f | B:%.2f", currAlt, FlightCore.state.targetAlt, FlightCore.state.baseThrottle), 75, topY + 5, 200, 230, 255, "Arial", 9, "plain")
+            local currVspeed = FlightCore.altiSensor and FlightCore.altiSensor.getVerticalSpeed() or 0
+            local currPitch, currRoll = FlightCore.getGimbalData()
 
-            local gridY = topY + topH + 5
-            local btnAreaH = sh - gridY - 5
-            local rowH = math.floor((btnAreaH - 8) / 3)
+            if isLarge then
+                -- 大型螢幕 3x3 專業飛控管理中心 (Full Avionics Flight Management System)
+                local topY = headerH + 5
+                local cardAreaH = math.floor((sh - headerH) * 0.44)
+                local cardW = math.floor((sw - 16) / 2)
 
-            -- Row 1: Target Altitude
-            local bW1 = math.floor((sw - 12 - 12) / 4)
-            addBtn(6, gridY, bW1, rowH, "+10m", {30, 100, 45}, {240, 255, 240}, function() FlightCore.adjustTargetAlt(10) end)
-            addBtn(6 + (bW1+4), gridY, bW1, rowH, "+1m", {45, 130, 55}, {240, 255, 240}, function() FlightCore.adjustTargetAlt(1) end)
-            addBtn(6 + (bW1+4)*2, gridY, bW1, rowH, "-1m", {210, 95, 20}, {255, 245, 230}, function() FlightCore.adjustTargetAlt(-1) end)
-            addBtn(6 + (bW1+4)*3, gridY, bW1, rowH, "-10m", {190, 40, 40}, {255, 235, 235}, function() FlightCore.adjustTargetAlt(-10) end)
+                local c1X = 6
+                local c2X = c1X + cardW + 4
 
-            -- Row 2: Base Throttle
-            local r2Y = gridY + rowH + 4
-            local bW2 = math.floor((sw - 12 - 12) / 4)
-            addBtn(6, r2Y, bW2, rowH, "B +1", {0, 110, 95}, {230, 250, 245}, function() FlightCore.adjustBaseThrottle(1.0) end)
-            addBtn(6 + (bW2+4), r2Y, bW2, rowH, "B -1", {55, 70, 80}, {235, 240, 245}, function() FlightCore.adjustBaseThrottle(-1.0) end)
-            addBtn(6 + (bW2+4)*2, r2Y, bW2, rowH, "B +.1", {20, 120, 110}, {230, 255, 250}, function() FlightCore.adjustBaseThrottle(0.1) end)
-            addBtn(6 + (bW2+4)*3, r2Y, bW2, rowH, "B -.1", {70, 80, 90}, {235, 240, 245}, function() FlightCore.adjustBaseThrottle(-0.1) end)
+                -- 卡片 1: 飛行高度與升降剖面
+                gpu.fillRect(dispId, c1X, topY, cardW, cardAreaH, 20, 30, 43)
+                gpu.drawText(dispId, "ALTITUDE PROFILE", c1X + 6, topY + 4, 140, 160, 180, "Arial", 9, "bold")
 
-            -- Row 3: Flight Ops
-            local r3Y = r2Y + rowH + 4
-            local bW3 = math.floor((sw - 12 - 12) / 4)
-            local holdBg = (FlightCore.state.mode == "HOLD_ALT") and {45, 140, 60} or {30, 90, 40}
-            addBtn(6, r3Y, bW3, rowH, "HOLD", holdBg, {255, 255, 255}, function() FlightCore.holdAltitude() end)
-            addBtn(6 + (bW3+4), r3Y, bW3, rowH, "CALIB", {110, 30, 155}, {250, 230, 255}, function() FlightCore.startCalibration() end)
-            addBtn(6 + (bW3+4)*2, r3Y, bW3, rowH, "RE-SCAN", {25, 100, 190}, {230, 245, 255}, function() FlightCore.scanQuadTurtles(); FlightCore.state.statusMsg="Re-scanned!" end)
-            local stopBg = (FlightCore.state.mode == "IDLE") and {200, 45, 45} or {160, 30, 30}
-            addBtn(6 + (bW3+4)*3, r3Y, bW3, rowH, "STOP", stopBg, {255, 255, 255}, function() FlightCore.stopEngines() end)
+                local altStr = string.format("%.1fm", currAlt)
+                gpu.drawText(dispId, altStr, c1X + 8, topY + 18, 255, 255, 255, "Arial", 14, "bold")
+
+                local textOffY = topY + 36
+                local rowSp = math.max(12, math.floor((cardAreaH - 42) / 3))
+                gpu.drawText(dispId, string.format("TARGET: %5.1fm (DIFF:%+5.1fm)", FlightCore.state.targetAlt, FlightCore.state.targetAlt - currAlt), c1X + 8, textOffY, 80, 230, 255, "Arial", 9, "bold")
+                local vsCol = (math.abs(currVspeed) < 0.2) and {80, 255, 120} or {255, 205, 75}
+                gpu.drawText(dispId, string.format("V.SPEED: %+5.2f m/s", currVspeed), c1X + 8, textOffY + rowSp, vsCol[1], vsCol[2], vsCol[3], "Arial", 9, "bold")
+                local mCol = (FlightCore.state.mode == "HOLD_ALT") and {80, 255, 120} or ((FlightCore.state.mode == "CALIBRATING") and {255, 205, 75} or {255, 80, 80})
+                gpu.drawText(dispId, string.format("MODE: [%s]", FlightCore.state.mode), c1X + 8, textOffY + rowSp * 2, mCol[1], mCol[2], mCol[3], "Arial", 9, "bold")
+
+                -- 卡片 2: 姿態平衡與推力總覽
+                gpu.fillRect(dispId, c2X, topY, cardW, cardAreaH, 20, 30, 43)
+                gpu.drawText(dispId, "ATTITUDE & PROPULSION", c2X + 6, topY + 4, 140, 160, 180, "Arial", 9, "bold")
+
+                gpu.drawText(dispId, string.format("BASE: %4.2f / 15.0", FlightCore.state.baseThrottle), c2X + 8, topY + 18, 80, 255, 120, "Arial", 14, "bold")
+                gpu.drawText(dispId, string.format("GYRO: P:%+4.1f*  R:%+4.1f*", currPitch, currRoll), c2X + 8, textOffY, 180, 220, 255, "Arial", 9, "bold")
+
+                local quadSummary = string.format("FL:%.1f FR:%.1f BL:%.1f BR:%.1f", FlightCore.virtualOutputs.FL, FlightCore.virtualOutputs.FR, FlightCore.virtualOutputs.BL, FlightCore.virtualOutputs.BR)
+                gpu.drawText(dispId, quadSummary, c2X + 8, textOffY + rowSp, 255, 205, 75, "Arial", 9, "bold")
+                gpu.drawText(dispId, "SYSTEM: BALANCED & SYNCED", c2X + 8, textOffY + rowSp * 2, 80, 230, 255, "Arial", 9, "bold")
+
+                -- 中段狀態列
+                local statY = topY + cardAreaH + 4
+                local statH = 18
+                gpu.fillRect(dispId, 6, statY, sw - 12, statH, 30, 36, 50)
+                gpu.drawText(dispId, string.format("STATUS: %s", FlightCore.state.statusMsg:sub(1, 45)), 10, statY + 4, 80, 230, 255, "Arial", 9, "bold")
+
+                -- 下半部控制按鈕群 (3 組分類)
+                local gridY = statY + statH + 4
+                local btnAreaH = sh - gridY - 4
+                local rowH = math.floor((btnAreaH - 8) / 3)
+
+                -- Row 1: 高度控制 (6 顆)
+                local bW1 = math.floor((sw - 12 - 20) / 6)
+                addBtn(6, gridY, bW1, rowH, "+50m", {20, 90, 50}, {255, 255, 255}, function() FlightCore.adjustTargetAlt(50) end)
+                addBtn(6 + (bW1+4), gridY, bW1, rowH, "+10m", {27, 94, 32}, {255, 255, 255}, function() FlightCore.adjustTargetAlt(10) end)
+                addBtn(6 + (bW1+4)*2, gridY, bW1, rowH, "+1m", {46, 125, 50}, {255, 255, 255}, function() FlightCore.adjustTargetAlt(1) end)
+                addBtn(6 + (bW1+4)*3, gridY, bW1, rowH, "-1m", {230, 81, 0}, {255, 255, 255}, function() FlightCore.adjustTargetAlt(-1) end)
+                addBtn(6 + (bW1+4)*4, gridY, bW1, rowH, "-10m", {198, 40, 40}, {255, 255, 255}, function() FlightCore.adjustTargetAlt(-10) end)
+                addBtn(6 + (bW1+4)*5, gridY, bW1, rowH, "LOCK", {0, 131, 143}, {255, 255, 255}, function() FlightCore.lockCurrentAlt() end)
+
+                -- Row 2: 油門微調 (4 顆)
+                local r2Y = gridY + rowH + 4
+                local bW2 = math.floor((sw - 12 - 12) / 4)
+                addBtn(6, r2Y, bW2, rowH, "BASE +1.0", {0, 105, 92}, {255, 255, 255}, function() FlightCore.adjustBaseThrottle(1.0) end)
+                addBtn(6 + (bW2+4), r2Y, bW2, rowH, "BASE -1.0", {55, 71, 79}, {255, 255, 255}, function() FlightCore.adjustBaseThrottle(-1.0) end)
+                addBtn(6 + (bW2+4)*2, r2Y, bW2, rowH, "BASE +0.1", {0, 137, 123}, {255, 255, 255}, function() FlightCore.adjustBaseThrottle(0.1) end)
+                addBtn(6 + (bW2+4)*3, r2Y, bW2, rowH, "BASE -0.1", {69, 90, 100}, {255, 255, 255}, function() FlightCore.adjustBaseThrottle(-0.1) end)
+
+                -- Row 3: 飛航主指令 (4 顆)
+                local r3Y = r2Y + rowH + 4
+                local bW3 = math.floor((sw - 12 - 12) / 4)
+                local holdBg = (FlightCore.state.mode == "HOLD_ALT") and {46, 125, 50} or {27, 94, 32}
+                addBtn(6, r3Y, bW3, rowH, "[ HOLD ALT ]", holdBg, {255, 255, 255}, function() FlightCore.holdAltitude() end)
+                addBtn(6 + (bW3+4), r3Y, bW3, rowH, "[ CALIB 200m ]", {106, 27, 154}, {255, 255, 255}, function() FlightCore.startCalibration() end)
+                addBtn(6 + (bW3+4)*2, r3Y, bW3, rowH, "[ RE-SCAN HW ]", {21, 101, 192}, {255, 255, 255}, function() FlightCore.scanQuadTurtles(); FlightCore.state.statusMsg="Re-scanned!" end)
+                local stopBg = (FlightCore.state.mode == "IDLE") and {198, 40, 40} or {183, 28, 28}
+                addBtn(6 + (bW3+4)*3, r3Y, bW3, rowH, "[ STOP IDLE ]", stopBg, {255, 255, 255}, function() FlightCore.stopEngines() end)
+            else
+                -- 小型螢幕 (< 3x3) 緊湊模式
+                local topY = headerH + 5
+                local topH = 20
+                gpu.fillRect(dispId, 6, topY, sw - 12, topH, 20, 28, 42)
+                local mCol = (FlightCore.state.mode == "HOLD_ALT") and {80, 255, 120} or {255, 80, 80}
+                gpu.drawText(dispId, string.format("[%s]", FlightCore.state.mode:sub(1,6)), 10, topY + 5, mCol[1], mCol[2], mCol[3], "Arial", 10, "bold")
+                gpu.drawText(dispId, string.format("ALT:%.0f->%.0f | B:%.2f", currAlt, FlightCore.state.targetAlt, FlightCore.state.baseThrottle), 75, topY + 5, 200, 230, 255, "Arial", 9, "plain")
+
+                local gridY = topY + topH + 5
+                local btnAreaH = sh - gridY - 5
+                local rowH = math.floor((btnAreaH - 8) / 3)
+
+                -- Row 1: Target Altitude
+                local bW1 = math.floor((sw - 12 - 12) / 4)
+                addBtn(6, gridY, bW1, rowH, "+10m", {30, 100, 45}, {240, 255, 240}, function() FlightCore.adjustTargetAlt(10) end)
+                addBtn(6 + (bW1+4), gridY, bW1, rowH, "+1m", {45, 130, 55}, {240, 255, 240}, function() FlightCore.adjustTargetAlt(1) end)
+                addBtn(6 + (bW1+4)*2, gridY, bW1, rowH, "-1m", {210, 95, 20}, {255, 245, 230}, function() FlightCore.adjustTargetAlt(-1) end)
+                addBtn(6 + (bW1+4)*3, gridY, bW1, rowH, "-10m", {190, 40, 40}, {255, 235, 235}, function() FlightCore.adjustTargetAlt(-10) end)
+
+                -- Row 2: Base Throttle
+                local r2Y = gridY + rowH + 4
+                local bW2 = math.floor((sw - 12 - 12) / 4)
+                addBtn(6, r2Y, bW2, rowH, "B +1", {0, 110, 95}, {230, 250, 245}, function() FlightCore.adjustBaseThrottle(1.0) end)
+                addBtn(6 + (bW2+4), r2Y, bW2, rowH, "B -1", {55, 70, 80}, {235, 240, 245}, function() FlightCore.adjustBaseThrottle(-1.0) end)
+                addBtn(6 + (bW2+4)*2, r2Y, bW2, rowH, "B +.1", {20, 120, 110}, {230, 255, 250}, function() FlightCore.adjustBaseThrottle(0.1) end)
+                addBtn(6 + (bW2+4)*3, r2Y, bW2, rowH, "B -.1", {70, 80, 90}, {235, 240, 245}, function() FlightCore.adjustBaseThrottle(-0.1) end)
+
+                -- Row 3: Flight Ops
+                local r3Y = r2Y + rowH + 4
+                local bW3 = math.floor((sw - 12 - 12) / 4)
+                local holdBg = (FlightCore.state.mode == "HOLD_ALT") and {45, 140, 60} or {30, 90, 40}
+                addBtn(6, r3Y, bW3, rowH, "HOLD", holdBg, {255, 255, 255}, function() FlightCore.holdAltitude() end)
+                addBtn(6 + (bW3+4), r3Y, bW3, rowH, "CALIB", {110, 30, 155}, {250, 230, 255}, function() FlightCore.startCalibration() end)
+                addBtn(6 + (bW3+4)*2, r3Y, bW3, rowH, "RE-SCAN", {25, 100, 190}, {230, 245, 255}, function() FlightCore.scanQuadTurtles(); FlightCore.state.statusMsg="Re-scanned!" end)
+                local stopBg = (FlightCore.state.mode == "IDLE") and {200, 45, 45} or {160, 30, 30}
+                addBtn(6 + (bW3+4)*3, r3Y, bW3, rowH, "STOP", stopBg, {255, 255, 255}, function() FlightCore.stopEngines() end)
+            end
 
         elseif scr.currentView == "NAV" then
             local currAlt = FlightCore.altiSensor and FlightCore.altiSensor.getHeight() or 0
@@ -1391,7 +1469,7 @@ Drivers.tom = {
                 local stopBg = (FlightCore.state.mode == "IDLE") and 0xC62828 or 0xB71C1C
                 addBtn(pfdX + bW3 + 4, bY3, bW3, rowH, "[ STOP / IDLE ]", stopBg, 0xFFFFFF, function() FlightCore.stopEngines() end)
             else
-                -- 緊湊/直式多螢幕自適應模式 (2x2 Quad Engine 矩陣排布，徹底杜絕文字儀表擠壓)
+                -- 緊湊/直式多螢幕自適應模式 (2x2 Quad Engine 矩陣排布)
                 local instY = headerH + 4
                 local instH = math.floor((sh - headerH) * 0.54)
                 local colW = math.floor((sw - 14) / 2)
@@ -1422,7 +1500,7 @@ Drivers.tom = {
                 sTxt(textX, instY + 12 + rowSpacing * 2, string.format("M:%s", FlightCore.state.mode:sub(1,4)), mCol, 1)
                 sTxt(textX, instY + 12 + rowSpacing * 3, string.format("P:%+.0f", currPitch), 0xB4DCFF, 1)
 
-                -- 右側: 2x2 Mini Quad Engines (直觀象限四區塊)
+                -- 右側: 2x2 Mini Quad Engines
                 sFR(ecamX, instY, colW, instH, 0x121822)
                 sR(ecamX, instY, colW, instH, 0x283850)
 
@@ -1625,44 +1703,126 @@ Drivers.tom = {
             end
 
         elseif scr.currentView == "CTRL" then
-            local topY = headerH + 5
-            local topH = isLarge and 24 or 18
-            sFR(6, topY, sw - 12, topH, 0x141E2B)
-            sR(6, topY, sw - 12, topH, 0x284864)
-
-            local mCol = (FlightCore.state.mode == "HOLD_ALT") and 0x50FF78 or 0xFF5050
-            sTxt(8, topY + 5, string.format("[%s]", FlightCore.state.mode:sub(1,6)), mCol, 1)
             local currAlt = FlightCore.altiSensor and FlightCore.altiSensor.getHeight() or 0
-            sTxt(70, topY + 5, string.format("ALT:%.0f->%.0f | B:%.2f", currAlt, FlightCore.state.targetAlt, FlightCore.state.baseThrottle), 0xB4DCFF, 1)
+            local currVspeed = FlightCore.altiSensor and FlightCore.altiSensor.getVerticalSpeed() or 0
+            local currPitch, currRoll = FlightCore.getGimbalData()
 
-            local gridY = topY + topH + 5
-            local btnAreaH = sh - gridY - 5
-            local rowH = math.floor((btnAreaH - 8) / 3)
+            if isLarge then
+                -- 大型螢幕 3x3 專業飛控管理中心 (Full Avionics Flight Management System)
+                local topY = headerH + 5
+                local cardAreaH = math.floor((sh - headerH) * 0.44)
+                local cardW = math.floor((sw - 16) / 2)
 
-            -- Row 1: Target Altitude
-            local bW1 = math.floor((sw - 12 - 12) / 4)
-            addBtn(6, gridY, bW1, rowH, "+10m", 0x1B5E20, 0xE8F5E9, function() FlightCore.adjustTargetAlt(10) end)
-            addBtn(6 + (bW1+4), gridY, bW1, rowH, "+1m", 0x2E7D32, 0xE8F5E9, function() FlightCore.adjustTargetAlt(1) end)
-            addBtn(6 + (bW1+4)*2, gridY, bW1, rowH, "-1m", 0xE65100, 0xFFF3E0, function() FlightCore.adjustTargetAlt(-1) end)
-            addBtn(6 + (bW1+4)*3, gridY, bW1, rowH, "-10m", 0xC62828, 0xFFEBEE, function() FlightCore.adjustTargetAlt(-10) end)
+                local c1X = 6
+                local c2X = c1X + cardW + 4
 
-            -- Row 2: Base Throttle
-            local r2Y = gridY + rowH + 4
-            local bW2 = math.floor((sw - 12 - 12) / 4)
-            addBtn(6, r2Y, bW2, rowH, "B +1", 0x00695C, 0xE0F2F1, function() FlightCore.adjustBaseThrottle(1.0) end)
-            addBtn(6 + (bW2+4), r2Y, bW2, rowH, "B -1", 0x37474F, 0xECEFF1, function() FlightCore.adjustBaseThrottle(-1.0) end)
-            addBtn(6 + (bW2+4)*2, r2Y, bW2, rowH, "B +.1", 0x00897B, 0xE0F2F1, function() FlightCore.adjustBaseThrottle(0.1) end)
-            addBtn(6 + (bW2+4)*3, r2Y, bW2, rowH, "B -.1", 0x455A64, 0xECEFF1, function() FlightCore.adjustBaseThrottle(-0.1) end)
+                -- 卡片 1: 飛行高度與升降剖面
+                sFR(c1X, topY, cardW, cardAreaH, 0x141E2B)
+                sR(c1X, topY, cardW, cardAreaH, 0x284864)
+                sTxt(c1X + 6, topY + 4, "ALTITUDE & FLIGHT PROFILE", 0x8CA0B4, 1)
 
-            -- Row 3: Flight Ops
-            local r3Y = r2Y + rowH + 4
-            local bW3 = math.floor((sw - 12 - 12) / 4)
-            local holdBg = (FlightCore.state.mode == "HOLD_ALT") and 0x2E7D32 or 0x1B5E20
-            addBtn(6, r3Y, bW3, rowH, "HOLD", holdBg, 0xFFFFFF, function() FlightCore.holdAltitude() end)
-            addBtn(6 + (bW3+4), r3Y, bW3, rowH, "CALIB", 0x6A1B9A, 0xF3E5F5, function() FlightCore.startCalibration() end)
-            addBtn(6 + (bW3+4)*2, r3Y, bW3, rowH, "RE-SCAN", 0x1565C0, 0xE3F2FD, function() FlightCore.scanQuadTurtles(); FlightCore.state.statusMsg="Re-scanned!" end)
-            local stopBg = (FlightCore.state.mode == "IDLE") and 0xC62828 or 0xB71C1C
-            addBtn(6 + (bW3+4)*3, r3Y, bW3, rowH, "STOP", stopBg, 0xFFFFFF, function() FlightCore.stopEngines() end)
+                local altStr = string.format("%.1fm", currAlt)
+                sTxt(c1X + 8, topY + 18, altStr, 0xFFFFFF, (sw >= 280) and 2 or 1)
+
+                local textOffY = topY + ((sw >= 280) and 36 or 30)
+                local rowSp = math.max(12, math.floor((cardAreaH - 42) / 3))
+                sTxt(c1X + 8, textOffY, string.format("TARGET: %5.1fm (DIFF:%+5.1fm)", FlightCore.state.targetAlt, FlightCore.state.targetAlt - currAlt), 0x50E6FF, 1)
+                local vsCol = (math.abs(currVspeed) < 0.2) and 0x50FF78 or 0xFFCD4B
+                sTxt(c1X + 8, textOffY + rowSp, string.format("VERT SPEED: %+5.2f m/s", currVspeed), vsCol, 1)
+                local mCol = (FlightCore.state.mode == "HOLD_ALT") and 0x50FF78 or ((FlightCore.state.mode == "CALIBRATING") and 0xFFCD4B or 0xFF5050)
+                sTxt(c1X + 8, textOffY + rowSp * 2, string.format("MODE: [%s]", FlightCore.state.mode), mCol, 1)
+
+                -- 卡片 2: 姿態平衡與四象限動力
+                sFR(c2X, topY, cardW, cardAreaH, 0x141E2B)
+                sR(c2X, topY, cardW, cardAreaH, 0x284864)
+                sTxt(c2X + 6, topY + 4, "ATTITUDE & PROPULSION", 0x8CA0B4, 1)
+
+                sTxt(c2X + 8, topY + 18, string.format("BASE: %4.2f / 15.0", FlightCore.state.baseThrottle), 0x50FF78, (sw >= 280) and 2 or 1)
+                sTxt(c2X + 8, textOffY, string.format("GYRO: P:%+4.1f*  R:%+4.1f*", currPitch, currRoll), 0xB4DCFF, 1)
+
+                local quadSummary = string.format("FL:%.1f FR:%.1f BL:%.1f BR:%.1f", FlightCore.virtualOutputs.FL, FlightCore.virtualOutputs.FR, FlightCore.virtualOutputs.BL, FlightCore.virtualOutputs.BR)
+                sTxt(c2X + 8, textOffY + rowSp, quadSummary, 0xFFCD4B, 1)
+                sTxt(c2X + 8, textOffY + rowSp * 2, "SYSTEM: BALANCED & SYNCED", 0x50E6FF, 1)
+
+                -- 中段狀態通報列
+                local statY = topY + cardAreaH + 4
+                local statH = 18
+                sFR(6, statY, sw - 12, statH, 0x1E2432)
+                sR(6, statY, sw - 12, statH, 0x3C4B64)
+                local maxStatChars = math.max(6, math.floor((sw - 30) / 6))
+                sTxt(10, statY + 5, string.format("STATUS: %s", FlightCore.state.statusMsg:sub(1, maxStatChars)), 0x50E6FF, 1)
+
+                -- 下半部控制按鈕群 (3 組分類)
+                local gridY = statY + statH + 4
+                local btnAreaH = sh - gridY - 4
+                local rowH = math.floor((btnAreaH - 8) / 3)
+
+                -- Row 1: 高度控制 (6 顆)
+                local bW1 = math.floor((sw - 12 - 20) / 6)
+                addBtn(6, gridY, bW1, rowH, "+50m", 0x145A32, 0xFFFFFF, function() FlightCore.adjustTargetAlt(50) end)
+                addBtn(6 + (bW1+4), gridY, bW1, rowH, "+10m", 0x1B5E20, 0xFFFFFF, function() FlightCore.adjustTargetAlt(10) end)
+                addBtn(6 + (bW1+4)*2, gridY, bW1, rowH, "+1m", 0x2E7D32, 0xFFFFFF, function() FlightCore.adjustTargetAlt(1) end)
+                addBtn(6 + (bW1+4)*3, gridY, bW1, rowH, "-1m", 0xE65100, 0xFFFFFF, function() FlightCore.adjustTargetAlt(-1) end)
+                addBtn(6 + (bW1+4)*4, gridY, bW1, rowH, "-10m", 0xC62828, 0xFFFFFF, function() FlightCore.adjustTargetAlt(-10) end)
+                addBtn(6 + (bW1+4)*5, gridY, bW1, rowH, "LOCK", 0x00838F, 0xFFFFFF, function() FlightCore.lockCurrentAlt() end)
+
+                -- Row 2: 油門微調 (4 顆)
+                local r2Y = gridY + rowH + 4
+                local bW2 = math.floor((sw - 12 - 12) / 4)
+                addBtn(6, r2Y, bW2, rowH, "BASE +1.0", 0x00695C, 0xFFFFFF, function() FlightCore.adjustBaseThrottle(1.0) end)
+                addBtn(6 + (bW2+4), r2Y, bW2, rowH, "BASE -1.0", 0x37474F, 0xFFFFFF, function() FlightCore.adjustBaseThrottle(-1.0) end)
+                addBtn(6 + (bW2+4)*2, r2Y, bW2, rowH, "BASE +0.1", 0x00897B, 0xFFFFFF, function() FlightCore.adjustBaseThrottle(0.1) end)
+                addBtn(6 + (bW2+4)*3, r2Y, bW2, rowH, "BASE -0.1", 0x455A64, 0xFFFFFF, function() FlightCore.adjustBaseThrottle(-0.1) end)
+
+                -- Row 3: 飛航主指令 (4 顆)
+                local r3Y = r2Y + rowH + 4
+                local bW3 = math.floor((sw - 12 - 12) / 4)
+                local holdBg = (FlightCore.state.mode == "HOLD_ALT") and 0x2E7D32 or 0x1B5E20
+                addBtn(6, r3Y, bW3, rowH, "[ HOLD ALT ]", holdBg, 0xFFFFFF, function() FlightCore.holdAltitude() end)
+                addBtn(6 + (bW3+4), r3Y, bW3, rowH, "[ CALIB 200m ]", 0x6A1B9A, 0xFFFFFF, function() FlightCore.startCalibration() end)
+                addBtn(6 + (bW3+4)*2, r3Y, bW3, rowH, "[ RE-SCAN HW ]", 0x1565C0, 0xFFFFFF, function() FlightCore.scanQuadTurtles(); FlightCore.state.statusMsg="Re-scanned!" end)
+                local stopBg = (FlightCore.state.mode == "IDLE") and 0xC62828 or 0xB71C1C
+                addBtn(6 + (bW3+4)*3, r3Y, bW3, rowH, "[ STOP IDLE ]", stopBg, 0xFFFFFF, function() FlightCore.stopEngines() end)
+            else
+                -- 小型螢幕 (< 3x3) 緊湊模式
+                local topY = headerH + 5
+                local topH = 18
+                sFR(6, topY, sw - 12, topH, 0x141E2B)
+                sR(6, topY, sw - 12, topH, 0x284864)
+
+                local mCol = (FlightCore.state.mode == "HOLD_ALT") and 0x50FF78 or 0xFF5050
+                sTxt(8, topY + 5, string.format("[%s]", FlightCore.state.mode:sub(1,6)), mCol, 1)
+                sTxt(70, topY + 5, string.format("ALT:%.0f->%.0f | B:%.2f", currAlt, FlightCore.state.targetAlt, FlightCore.state.baseThrottle), 0xB4DCFF, 1)
+
+                local gridY = topY + topH + 5
+                local btnAreaH = sh - gridY - 5
+                local rowH = math.floor((btnAreaH - 8) / 3)
+
+                -- Row 1: Target Altitude
+                local bW1 = math.floor((sw - 12 - 12) / 4)
+                addBtn(6, gridY, bW1, rowH, "+10m", 0x1B5E20, 0xE8F5E9, function() FlightCore.adjustTargetAlt(10) end)
+                addBtn(6 + (bW1+4), gridY, bW1, rowH, "+1m", 0x2E7D32, 0xE8F5E9, function() FlightCore.adjustTargetAlt(1) end)
+                addBtn(6 + (bW1+4)*2, gridY, bW1, rowH, "-1m", 0xE65100, 0xFFF3E0, function() FlightCore.adjustTargetAlt(-1) end)
+                addBtn(6 + (bW1+4)*3, gridY, bW1, rowH, "-10m", 0xC62828, 0xFFEBEE, function() FlightCore.adjustTargetAlt(-10) end)
+
+                -- Row 2: Base Throttle
+                local r2Y = gridY + rowH + 4
+                local bW2 = math.floor((sw - 12 - 12) / 4)
+                addBtn(6, r2Y, bW2, rowH, "B +1", 0x00695C, 0xE0F2F1, function() FlightCore.adjustBaseThrottle(1.0) end)
+                addBtn(6 + (bW2+4), r2Y, bW2, rowH, "B -1", 0x37474F, 0xECEFF1, function() FlightCore.adjustBaseThrottle(-1.0) end)
+                addBtn(6 + (bW2+4)*2, r2Y, bW2, rowH, "B +.1", 0x00897B, 0xE0F2F1, function() FlightCore.adjustBaseThrottle(0.1) end)
+                addBtn(6 + (bW2+4)*3, r2Y, bW2, rowH, "B -.1", 0x455A64, 0xECEFF1, function() FlightCore.adjustBaseThrottle(-0.1) end)
+
+                -- Row 3: Flight Ops
+                local r3Y = r2Y + rowH + 4
+                local bW3 = math.floor((sw - 12 - 12) / 4)
+                local holdBg = (FlightCore.state.mode == "HOLD_ALT") and 0x2E7D32 or 0x1B5E20
+                addBtn(6, r3Y, bW3, rowH, "HOLD", holdBg, 0xFFFFFF, function() FlightCore.holdAltitude() end)
+                addBtn(6 + (bW3+4), r3Y, bW3, rowH, "CALIB", 0x6A1B9A, 0xF3E5F5, function() FlightCore.startCalibration() end)
+                addBtn(6 + (bW3+4)*2, r3Y, bW3, rowH, "RE-SCAN", 0x1565C0, 0xE3F2FD, function() FlightCore.scanQuadTurtles(); FlightCore.state.statusMsg="Re-scanned!" end)
+                local stopBg = (FlightCore.state.mode == "IDLE") and 0xC62828 or 0xB71C1C
+                addBtn(6 + (bW3+4)*3, r3Y, bW3, rowH, "STOP", stopBg, 0xFFFFFF, function() FlightCore.stopEngines() end)
+            end
 
         elseif scr.currentView == "NAV" then
             local currAlt = FlightCore.altiSensor and FlightCore.altiSensor.getHeight() or 0
@@ -1985,33 +2145,71 @@ Drivers.normal = {
 
         elseif scr.currentView == "CTRL" then
             local currAlt = FlightCore.altiSensor and FlightCore.altiSensor.getHeight() or 0
-            self:safeBlit(scr, 2, 3, string.format("[%s] ALT:%.0f->%.0f | B:%.2f", FlightCore.state.mode:sub(1,6), currAlt, FlightCore.state.targetAlt, FlightCore.state.baseThrottle), "0", "b")
+            local currVspeed = FlightCore.altiSensor and FlightCore.altiSensor.getVerticalSpeed() or 0
+            local currPitch, currRoll = FlightCore.getGimbalData()
 
-            local rowH = math.max(2, math.floor((h - 7) / 3))
+            if isLarge then
+                -- CC Monitor 大螢幕版
+                self:safeBlit(scr, 2, 3, string.format("ALT: %6.1fm | TGT: %4.0fm | V.S: %+5.2f", currAlt, FlightCore.state.targetAlt, currVspeed), "0", "b")
+                self:safeBlit(scr, 2, 4, string.format("MODE: [%s] | BASE: %4.2f | GYRO: %+2.0f*, %+2.0f*", FlightCore.state.mode, FlightCore.state.baseThrottle, currPitch, currRoll), "0", "8")
 
-            -- Row 1: Target Alt
-            local bY1 = 5
-            local bW1 = math.floor((w - 5) / 4)
-            addBtn(2, bY1, bW1, rowH, "+10m", "0", "5", function() FlightCore.adjustTargetAlt(10) end)
-            addBtn(3 + bW1, bY1, bW1, rowH, "+1m", "0", "5", function() FlightCore.adjustTargetAlt(1) end)
-            addBtn(4 + bW1*2, bY1, bW1, rowH, "-1m", "0", "e", function() FlightCore.adjustTargetAlt(-1) end)
-            addBtn(5 + bW1*3, bY1, bW1, rowH, "-10m", "0", "e", function() FlightCore.adjustTargetAlt(-10) end)
+                local btnAreaH = h - 6
+                local rowH = math.max(2, math.floor((btnAreaH - 4) / 3))
 
-            -- Row 2: Throttle
-            local bY2 = bY1 + rowH + 1
-            local bW2 = math.floor((w - 5) / 4)
-            addBtn(2, bY2, bW2, rowH, "B +1", "3", "0", function() FlightCore.adjustBaseThrottle(1.0) end)
-            addBtn(3 + bW2, bY2, bW2, rowH, "B -1", "9", "0", function() FlightCore.adjustBaseThrottle(-1.0) end)
-            addBtn(4 + bW2*2, bY2, bW2, rowH, "B +.1", "b", "0", function() FlightCore.adjustBaseThrottle(0.1) end)
-            addBtn(5 + bW2*3, bY2, bW2, rowH, "B -.1", "7", "0", function() FlightCore.adjustBaseThrottle(-0.1) end)
+                -- Row 1: Target Alt
+                local bY1 = 6
+                local bW1 = math.floor((w - 7) / 6)
+                addBtn(2, bY1, bW1, rowH, "+50m", "0", "5", function() FlightCore.adjustTargetAlt(50) end)
+                addBtn(3 + bW1, bY1, bW1, rowH, "+10m", "0", "5", function() FlightCore.adjustTargetAlt(10) end)
+                addBtn(4 + bW1*2, bY1, bW1, rowH, "+1m", "0", "5", function() FlightCore.adjustTargetAlt(1) end)
+                addBtn(5 + bW1*3, bY1, bW1, rowH, "-1m", "0", "e", function() FlightCore.adjustTargetAlt(-1) end)
+                addBtn(6 + bW1*4, bY1, bW1, rowH, "-10m", "0", "e", function() FlightCore.adjustTargetAlt(-10) end)
+                addBtn(7 + bW1*5, bY1, bW1, rowH, "LOCK", "0", "3", function() FlightCore.lockCurrentAlt() end)
 
-            -- Row 3: Flight Ops
-            local bY3 = bY2 + rowH + 1
-            local bW3 = math.floor((w - 5) / 4)
-            addBtn(2, bY3, bW3, rowH, "HOLD", "5", "0", function() FlightCore.holdAltitude() end)
-            addBtn(3 + bW3, bY3, bW3, rowH, "CALIB", "a", "0", function() FlightCore.startCalibration() end)
-            addBtn(4 + bW3*2, bY3, bW3, rowH, "RE-SCAN", "b", "0", function() FlightCore.scanQuadTurtles(); FlightCore.state.statusMsg="Re-scanned!" end)
-            addBtn(5 + bW3*3, bY3, bW3, rowH, "STOP", "e", "0", function() FlightCore.stopEngines() end)
+                -- Row 2: Throttle
+                local bY2 = bY1 + rowH + 1
+                local bW2 = math.floor((w - 5) / 4)
+                addBtn(2, bY2, bW2, rowH, "B +1.0", "3", "0", function() FlightCore.adjustBaseThrottle(1.0) end)
+                addBtn(3 + bW2, bY2, bW2, rowH, "B -1.0", "9", "0", function() FlightCore.adjustBaseThrottle(-1.0) end)
+                addBtn(4 + bW2*2, bY2, bW2, rowH, "B +0.1", "b", "0", function() FlightCore.adjustBaseThrottle(0.1) end)
+                addBtn(5 + bW2*3, bY2, bW2, rowH, "B -0.1", "7", "0", function() FlightCore.adjustBaseThrottle(-0.1) end)
+
+                -- Row 3: Flight Ops
+                local bY3 = bY2 + rowH + 1
+                local bW3 = math.floor((w - 5) / 4)
+                addBtn(2, bY3, bW3, rowH, "HOLD", "5", "0", function() FlightCore.holdAltitude() end)
+                addBtn(3 + bW3, bY3, bW3, rowH, "CALIB", "a", "0", function() FlightCore.startCalibration() end)
+                addBtn(4 + bW3*2, bY3, bW3, rowH, "RE-SCAN", "b", "0", function() FlightCore.scanQuadTurtles(); FlightCore.state.statusMsg="Re-scanned!" end)
+                addBtn(5 + bW3*3, bY3, bW3, rowH, "STOP", "e", "0", function() FlightCore.stopEngines() end)
+            else
+                self:safeBlit(scr, 2, 3, string.format("[%s] ALT:%.0f->%.0f | B:%.2f", FlightCore.state.mode:sub(1,6), currAlt, FlightCore.state.targetAlt, FlightCore.state.baseThrottle), "0", "b")
+
+                local rowH = math.max(2, math.floor((h - 7) / 3))
+
+                -- Row 1: Target Alt
+                local bY1 = 5
+                local bW1 = math.floor((w - 5) / 4)
+                addBtn(2, bY1, bW1, rowH, "+10m", "0", "5", function() FlightCore.adjustTargetAlt(10) end)
+                addBtn(3 + bW1, bY1, bW1, rowH, "+1m", "0", "5", function() FlightCore.adjustTargetAlt(1) end)
+                addBtn(4 + bW1*2, bY1, bW1, rowH, "-1m", "0", "e", function() FlightCore.adjustTargetAlt(-1) end)
+                addBtn(5 + bW1*3, bY1, bW1, rowH, "-10m", "0", "e", function() FlightCore.adjustTargetAlt(-10) end)
+
+                -- Row 2: Throttle
+                local bY2 = bY1 + rowH + 1
+                local bW2 = math.floor((w - 5) / 4)
+                addBtn(2, bY2, bW2, rowH, "B +1", "3", "0", function() FlightCore.adjustBaseThrottle(1.0) end)
+                addBtn(3 + bW2, bY2, bW2, rowH, "B -1", "9", "0", function() FlightCore.adjustBaseThrottle(-1.0) end)
+                addBtn(4 + bW2*2, bY2, bW2, rowH, "B +.1", "b", "0", function() FlightCore.adjustBaseThrottle(0.1) end)
+                addBtn(5 + bW2*3, bY2, bW2, rowH, "B -.1", "7", "0", function() FlightCore.adjustBaseThrottle(-0.1) end)
+
+                -- Row 3: Flight Ops
+                local bY3 = bY2 + rowH + 1
+                local bW3 = math.floor((w - 5) / 4)
+                addBtn(2, bY3, bW3, rowH, "HOLD", "5", "0", function() FlightCore.holdAltitude() end)
+                addBtn(3 + bW3, bY3, bW3, rowH, "CALIB", "a", "0", function() FlightCore.startCalibration() end)
+                addBtn(4 + bW3*2, bY3, bW3, rowH, "RE-SCAN", "b", "0", function() FlightCore.scanQuadTurtles(); FlightCore.state.statusMsg="Re-scanned!" end)
+                addBtn(5 + bW3*3, bY3, bW3, rowH, "STOP", "e", "0", function() FlightCore.stopEngines() end)
+            end
 
         elseif scr.currentView == "NAV" then
             local currAlt = FlightCore.altiSensor and FlightCore.altiSensor.getHeight() or 0
