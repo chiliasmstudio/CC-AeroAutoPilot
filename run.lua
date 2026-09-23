@@ -1,24 +1,20 @@
 --[[
     Create: Avionics & CC: Tweaked
-    Unified Quad-Engine Avionics Flight Computer (四軸有線模組化統一飛控大腦)
-    Version: v3.6.2 (4-Quadrant ECAM & Adaptive Header Layout)
+    Unified Multi-Engine Avionics Flight Computer (多軸模組化統一飛控大腦)
+    Version: v3.6.3 (Multi-Engine Per Quadrant & Clean ASCII Glass Cockpit)
     
     架構說明 (Decoupled PHP+Vue Architecture):
-    - 飛控核心與動力後端 (Flight Core - Backend): 獨立封裝 PID、感測器獲取、PWM 集體升力混控、200m 標定演算法、烏龜有線通訊與 1Hz 心跳接收 (Heartbeat Telemetry Uplink)。
-    - 烏龜即時狀態與心跳反饋 (Turtle Heartbeat Telemetry):
-        * Channel 100: 主機下行動力輸出 (Downlink: Main -> Turtles)
-        * Channel 101: 烏龜 1Hz 上行心跳狀態廣播 (Uplink: Turtles -> Main: ID, Label, Sig, Uptime, Ver)
-        * 主機即時監測各烏龜連線健康度，超時 3.0s 自動標記 OFFLINE。
-    - 多螢幕視圖前端 (Multi-Screen Display Drivers - Frontend Views):
-        * 頂部標題自動防碰撞自適應排版 (左上角顯示畫面名稱，絕不遮擋右上角 MENU)。
-        * 右上角獨立常駐 [ ☰ MENU ] / [ ✕ CLOSE ] 按鈕。
-    - 6 大獨立功能視圖 (6 Major Independent Views):
-        1. OVERVIEW (綜合駕駛艙 - 儀表與控制按鈕整合)
-        2. PFD (主飛行儀表 - 巨大人工地平線姿態儀 + 數位高度錶 + 升降速率)
-        3. ECAM (發動機動力監控 - 2x2 四象限直觀排布: 左上左前 / 右上右前 / 左下左後 / 右下右後)
-        4. CTRL (飛行控制畫面 - 完整飛行控制面板、高度微調、油門調整、模式切換)
+    - 飛控核心與動力後端 (Flight Core - Backend):
+        * 支援一側/一象限配置「多個引擎/烏龜」(Multiple Engines per Quadrant: FL, FR, BL, BR)。
+        * 自動平行驅動同側所有實體烏龜、電腦與紅石繼電器。
+        * 烏龜 1Hz 心跳遙測 (Heartbeat Uplink) 自動聚合各象限所有引擎之健康度與連線狀態。
+    - 6 大獨立視圖前端 (6 Major Glass Cockpit Views):
+        1. OVERVIEW (綜合駕駛艙 - 姿態儀 + 四象限動力 + 精簡控制)
+        2. PFD (主飛行儀表 - 巨大人工地平線姿態儀 + 數位高度錶 + 升降速度)
+        3. ECAM (發動機動力監控 - 2x2 四象限直觀排布，支援單側多引擎即時監控，純英文字體防亂碼)
+        4. CTRL (飛行控制畫面 - 完整獨立控制面板、高度微調、油門調整、模式切換)
         5. NAV (快速導航與預設高度 - 0m/80m/150m/200m/300m/鎖定)
-        6. SYS (系統診斷與硬體自檢 - 4 軸烏龜心跳連線、延遲與 PWM 反饋)
+        6. SYS (系統診斷與硬體自檢 - 列出各象限所有烏龜 ID、心跳、延遲與 PWM 反饋)
 
     使用方式:
       run.lua              (自動檢測最佳顯示硬體: DirectGPU -> Tom's GPU -> Monitor -> Terminal)
@@ -27,7 +23,7 @@
       run.lua normal       (強制使用 CC: Tweaked 原生螢幕/終端機驅動，支援多螢幕)
 --]]
 
-local VERSION = "v3.6.2"
+local VERSION = "v3.6.3"
 local args = {...}
 local requestedDriver = args[1] and string.lower(args[1]) or "auto"
 
@@ -99,17 +95,13 @@ FlightCore.state = {
 
 FlightCore.altPID = PID.new(0.5, 0.02, 0.6, -1.5, 1.5)
 
-FlightCore.engines = { FL = nil, FR = nil, BL = nil, BR = nil }
+-- 支援一側/象限配置多個引擎 (陣列結構)
+FlightCore.engines = { FL = {}, FR = {}, BL = {}, BR = {} }
 FlightCore.engineOutputs  = { FL = 0, FR = 0, BL = 0, BR = 0 }
 FlightCore.virtualOutputs = { FL = 0.0, FR = 0.0, BL = 0.0, BR = 0.0 }
 
--- 烏龜心跳與遙測健康度
-FlightCore.turtleHealth = {
-    FL = { online = false, lastSeen = 0, id = nil, sig = 0, ver = "v3.6.2", label = "" },
-    FR = { online = false, lastSeen = 0, id = nil, sig = 0, ver = "v3.6.2", label = "" },
-    BL = { online = false, lastSeen = 0, id = nil, sig = 0, ver = "v3.6.2", label = "" },
-    BR = { online = false, lastSeen = 0, id = nil, sig = 0, ver = "v3.6.2", label = "" }
-}
+-- 烏龜心跳與遙測健康度資料庫 (按 Turtle ID 索引)
+FlightCore.turtles = {}
 
 FlightCore.altiSensor = nil
 FlightCore.gimbalSensor = nil
@@ -149,10 +141,10 @@ end
 
 function FlightCore.scanQuadTurtles()
     FlightCore.initSensorsAndModem()
-    FlightCore.engines.FL = nil
-    FlightCore.engines.FR = nil
-    FlightCore.engines.BL = nil
-    FlightCore.engines.BR = nil
+    FlightCore.engines.FL = {}
+    FlightCore.engines.FR = {}
+    FlightCore.engines.BL = {}
+    FlightCore.engines.BR = {}
 
     local unmapped = {}
     local pNames = peripheral.getNames()
@@ -164,26 +156,69 @@ function FlightCore.scanQuadTurtles()
             local label = (p.getLabel and p.getLabel()) or name
 
             if matchPrefix(label, "FL") then
-                FlightCore.engines.FL = { name = name, p = p, label = label }
+                table.insert(FlightCore.engines.FL, { name = name, p = p, label = label })
             elseif matchPrefix(label, "FR") then
-                FlightCore.engines.FR = { name = name, p = p, label = label }
+                table.insert(FlightCore.engines.FR, { name = name, p = p, label = label })
             elseif matchPrefix(label, "BL") then
-                FlightCore.engines.BL = { name = name, p = p, label = label }
+                table.insert(FlightCore.engines.BL, { name = name, p = p, label = label })
             elseif matchPrefix(label, "BR") then
-                FlightCore.engines.BR = { name = name, p = p, label = label }
+                table.insert(FlightCore.engines.BR, { name = name, p = p, label = label })
             else
                 table.insert(unmapped, { name = name, p = p, label = label })
             end
         end
     end
 
+    -- 若有未指派的引擎且某側為空，進行預設遞補
     local slots = {"FL", "FR", "BL", "BR"}
     for _, slot in ipairs(slots) do
-        if not FlightCore.engines[slot] and #unmapped > 0 then
+        if #FlightCore.engines[slot] == 0 and #unmapped > 0 then
             local fallbackNode = table.remove(unmapped, 1)
-            FlightCore.engines[slot] = fallbackNode
+            table.insert(FlightCore.engines[slot], fallbackNode)
         end
     end
+end
+
+-- 取得象限聚合健康度 (含多引擎狀態)
+function FlightCore.getQuadHealth(role)
+    local now = os.epoch("utc")
+    local directList = FlightCore.engines[role] or {}
+    local nodes = {}
+    local onlineCount = 0
+
+    -- 1. 登記有線直連週邊
+    for _, node in ipairs(directList) do
+        table.insert(nodes, { id = node.name, label = node.label, online = true, direct = true, sig = FlightCore.engineOutputs[role] })
+        onlineCount = onlineCount + 1
+    end
+
+    -- 2. 登記無線心跳烏龜 (自動去重)
+    for id, t in pairs(FlightCore.turtles) do
+        if t.role == role then
+            local isOnline = (now - t.lastSeen) <= 3000
+            local found = false
+            for _, n in ipairs(nodes) do
+                if n.id == id or n.label == t.label then
+                    n.online = isOnline
+                    n.id = id
+                    n.lastSeen = t.lastSeen
+                    n.sig = t.sig
+                    found = true
+                    break
+                end
+            end
+            if not found then
+                table.insert(nodes, { id = id, label = t.label, online = isOnline, lastSeen = t.lastSeen, sig = t.sig })
+                if isOnline then onlineCount = onlineCount + 1 end
+            end
+        end
+    end
+
+    return {
+        total = #nodes,
+        online = onlineCount,
+        nodes = nodes
+    }
 end
 
 function FlightCore.resolvePwmOutput(val)
@@ -199,15 +234,19 @@ function FlightCore.resolvePwmOutput(val)
     end
 end
 
-function FlightCore.outputToEngine(node, power)
-    if not node or not node.p then return end
-    pcall(function()
-        if node.p.setAnalogOutput then
-            for _, s in ipairs(FlightCore.outputSides) do
-                node.p.setAnalogOutput(s, power)
-            end
+function FlightCore.outputToEngines(nodeList, power)
+    if not nodeList then return end
+    for _, node in ipairs(nodeList) do
+        if node and node.p then
+            pcall(function()
+                if node.p.setAnalogOutput then
+                    for _, s in ipairs(FlightCore.outputSides) do
+                        node.p.setAnalogOutput(s, power)
+                    end
+                end
+            end)
         end
-    end)
+    end
 end
 
 function FlightCore.applyQuadThrust(baseThrust, deltaAlt, deltaPitch, deltaRoll)
@@ -228,10 +267,10 @@ function FlightCore.applyQuadThrust(baseThrust, deltaAlt, deltaPitch, deltaRoll)
     FlightCore.engineOutputs.BL = FlightCore.resolvePwmOutput(rawBL)
     FlightCore.engineOutputs.BR = FlightCore.resolvePwmOutput(rawBR)
 
-    FlightCore.outputToEngine(FlightCore.engines.FL, FlightCore.engineOutputs.FL)
-    FlightCore.outputToEngine(FlightCore.engines.FR, FlightCore.engineOutputs.FR)
-    FlightCore.outputToEngine(FlightCore.engines.BL, FlightCore.engineOutputs.BL)
-    FlightCore.outputToEngine(FlightCore.engines.BR, FlightCore.engineOutputs.BR)
+    FlightCore.outputToEngines(FlightCore.engines.FL, FlightCore.engineOutputs.FL)
+    FlightCore.outputToEngines(FlightCore.engines.FR, FlightCore.engineOutputs.FR)
+    FlightCore.outputToEngines(FlightCore.engines.BL, FlightCore.engineOutputs.BL)
+    FlightCore.outputToEngines(FlightCore.engines.BR, FlightCore.engineOutputs.BR)
 
     if not FlightCore.masterModem then
         FlightCore.masterModem = peripheral.find("modem")
@@ -309,15 +348,10 @@ function FlightCore.step()
     local currVspeed = FlightCore.altiSensor and FlightCore.altiSensor.getVerticalSpeed() or 0
     local nowMs = os.epoch("utc")
 
-    -- 烏龜心跳超時檢測 (超過 3 秒無心跳標記為 OFFLINE)
-    for _, slot in ipairs({"FL", "FR", "BL", "BR"}) do
-        local h = FlightCore.turtleHealth[slot]
-        if h and h.lastSeen > 0 then
-            if (nowMs - h.lastSeen) > 3000 then
-                h.online = false
-            else
-                h.online = true
-            end
+    -- 烏龜心跳超時檢測
+    for _, t in pairs(FlightCore.turtles) do
+        if t.lastSeen > 0 then
+            t.online = (nowMs - t.lastSeen) <= 3000
         end
     end
 
@@ -620,9 +654,8 @@ Drivers.directgpu = {
 
             for i, slot in ipairs(slots) do
                 local engCenterX = ecamX + 4 + math.floor((i - 0.5) * slotW)
-                local node = FlightCore.engines[slot]
-                local lbl = node and (node.label or node.name or slot) or slot
-                if #lbl > 5 then lbl = lbl:sub(1, 5) end
+                local qH = FlightCore.getQuadHealth(slot)
+                local lbl = string.format("%s(%d)", slot, qH.total)
                 self:drawA350Dial(scr, engCenterX, engCenterY, dialR, FlightCore.virtualOutputs[slot], 15.0, lbl, FlightCore.engineOutputs[slot], slot)
             end
 
@@ -711,7 +744,7 @@ Drivers.directgpu = {
             addBtn(6 + (bW+4)*5, bY, bW, bH, "STOP", stopBg, {255, 255, 255}, function() FlightCore.stopEngines() end)
 
         elseif scr.currentView == "ECAM" then
-            -- 2x2 四象限發動機直觀監控 (左上:FL, 右上:FR, 左下:BL, 右下:BR)
+            -- 2x2 四象限發動機監控 (多引擎支援 + 純英文標題防亂碼)
             local topY = headerH + 6
             local btmH = 26
             local areaH = sh - topY - btmH - 6
@@ -719,10 +752,10 @@ Drivers.directgpu = {
             local quadH = math.floor((areaH - 6) / 2)
 
             local quadDefs = {
-                {slot="FL", col=1, row=1, name="[FL] FRONT-LEFT (左前)"},
-                {slot="FR", col=2, row=1, name="[FR] FRONT-RIGHT (右前)"},
-                {slot="BL", col=1, row=2, name="[BL] BACK-LEFT (左後)"},
-                {slot="BR", col=2, row=2, name="[BR] BACK-RIGHT (右後)"}
+                {slot="FL", col=1, row=1, title="[FL] FRONT-LEFT"},
+                {slot="FR", col=2, row=1, title="[FR] FRONT-RIGHT"},
+                {slot="BL", col=1, row=2, title="[BL] BACK-LEFT"},
+                {slot="BR", col=2, row=2, title="[BR] BACK-RIGHT"}
             }
 
             for _, q in ipairs(quadDefs) do
@@ -730,24 +763,24 @@ Drivers.directgpu = {
                 local qy = topY + (q.row - 1) * (quadH + 6)
                 gpu.fillRect(dispId, qx, qy, quadW, quadH, 18, 24, 34)
 
-                local node = FlightCore.engines[q.slot]
-                local h = FlightCore.turtleHealth[q.slot]
-                local online = (h and h.online) or (node ~= nil)
+                local qH = FlightCore.getQuadHealth(q.slot)
+                local online = qH.online > 0
                 local titleCol = online and {180, 230, 255} or {255, 120, 120}
-                gpu.drawText(dispId, q.name, qx + 8, qy + 6, titleCol[1], titleCol[2], titleCol[3], "Arial", 11, "bold")
+                gpu.drawText(dispId, q.title, qx + 8, qy + 6, titleCol[1], titleCol[2], titleCol[3], "Arial", 11, "bold")
+
+                local engCountStr = string.format("ENG: %d", qH.total)
+                gpu.drawText(dispId, engCountStr, qx + quadW - math.floor(#engCountStr * 7) - 8, qy + 6, 150, 190, 230, "Arial", 10, "plain")
 
                 local dialR = math.min(math.floor(quadW * 0.28), math.floor(quadH * 0.30))
                 local engCenterX = qx + math.floor(quadW / 2)
                 local engCenterY = qy + math.floor(quadH * 0.52)
-                local lbl = node and (node.label or node.name or q.slot) or q.slot
-                if #lbl > 6 then lbl = lbl:sub(1, 6) end
 
-                self:drawA350Dial(scr, engCenterX, engCenterY, dialR, FlightCore.virtualOutputs[q.slot], 15.0, lbl, FlightCore.engineOutputs[q.slot], q.slot)
+                self:drawA350Dial(scr, engCenterX, engCenterY, dialR, FlightCore.virtualOutputs[q.slot], 15.0, q.slot, FlightCore.engineOutputs[q.slot], q.slot)
 
-                local idStr = (h and h.id) and string.format("#%d", h.id) or (node and node.name:sub(1,6) or "N/A")
-                local statText = string.format("%s | ID:%s", online and "ONLINE (1Hz)" or "OFFLINE", idStr)
-                local statCol = online and {80, 255, 120} or {255, 80, 80}
-                gpu.drawText(dispId, statText, qx + 8, qy + quadH - 14, statCol[1], statCol[2], statCol[3], "Arial", 10, "plain")
+                local statText = string.format("ACTIVE: %d/%d", qH.online, qH.total)
+                if qH.total == 0 then statText = "NO ENGINE DETECTED" end
+                local statCol = (qH.online > 0) and {80, 255, 120} or {255, 80, 80}
+                gpu.drawText(dispId, statText, qx + 8, qy + quadH - 14, statCol[1], statCol[2], statCol[3], "Arial", 10, "bold")
             end
 
             local statY = topY + areaH + 4
@@ -822,30 +855,30 @@ Drivers.directgpu = {
             local startY = headerH + 6
 
             local slots = {
-                {slot="FL", col=1, row=1, name="Front-Left Turtle"},
-                {slot="FR", col=2, row=1, name="Front-Right Turtle"},
-                {slot="BL", col=1, row=2, name="Back-Left Turtle"},
-                {slot="BR", col=2, row=2, name="Back-Right Turtle"}
+                {slot="FL", col=1, row=1, name="Front-Left Quadrant"},
+                {slot="FR", col=2, row=1, name="Front-Right Quadrant"},
+                {slot="BL", col=1, row=2, name="Back-Left Quadrant"},
+                {slot="BR", col=2, row=2, name="Back-Right Quadrant"}
             }
 
-            local now = os.epoch("utc")
             for _, s in ipairs(slots) do
                 local cx = 6 + (s.col - 1) * (cardW + 8)
                 local cy = startY + (s.row - 1) * (cardH + 6)
-                local node = FlightCore.engines[s.slot]
-                local h = FlightCore.turtleHealth[s.slot]
-                local online = (h and h.online) or (node ~= nil)
+                local qH = FlightCore.getQuadHealth(s.slot)
+                local online = qH.online > 0
                 local bg = online and {20, 35, 30} or {40, 20, 20}
                 gpu.fillRect(dispId, cx, cy, cardW, cardH, bg[1], bg[2], bg[3])
 
                 local tagCol = online and {80, 255, 120} or {255, 80, 80}
-                local ageStr = (h and h.lastSeen > 0) and string.format("%.1fs", (now - h.lastSeen)/1000) or "N/A"
-                local idStr = (h and h.id) and string.format("#%d", h.id) or "N/A"
+                gpu.drawText(dispId, string.format("[%s] %s (Engines:%d)", s.slot, s.name, qH.total), cx + 8, cy + 8, 220, 235, 255, "Arial", 11, "bold")
+                gpu.drawText(dispId, string.format("STATUS: %d/%d ONLINE | PWM:%d", qH.online, qH.total, FlightCore.engineOutputs[s.slot]), cx + 8, cy + 24, tagCol[1], tagCol[2], tagCol[3], "Arial", 10, "bold")
 
-                gpu.drawText(dispId, string.format("[%s] %s (ID:%s)", s.slot, s.name, idStr), cx + 8, cy + 8, 220, 235, 255, "Arial", 11, "bold")
-                gpu.drawText(dispId, string.format("STATUS: %s (HB: %s)", online and "ONLINE (1Hz HB)" or "OFFLINE (NO HB)", ageStr), cx + 8, cy + 24, tagCol[1], tagCol[2], tagCol[3], "Arial", 10, "bold")
-                local lbl = (h and h.label ~= "") and h.label or (node and (node.label or node.name) or "None")
-                gpu.drawText(dispId, string.format("NODE: %s | PWM: %d/15 | VER: %s", lbl, FlightCore.engineOutputs[s.slot], (h and h.ver) or "v3.6.2"), cx + 8, cy + 40, 160, 190, 220, "Arial", 9, "plain")
+                local idList = {}
+                for _, n in ipairs(qH.nodes) do
+                    table.insert(idList, tostring(n.id or n.label))
+                end
+                local idStr = (#idList > 0) and table.concat(idList, ", ") or "None"
+                gpu.drawText(dispId, string.format("NODES: %s", idStr:sub(1, 24)), cx + 8, cy + 40, 160, 190, 220, "Arial", 9, "plain")
             end
 
             local btmY = startY + cardH * 2 + 14
@@ -1212,9 +1245,8 @@ Drivers.toms = {
 
             for i, slot in ipairs(slots) do
                 local engCenterX = ecamX + 4 + math.floor((i - 0.5) * slotW)
-                local node = FlightCore.engines[slot]
-                local lbl = node and (node.label or node.name or slot) or slot
-                if #lbl > 5 then lbl = lbl:sub(1, 5) end
+                local qH = FlightCore.getQuadHealth(slot)
+                local lbl = string.format("%s(%d)", slot, qH.total)
 
                 sTxt(engCenterX - math.floor(#lbl * 3), engCenterY - dialR - 12, lbl, 0xC8E6FF, 1)
                 sArc(engCenterX, engCenterY, dialR, 210, -30, 10, 0x8CA0B4)
@@ -1327,7 +1359,7 @@ Drivers.toms = {
             addBtn(6 + (bW+4)*5, bY, bW, bH, "STOP", stopBg, 0xFFFFFF, function() FlightCore.stopEngines() end)
 
         elseif scr.currentView == "ECAM" then
-            -- 2x2 四象限發動機直觀監控 (左上:FL, 右上:FR, 左下:BL, 右下:BR)
+            -- 2x2 四象限發動機監控 (多引擎支援 + 純英文標題防亂碼)
             local topY = headerH + 6
             local btmH = 22
             local areaH = sh - topY - btmH - 6
@@ -1335,10 +1367,10 @@ Drivers.toms = {
             local quadH = math.floor((areaH - 6) / 2)
 
             local quadDefs = {
-                {slot="FL", col=1, row=1, name="[FL] FRONT-LEFT (左前)"},
-                {slot="FR", col=2, row=1, name="[FR] FRONT-RIGHT (右前)"},
-                {slot="BL", col=1, row=2, name="[BL] BACK-LEFT (左後)"},
-                {slot="BR", col=2, row=2, name="[BR] BACK-RIGHT (右後)"}
+                {slot="FL", col=1, row=1, title="[FL] FRONT-LEFT"},
+                {slot="FR", col=2, row=1, title="[FR] FRONT-RIGHT"},
+                {slot="BL", col=1, row=2, title="[BL] BACK-LEFT"},
+                {slot="BR", col=2, row=2, title="[BR] BACK-RIGHT"}
             }
 
             for _, q in ipairs(quadDefs) do
@@ -1347,10 +1379,12 @@ Drivers.toms = {
                 sFR(qx, qy, quadW, quadH, 0x141C28)
                 sR(qx, qy, quadW, quadH, 0x283850)
 
-                local node = FlightCore.engines[q.slot]
-                local h = FlightCore.turtleHealth[q.slot]
-                local online = (h and h.online) or (node ~= nil)
-                sTxt(qx + 6, qy + 5, q.name, online and 0xC8E6FF or 0xFF7878, 1)
+                local qH = FlightCore.getQuadHealth(q.slot)
+                local online = qH.online > 0
+                sTxt(qx + 8, qy + 6, q.title, online and 0xC8E6FF or 0xFF7878, 1)
+
+                local engCountStr = string.format("ENG: %d", qH.total)
+                sTxt(qx + quadW - math.floor(#engCountStr * 6) - 8, qy + 6, engCountStr, 0x96BEE1, 1)
 
                 local dialR = math.min(math.floor(quadW * 0.28), math.floor(quadH * 0.30))
                 local engCenterX = qx + math.floor(quadW / 2)
@@ -1378,9 +1412,9 @@ Drivers.toms = {
                 local sigStr = string.format("PWM: %d", FlightCore.engineOutputs[q.slot] or 0)
                 sTxt(engCenterX - math.floor(#sigStr * 3), boxY + boxH + 2, sigStr, 0x96BEE1, 1)
 
-                local idStr = (h and h.id) and string.format("#%d", h.id) or "N/A"
-                local statStr = string.format("%s %s", online and "ON" or "OFF", idStr)
-                sTxt(qx + 6, qy + quadH - 10, statStr, online and 0x50FF78 or 0xFF5050, 1)
+                local statText = string.format("ACTIVE: %d/%d", qH.online, qH.total)
+                if qH.total == 0 then statText = "NO ENGINE" end
+                sTxt(qx + 8, qy + quadH - 12, statText, (qH.online > 0) and 0x50FF78 or 0xFF5050, 1)
             end
 
             local statY = topY + areaH + 4
@@ -1459,29 +1493,29 @@ Drivers.toms = {
             local startY = headerH + 6
 
             local slots = {
-                {slot="FL", col=1, row=1, name="Front-Left Turtle"},
-                {slot="FR", col=2, row=1, name="Front-Right Turtle"},
-                {slot="BL", col=1, row=2, name="Back-Left Turtle"},
-                {slot="BR", col=2, row=2, name="Back-Right Turtle"}
+                {slot="FL", col=1, row=1, name="Front-Left Quadrant"},
+                {slot="FR", col=2, row=1, name="Front-Right Quadrant"},
+                {slot="BL", col=1, row=2, name="Back-Left Quadrant"},
+                {slot="BR", col=2, row=2, name="Back-Right Quadrant"}
             }
 
-            local now = os.epoch("utc")
             for _, s in ipairs(slots) do
                 local cx = 6 + (s.col - 1) * (cardW + 8)
                 local cy = startY + (s.row - 1) * (cardH + 6)
-                local node = FlightCore.engines[s.slot]
-                local h = FlightCore.turtleHealth[s.slot]
-                local online = (h and h.online) or (node ~= nil)
+                local qH = FlightCore.getQuadHealth(s.slot)
+                local online = qH.online > 0
                 sFR(cx, cy, cardW, cardH, online and 0x14281E or 0x281414)
                 sR(cx, cy, cardW, cardH, online and 0x28643C or 0x642828)
 
-                local ageStr = (h and h.lastSeen > 0) and string.format("%.1fs", (now - h.lastSeen)/1000) or "N/A"
-                local idStr = (h and h.id) and string.format("#%d", h.id) or "N/A"
+                sTxt(cx + 6, cy + 6, string.format("[%s] %s (%d)", s.slot, s.name:sub(1,10), qH.total), 0xF0F5FF, 1)
+                sTxt(cx + 6, cy + 20, string.format("STATUS: %d/%d ONLINE | PWM:%d", qH.online, qH.total, FlightCore.engineOutputs[s.slot]), online and 0x50FF78 or 0xFF5050, 1)
 
-                sTxt(cx + 6, cy + 6, string.format("[%s] %s (ID:%s)", s.slot, s.name, idStr), 0xF0F5FF, 1)
-                sTxt(cx + 6, cy + 20, string.format("STATUS: %s (HB: %s)", online and "ONLINE (1Hz HB)" or "OFFLINE (NO HB)", ageStr), online and 0x50FF78 or 0xFF5050, 1)
-                local lbl = (h and h.label ~= "") and h.label or (node and (node.label or node.name) or "N/A")
-                sTxt(cx + 6, cy + 34, string.format("NODE: %s | PWM: %d/15", lbl:sub(1,7), FlightCore.engineOutputs[s.slot]), 0x8CA0B4, 1)
+                local idList = {}
+                for _, n in ipairs(qH.nodes) do
+                    table.insert(idList, tostring(n.id or n.label))
+                end
+                local idStr = (#idList > 0) and table.concat(idList, ",") or "None"
+                sTxt(cx + 6, cy + 34, string.format("NODES: %s", idStr:sub(1, 18)), 0x8CA0B4, 1)
             end
 
             local btmY = startY + cardH * 2 + 10
@@ -1708,15 +1742,14 @@ Drivers.normal = {
             local slots = {"FL", "FR", "BL", "BR"}
             for i, slot in ipairs(slots) do
                 local dx = rightX + (i - 1) * dialW
-                local node = FlightCore.engines[slot]
-                local lbl = node and (node.label or node.name or slot) or slot
+                local qH = FlightCore.getQuadHealth(slot)
                 local val = FlightCore.virtualOutputs[slot] or 0.0
                 local sig = FlightCore.engineOutputs[slot] or 0
 
                 for row = 0, cardH - 1 do
                     self:safeBlit(scr, dx, instY + row, string.rep(" ", dialW - 1), "0", "7")
                 end
-                self:safeBlit(scr, dx, instY, string.format("[%s]", lbl:sub(1, 3)), "9", "8")
+                self:safeBlit(scr, dx, instY, string.format("[%s:%d]", slot, qH.total), "9", "8")
                 self:safeBlit(scr, dx, instY + 1, string.format("%4.1f", val), "5", "7")
                 self:safeBlit(scr, dx, instY + 2, string.format("%2d/15", sig), "3", "7")
             end
@@ -1774,36 +1807,33 @@ Drivers.normal = {
             addBtn(7 + bW*5, bY, bW, 2, "STOP", "e", "0", function() FlightCore.stopEngines() end)
 
         elseif scr.currentView == "ECAM" then
-            -- 2x2 四象限發動機直觀監控 (左上:FL, 右上:FR, 左下:BL, 右下:BR)
+            -- 2x2 四象限發動機直觀監控 (多引擎支援)
             local quadW = math.floor((w - 3) / 2)
             local quadH = math.max(3, math.floor((h - 5) / 2))
             local startY = 3
 
             local quadDefs = {
-                {slot="FL", col=1, row=1, name="[FL] FRONT-LEFT (左前)"},
-                {slot="FR", col=2, row=1, name="[FR] FRONT-RIGHT (右前)"},
-                {slot="BL", col=1, row=2, name="[BL] BACK-LEFT (左後)"},
-                {slot="BR", col=2, row=2, name="[BR] BACK-RIGHT (右後)"}
+                {slot="FL", col=1, row=1, title="[FL] FRONT-LEFT"},
+                {slot="FR", col=2, row=1, title="[FR] FRONT-RIGHT"},
+                {slot="BL", col=1, row=2, title="[BL] BACK-LEFT"},
+                {slot="BR", col=2, row=2, title="[BR] BACK-RIGHT"}
             }
 
             for _, q in ipairs(quadDefs) do
                 local qx = 2 + (q.col - 1) * (quadW + 1)
                 local qy = startY + (q.row - 1) * (quadH + 1)
-                local node = FlightCore.engines[q.slot]
-                local hStatus = FlightCore.turtleHealth[q.slot]
-                local online = (hStatus and hStatus.online) or (node ~= nil)
+                local qH = FlightCore.getQuadHealth(q.slot)
                 local val = FlightCore.virtualOutputs[q.slot] or 0.0
                 local sig = FlightCore.engineOutputs[q.slot] or 0
 
                 for r = 0, quadH - 1 do
                     self:safeBlit(scr, qx, qy + r, string.rep(" ", quadW), "0", "7")
                 end
-                self:safeBlit(scr, qx + 1, qy, q.name:sub(1, quadW - 2), "9", "8")
+                self:safeBlit(scr, qx + 1, qy, string.format("%s (%d)", q.title:sub(1, quadW - 6), qH.total), "9", "8")
                 self:safeBlit(scr, qx + 1, qy + 1, string.format("THRUST: %4.1f", val), "5", "7")
                 self:safeBlit(scr, qx + 1, qy + 2, string.format("PWM: %2d/15", sig), "3", "7")
                 if quadH >= 4 then
-                    local idStr = (hStatus and hStatus.id) and string.format("#%d", hStatus.id) or "N/A"
-                    self:safeBlit(scr, qx + 1, qy + 3, string.format("STATUS: %s (ID:%s)", online and "ONLINE" or "OFFLINE", idStr), online and "5" or "e", "7")
+                    self:safeBlit(scr, qx + 1, qy + 3, string.format("ACTIVE: %d/%d", qH.online, qH.total), (qH.online > 0) and "5" or "e", "7")
                 end
             end
 
@@ -1860,30 +1890,26 @@ Drivers.normal = {
 
         elseif scr.currentView == "SYS" then
             local slots = {
-                {slot="FL", col=1, row=1, name="Front-Left Turtle"},
-                {slot="FR", col=2, row=1, name="Front-Right Turtle"},
-                {slot="BL", col=1, row=2, name="Back-Left Turtle"},
-                {slot="BR", col=2, row=2, name="Back-Right Turtle"}
+                {slot="FL", col=1, row=1, name="Front-Left Quadrant"},
+                {slot="FR", col=2, row=1, name="Front-Right Quadrant"},
+                {slot="BL", col=1, row=2, name="Back-Left Quadrant"},
+                {slot="BR", col=2, row=2, name="Back-Right Quadrant"}
             }
             local cardW = math.floor((w - 3) / 2)
             local cardH = 3
 
-            local now = os.epoch("utc")
             for _, s in ipairs(slots) do
                 local cx = 2 + (s.col - 1) * (cardW + 1)
                 local cy = 3 + (s.row - 1) * (cardH + 1)
-                local node = FlightCore.engines[s.slot]
-                local hStatus = FlightCore.turtleHealth[s.slot]
-                local online = (hStatus and hStatus.online) or (node ~= nil)
+                local qH = FlightCore.getQuadHealth(s.slot)
+                local online = qH.online > 0
                 local bg = online and "5" or "e"
 
                 for r = 0, cardH - 1 do
                     self:safeBlit(scr, cx, cy + r, string.rep(" ", cardW), "0", bg)
                 end
-                local idStr = (hStatus and hStatus.id) and string.format("#%d", hStatus.id) or "N/A"
-                local ageStr = (hStatus and hStatus.lastSeen > 0) and string.format("%.1fs", (now - hStatus.lastSeen)/1000) or "N/A"
-                self:safeBlit(scr, cx + 1, cy, string.format("[%s] ID:%s HB:%s", s.slot, idStr, ageStr), "0", bg)
-                self:safeBlit(scr, cx + 1, cy + 1, string.format("STATUS: %s", online and "ONLINE (1Hz HB)" or "OFFLINE"), "0", bg)
+                self:safeBlit(scr, cx + 1, cy, string.format("[%s] %d ENG", s.slot, qH.total), "0", bg)
+                self:safeBlit(scr, cx + 1, cy + 1, string.format("STATUS: %d/%d ONLINE", qH.online, qH.total), "0", bg)
             end
 
             local btmY = h - 2
@@ -1980,13 +2006,16 @@ local function eventLoop()
         local event, p1, p2, p3, p4, p5 = os.pullEvent()
         if event == "modem_message" and p2 == 101 and type(p4) == "table" and p4.type == "HEARTBEAT" then
             local r = p4.role
-            if FlightCore.turtleHealth[r] then
-                FlightCore.turtleHealth[r].online = true
-                FlightCore.turtleHealth[r].lastSeen = os.epoch("utc")
-                FlightCore.turtleHealth[r].id = p4.id
-                FlightCore.turtleHealth[r].sig = p4.sig
-                FlightCore.turtleHealth[r].ver = p4.ver
-                FlightCore.turtleHealth[r].label = p4.label
+            local id = p4.id or p3
+            if id and r then
+                FlightCore.turtles[id] = {
+                    role = r,
+                    lastSeen = os.epoch("utc"),
+                    id = id,
+                    sig = p4.sig or 0,
+                    ver = p4.ver or VERSION,
+                    label = p4.label or ""
+                }
             end
         end
         activeDriver:handleEvent(event, p1, p2, p3, p4, p5)
