@@ -1985,7 +1985,7 @@ Drivers.normal = {
 
         elseif scr.currentView == "CTRL" then
             local currAlt = FlightCore.altiSensor and FlightCore.altiSensor.getHeight() or 0
-            self:safeBlit(scr, 2, 3, string.format("[%s] ALT:%.0f->%.0f | B:%.2f", FlightCore.state.mode:sub(1,6)), currAlt, FlightCore.state.targetAlt, FlightCore.state.baseThrottle), "0", "b")
+            self:safeBlit(scr, 2, 3, string.format("[%s] ALT:%.0f->%.0f | B:%.2f", FlightCore.state.mode:sub(1,6), currAlt, FlightCore.state.targetAlt, FlightCore.state.baseThrottle), "0", "b")
 
             local rowH = math.max(2, math.floor((h - 7) / 3))
 
