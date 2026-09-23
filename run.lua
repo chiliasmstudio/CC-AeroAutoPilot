@@ -1147,6 +1147,7 @@ Drivers.tom = {
         local curX = x
         local argb = self:toARGB(color)
         local sw, sh = scr.screenW, scr.screenH
+        local POW2 = { [0]=1, [1]=2, [2]=4, [3]=8, [4]=16, [5]=32, [6]=64, [7]=128 }
 
         for i = 1, #text do
             local ch = text:sub(i, i)
@@ -1161,7 +1162,7 @@ Drivers.tom = {
                             local runStart = nil
                             local runLen = 0
                             for row = 0, 6 do
-                                if bit.band(bit.rshift(byte, row), 1) == 1 then
+                                if (math.floor(byte / POW2[row]) % 2) == 1 then
                                     local py = y + row
                                     if py >= 1 and py <= sh then
                                         if not runStart then runStart = py end
@@ -1193,7 +1194,7 @@ Drivers.tom = {
                         local byte = bitmap[col]
                         local px = curX + (col - 1) * scale
                         for row = 0, 6 do
-                            if bit.band(bit.rshift(byte, row), 1) == 1 then
+                            if (math.floor(byte / POW2[row]) % 2) == 1 then
                                 local py = y + row * scale
                                 pcall(function() scr.gpu.filledRectangle(px, py, scale, scale, argb) end)
                             end
