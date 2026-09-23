@@ -1,7 +1,7 @@
 --[[
     Create: Avionics & CC: Tweaked
     Unified Quad-Engine Avionics Flight Computer (四軸有線模組化統一飛控大腦)
-    Version: v3.6.1 (Multi-Screen Modular Glass Cockpit & Heartbeat Telemetry)
+    Version: v3.6.2 (4-Quadrant ECAM & Adaptive Header Layout)
     
     架構說明 (Decoupled PHP+Vue Architecture):
     - 飛控核心與動力後端 (Flight Core - Backend): 獨立封裝 PID、感測器獲取、PWM 集體升力混控、200m 標定演算法、烏龜有線通訊與 1Hz 心跳接收 (Heartbeat Telemetry Uplink)。
@@ -10,12 +10,12 @@
         * Channel 101: 烏龜 1Hz 上行心跳狀態廣播 (Uplink: Turtles -> Main: ID, Label, Sig, Uptime, Ver)
         * 主機即時監測各烏龜連線健康度，超時 3.0s 自動標記 OFFLINE。
     - 多螢幕視圖前端 (Multi-Screen Display Drivers - Frontend Views):
-        * 每個螢幕獨立切換顯示內容與選單，左上角顯示畫面名稱 (版本號僅在主機 CLI 顯示)。
+        * 頂部標題自動防碰撞自適應排版 (左上角顯示畫面名稱，絕不遮擋右上角 MENU)。
         * 右上角獨立常駐 [ ☰ MENU ] / [ ✕ CLOSE ] 按鈕。
     - 6 大獨立功能視圖 (6 Major Independent Views):
         1. OVERVIEW (綜合駕駛艙 - 儀表與控制按鈕整合)
         2. PFD (主飛行儀表 - 巨大人工地平線姿態儀 + 數位高度錶 + 升降速率)
-        3. ECAM (發動機動力監控 - 4 具超大 A350 引擎圓錶，純監控無擁擠按鈕)
+        3. ECAM (發動機動力監控 - 2x2 四象限直觀排布: 左上左前 / 右上右前 / 左下左後 / 右下右後)
         4. CTRL (飛行控制畫面 - 完整飛行控制面板、高度微調、油門調整、模式切換)
         5. NAV (快速導航與預設高度 - 0m/80m/150m/200m/300m/鎖定)
         6. SYS (系統診斷與硬體自檢 - 4 軸烏龜心跳連線、延遲與 PWM 反饋)
@@ -27,7 +27,7 @@
       run.lua normal       (強制使用 CC: Tweaked 原生螢幕/終端機驅動，支援多螢幕)
 --]]
 
-local VERSION = "v3.6.1"
+local VERSION = "v3.6.2"
 local args = {...}
 local requestedDriver = args[1] and string.lower(args[1]) or "auto"
 
@@ -105,10 +105,10 @@ FlightCore.virtualOutputs = { FL = 0.0, FR = 0.0, BL = 0.0, BR = 0.0 }
 
 -- 烏龜心跳與遙測健康度
 FlightCore.turtleHealth = {
-    FL = { online = false, lastSeen = 0, id = nil, sig = 0, ver = "v3.6.1", label = "" },
-    FR = { online = false, lastSeen = 0, id = nil, sig = 0, ver = "v3.6.1", label = "" },
-    BL = { online = false, lastSeen = 0, id = nil, sig = 0, ver = "v3.6.1", label = "" },
-    BR = { online = false, lastSeen = 0, id = nil, sig = 0, ver = "v3.6.1", label = "" }
+    FL = { online = false, lastSeen = 0, id = nil, sig = 0, ver = "v3.6.2", label = "" },
+    FR = { online = false, lastSeen = 0, id = nil, sig = 0, ver = "v3.6.2", label = "" },
+    BL = { online = false, lastSeen = 0, id = nil, sig = 0, ver = "v3.6.2", label = "" },
+    BR = { online = false, lastSeen = 0, id = nil, sig = 0, ver = "v3.6.2", label = "" }
 }
 
 FlightCore.altiSensor = nil
@@ -128,7 +128,7 @@ function FlightCore.initSensorsAndModem()
     FlightCore.gimbalSensor = peripheral.find("gimbal_sensor")
     FlightCore.masterModem = peripheral.find("modem")
     if FlightCore.masterModem then
-        pcall(function() FlightCore.masterModem.open(101) end) -- 開啟接收烏龜心跳 (Ch 101)
+        pcall(function() FlightCore.masterModem.open(101) end)
     end
 end
 
@@ -423,12 +423,12 @@ end
 local Drivers = {}
 
 local VIEW_TITLES = {
-    OVERVIEW = "OVERVIEW (COMBINED)",
-    PFD = "PRIMARY FLIGHT DISPLAY (PFD)",
-    ECAM = "ENGINE MONITOR & ECAM",
-    CTRL = "FLIGHT CONTROL PANEL (CTRL)",
-    NAV = "NAVIGATION PRESETS (NAV)",
-    SYS = "SYSTEM DIAGNOSTICS (SYS)"
+    OVERVIEW = "OVERVIEW",
+    PFD = "PFD - PRIMARY FLIGHT",
+    ECAM = "ECAM - QUAD ENGINES",
+    CTRL = "CTRL - FLIGHT PANEL",
+    NAV = "NAV - PRESETS",
+    SYS = "SYS - DIAGNOSTICS"
 }
 
 -- --------------------------------------------------------
@@ -471,9 +471,9 @@ Drivers.directgpu = {
     drawA350Dial = function(self, scr, cx, cy, r, val, maxVal, label, sig, slot)
         local gpu = scr.gpu
         local dispId = scr.displayId
-        local labelSize = math.max(12, math.floor(r * 0.46))
+        local labelSize = math.max(11, math.floor(r * 0.44))
         local lblOffset = math.floor(#label * (labelSize * 0.32))
-        gpu.drawText(dispId, label, cx - lblOffset, cy - r - math.floor(labelSize * 1.3), 200, 230, 255, "Arial", labelSize, "bold")
+        gpu.drawText(dispId, label, cx - lblOffset, cy - r - math.floor(labelSize * 1.2), 200, 230, 255, "Arial", labelSize, "bold")
 
         local arcPts, arcPtsOuter = {}, {}
         for deg = 210, -30, -10 do
@@ -487,7 +487,7 @@ Drivers.directgpu = {
         for _, deg in ipairs({210, 90, -30}) do
             local rad = math.rad(deg)
             gpu.drawLine(dispId, math.floor(cx + (r - 3) * math.cos(rad) + 0.5), math.floor(cy - (r - 3) * math.sin(rad) + 0.5),
-                                           math.floor(cx + (r + 6) * math.cos(rad) + 0.5), math.floor(cy - (r + 6) * math.sin(rad) + 0.5), 180, 200, 225)
+                                           math.floor(cx + (r + 5) * math.cos(rad) + 0.5), math.floor(cy - (r + 5) * math.sin(rad) + 0.5), 180, 200, 225)
         end
 
         local redPts = {}
@@ -504,20 +504,20 @@ Drivers.directgpu = {
         gpu.drawLine(dispId, cx, cy, nx, ny, 50, 255, 100)
         gpu.drawCircle(dispId, cx, cy, math.max(2, math.floor(r * 0.14)), 200, 220, 240, true)
 
-        local boxW = math.max(46, math.floor(r * 1.55))
-        local boxH = math.max(18, math.floor(r * 0.65))
+        local boxW = math.max(42, math.floor(r * 1.50))
+        local boxH = math.max(16, math.floor(r * 0.60))
         local boxX = cx - math.floor(boxW / 2)
         local boxY = cy + math.floor(r * 0.28)
         gpu.fillRect(dispId, boxX, boxY, boxW, boxH, 12, 18, 28)
         gpu.drawPolylines(dispId, {{boxX, boxY}, {boxX+boxW, boxY}, {boxX+boxW, boxY+boxH}, {boxX, boxY+boxH}, {boxX, boxY}}, 40, 150, 200)
 
         local valStr = string.format("%4.1f", val)
-        local numFontSize = math.max(12, math.floor(boxH * 0.70))
+        local numFontSize = math.max(11, math.floor(boxH * 0.70))
         gpu.drawText(dispId, valStr, boxX + 4, boxY + 2, 70, 255, 120, "Arial", numFontSize, "bold")
 
-        local sigStr = string.format("%d/15", sig or 0)
-        local sigFontSize = math.max(10, math.floor(boxH * 0.52))
-        gpu.drawText(dispId, sigStr, cx - math.floor(#sigStr * 3.5), boxY + boxH + 3, 150, 190, 225, "Arial", sigFontSize, "plain")
+        local sigStr = string.format("PWM: %d", sig or 0)
+        local sigFontSize = math.max(9, math.floor(boxH * 0.50))
+        gpu.drawText(dispId, sigStr, cx - math.floor(#sigStr * 3.0), boxY + boxH + 3, 150, 190, 225, "Arial", sigFontSize, "plain")
     end,
     draw = function(self)
         for _, scr in ipairs(self.screens) do
@@ -537,13 +537,10 @@ Drivers.directgpu = {
             table.insert(scr.buttons, {x=x, y=y, w=w, h=h, text=text, bg=bg, fg=fg, action=act})
         end
 
-        local headerH = math.max(28, math.floor(sh * 0.09))
+        local headerH = math.max(26, math.floor(sh * 0.085))
         gpu.fillRect(dispId, 0, 0, sw, headerH, 25, 40, 65)
-        local titleFontSize = math.max(12, math.floor(headerH * 0.48))
-        local viewTitle = scr.isMenuOpen and "VIEW SELECTION MENU" or (VIEW_TITLES[scr.currentView] or scr.currentView)
-        gpu.drawText(dispId, viewTitle, 12, math.floor((headerH - titleFontSize) / 2), 240, 245, 255, "Arial", titleFontSize, "bold")
 
-        local menuBtnW = math.max(70, math.floor(sw * 0.20))
+        local menuBtnW = math.max(65, math.floor(sw * 0.18))
         local menuBtnH = headerH - 6
         local menuBtnX = sw - menuBtnW - 4
         local menuBtnY = 3
@@ -552,6 +549,10 @@ Drivers.directgpu = {
         else
             addBtn(menuBtnX, menuBtnY, menuBtnW, menuBtnH, "[= MENU]", {35, 80, 150}, {255, 255, 255}, function() scr.isMenuOpen = true end)
         end
+
+        local titleFontSize = math.max(11, math.min(15, math.floor(headerH * 0.48)))
+        local viewTitle = scr.isMenuOpen and "SELECT VIEW" or (VIEW_TITLES[scr.currentView] or scr.currentView)
+        gpu.drawText(dispId, viewTitle, 10, math.floor((headerH - titleFontSize) / 2), 240, 245, 255, "Arial", titleFontSize, "bold")
 
         if scr.isMenuOpen then
             local cardW = math.floor((sw - 24) / 2)
@@ -567,11 +568,11 @@ Drivers.directgpu = {
                 end)
             end
 
-            addMenuCard(1, 1, "1. OVERVIEW (ALL-IN-ONE)", "OVERVIEW", {30, 65, 110})
-            addMenuCard(2, 1, "2. PFD (FLIGHT HORIZON)", "PFD", {25, 95, 75})
-            addMenuCard(1, 2, "3. ECAM (ENGINE GAUGES)", "ECAM", {110, 45, 25})
-            addMenuCard(2, 2, "4. CTRL (FLIGHT CONTROLS)", "CTRL", {35, 110, 95})
-            addMenuCard(1, 3, "5. NAV (ALT PRESETS)", "NAV", {20, 100, 130})
+            addMenuCard(1, 1, "1. OVERVIEW", "OVERVIEW", {30, 65, 110})
+            addMenuCard(2, 1, "2. PFD (FLIGHT)", "PFD", {25, 95, 75})
+            addMenuCard(1, 2, "3. ECAM (QUAD ENG)", "ECAM", {110, 45, 25})
+            addMenuCard(2, 2, "4. CTRL (CONTROLS)", "CTRL", {35, 110, 95})
+            addMenuCard(1, 3, "5. NAV (PRESETS)", "NAV", {20, 100, 130})
             addMenuCard(2, 3, "6. SYS (DIAGNOSTICS)", "SYS", {75, 45, 110})
 
         elseif scr.currentView == "OVERVIEW" then
@@ -585,7 +586,7 @@ Drivers.directgpu = {
             local pfdX = 6
 
             gpu.fillRect(dispId, pfdX, instY, leftW, instH, 20, 26, 38)
-            gpu.drawText(dispId, "PRIMARY FLIGHT DISPLAY", pfdX + 10, instY + 6, 170, 200, 230, "Arial", 10, "bold")
+            gpu.drawText(dispId, "PRIMARY FLIGHT", pfdX + 10, instY + 6, 170, 200, 230, "Arial", 10, "bold")
 
             local gR = math.min(36, math.floor(instH * 0.30))
             local gCX = pfdX + math.floor(leftW * 0.28)
@@ -710,28 +711,48 @@ Drivers.directgpu = {
             addBtn(6 + (bW+4)*5, bY, bW, bH, "STOP", stopBg, {255, 255, 255}, function() FlightCore.stopEngines() end)
 
         elseif scr.currentView == "ECAM" then
-            -- 純發動機監控畫面 (獨立寬敞，不擠入大按鈕)
-            local instY = headerH + 6
-            local instH = sh - instY - 32
-            gpu.fillRect(dispId, 6, instY, sw - 12, instH, 18, 24, 34)
+            -- 2x2 四象限發動機直觀監控 (左上:FL, 右上:FR, 左下:BL, 右下:BR)
+            local topY = headerH + 6
+            local btmH = 26
+            local areaH = sh - topY - btmH - 6
+            local quadW = math.floor((sw - 18) / 2)
+            local quadH = math.floor((areaH - 6) / 2)
 
-            local slotW = math.floor((sw - 20) / 4)
-            local slots = {"FL", "FR", "BL", "BR"}
-            local dialR = math.min(math.floor(slotW * 0.40), math.floor(instH * 0.36))
-            local engCenterY = instY + math.floor(instH * 0.46)
+            local quadDefs = {
+                {slot="FL", col=1, row=1, name="[FL] FRONT-LEFT (左前)"},
+                {slot="FR", col=2, row=1, name="[FR] FRONT-RIGHT (右前)"},
+                {slot="BL", col=1, row=2, name="[BL] BACK-LEFT (左後)"},
+                {slot="BR", col=2, row=2, name="[BR] BACK-RIGHT (右後)"}
+            }
 
-            for i, slot in ipairs(slots) do
-                local engCenterX = 8 + math.floor((i - 0.5) * slotW)
-                local node = FlightCore.engines[slot]
-                local lbl = node and (node.label or node.name or slot) or slot
+            for _, q in ipairs(quadDefs) do
+                local qx = 6 + (q.col - 1) * (quadW + 6)
+                local qy = topY + (q.row - 1) * (quadH + 6)
+                gpu.fillRect(dispId, qx, qy, quadW, quadH, 18, 24, 34)
+
+                local node = FlightCore.engines[q.slot]
+                local h = FlightCore.turtleHealth[q.slot]
+                local online = (h and h.online) or (node ~= nil)
+                local titleCol = online and {180, 230, 255} or {255, 120, 120}
+                gpu.drawText(dispId, q.name, qx + 8, qy + 6, titleCol[1], titleCol[2], titleCol[3], "Arial", 11, "bold")
+
+                local dialR = math.min(math.floor(quadW * 0.28), math.floor(quadH * 0.30))
+                local engCenterX = qx + math.floor(quadW / 2)
+                local engCenterY = qy + math.floor(quadH * 0.52)
+                local lbl = node and (node.label or node.name or q.slot) or q.slot
                 if #lbl > 6 then lbl = lbl:sub(1, 6) end
-                self:drawA350Dial(scr, engCenterX, engCenterY, dialR, FlightCore.virtualOutputs[slot], 15.0, lbl, FlightCore.engineOutputs[slot], slot)
+
+                self:drawA350Dial(scr, engCenterX, engCenterY, dialR, FlightCore.virtualOutputs[q.slot], 15.0, lbl, FlightCore.engineOutputs[q.slot], q.slot)
+
+                local idStr = (h and h.id) and string.format("#%d", h.id) or (node and node.name:sub(1,6) or "N/A")
+                local statText = string.format("%s | ID:%s", online and "ONLINE (1Hz)" or "OFFLINE", idStr)
+                local statCol = online and {80, 255, 120} or {255, 80, 80}
+                gpu.drawText(dispId, statText, qx + 8, qy + quadH - 14, statCol[1], statCol[2], statCol[3], "Arial", 10, "plain")
             end
 
-            local statY = instY + instH + 4
-            local statH = sh - statY - 4
-            gpu.fillRect(dispId, 6, statY, sw - 12, statH, 25, 32, 45)
-            gpu.drawText(dispId, string.format("BASE THRUST: %4.2f/15  |  PID MIXER: BALANCED  |  STATUS: %s", FlightCore.state.baseThrottle, FlightCore.state.statusMsg), 14, statY + math.floor((statH - 12)/2), 80, 230, 255, "Arial", 12, "bold")
+            local statY = topY + areaH + 4
+            gpu.fillRect(dispId, 6, statY, sw - 12, btmH, 25, 32, 45)
+            gpu.drawText(dispId, string.format("BASE THRUST: %4.2f/15  |  PID MIXER: BALANCED  |  STATUS: %s", FlightCore.state.baseThrottle, FlightCore.state.statusMsg), 14, statY + 6, 80, 230, 255, "Arial", 11, "bold")
 
         elseif scr.currentView == "CTRL" then
             -- 獨立飛行控制面板 (專屬寬敞操作按鈕)
@@ -739,9 +760,9 @@ Drivers.directgpu = {
             local topH = 36
             gpu.fillRect(dispId, 6, topY, sw - 12, topH, 20, 28, 42)
             local mCol = (FlightCore.state.mode == "HOLD_ALT") and {80, 255, 120} or (FlightCore.state.mode == "CALIBRATING" and {80, 200, 255} or {255, 80, 80})
-            gpu.drawText(dispId, string.format("MODE: [%s]", FlightCore.state.mode), 14, topY + 10, mCol[1], mCol[2], mCol[3], "Arial", 14, "bold")
+            gpu.drawText(dispId, string.format("MODE: [%s]", FlightCore.state.mode), 14, topY + 10, mCol[1], mCol[2], mCol[3], "Arial", 13, "bold")
             local currAlt = FlightCore.altiSensor and FlightCore.altiSensor.getHeight() or 0
-            gpu.drawText(dispId, string.format("ALT: %5.1fm -> TGT: %3.0fm | BASE: %4.2f | STATUS: %s", currAlt, FlightCore.state.targetAlt, FlightCore.state.baseThrottle, FlightCore.state.statusMsg), 140, topY + 10, 200, 230, 255, "Arial", 12, "plain")
+            gpu.drawText(dispId, string.format("ALT: %5.1fm -> TGT: %3.0fm | BASE: %4.2f | STATUS: %s", currAlt, FlightCore.state.targetAlt, FlightCore.state.baseThrottle, FlightCore.state.statusMsg), 130, topY + 10, 200, 230, 255, "Arial", 11, "plain")
 
             local gridY = topY + topH + 8
             local btnAreaH = sh - gridY - 6
@@ -779,7 +800,7 @@ Drivers.directgpu = {
 
             local statH = 34
             gpu.fillRect(dispId, 6, headerH + 6, sw - 12, statH, 20, 28, 40)
-            gpu.drawText(dispId, string.format("ALT: %.1fm  ->  TARGET: %.0fm  (V.S: %+.2f m/s)", currAlt, FlightCore.state.targetAlt, currVspeed), 14, headerH + 12, 80, 230, 255, "Arial", 13, "bold")
+            gpu.drawText(dispId, string.format("ALT: %.1fm  ->  TARGET: %.0fm  (V.S: %+.2f m/s)", currAlt, FlightCore.state.targetAlt, currVspeed), 14, headerH + 12, 80, 230, 255, "Arial", 12, "bold")
 
             local gridY = headerH + 6 + statH + 8
             local btnAreaH = sh - gridY - 6
@@ -821,10 +842,10 @@ Drivers.directgpu = {
                 local ageStr = (h and h.lastSeen > 0) and string.format("%.1fs", (now - h.lastSeen)/1000) or "N/A"
                 local idStr = (h and h.id) and string.format("#%d", h.id) or "N/A"
 
-                gpu.drawText(dispId, string.format("[%s] %s (ID:%s)", s.slot, s.name, idStr), cx + 8, cy + 8, 220, 235, 255, "Arial", 12, "bold")
-                gpu.drawText(dispId, string.format("STATUS: %s (HB Age: %s)", online and "ONLINE (1Hz HB)" or "OFFLINE (NO HB)", ageStr), cx + 8, cy + 26, tagCol[1], tagCol[2], tagCol[3], "Arial", 11, "bold")
+                gpu.drawText(dispId, string.format("[%s] %s (ID:%s)", s.slot, s.name, idStr), cx + 8, cy + 8, 220, 235, 255, "Arial", 11, "bold")
+                gpu.drawText(dispId, string.format("STATUS: %s (HB: %s)", online and "ONLINE (1Hz HB)" or "OFFLINE (NO HB)", ageStr), cx + 8, cy + 24, tagCol[1], tagCol[2], tagCol[3], "Arial", 10, "bold")
                 local lbl = (h and h.label ~= "") and h.label or (node and (node.label or node.name) or "None")
-                gpu.drawText(dispId, string.format("NODE: %s | PWM: %d/15 | VER: %s", lbl, FlightCore.engineOutputs[s.slot], (h and h.ver) or "v3.6.1"), cx + 8, cy + 44, 160, 190, 220, "Arial", 10, "plain")
+                gpu.drawText(dispId, string.format("NODE: %s | PWM: %d/15 | VER: %s", lbl, FlightCore.engineOutputs[s.slot], (h and h.ver) or "v3.6.2"), cx + 8, cy + 40, 160, 190, 220, "Arial", 9, "plain")
             end
 
             local btmY = startY + cardH * 2 + 14
@@ -1097,14 +1118,11 @@ Drivers.toms = {
         sFill(0x0F141E)
         scr.buttons = {}
 
-        -- 1. 頂部標題列與右上角 MENU 按鈕 (顯示畫面名稱，不顯示版本號)
+        -- 1. 頂部標題列與右上角 MENU 按鈕 (自適應防碰撞排版)
         local headerH = math.max(24, math.floor(sh * 0.08))
         sFR(1, 1, sw, headerH, 0x192841)
-        local titleSize = (sw >= 300) and 2 or 1
-        local viewTitle = scr.isMenuOpen and "VIEW SELECTION MENU" or (VIEW_TITLES[scr.currentView] or scr.currentView)
-        sTxt(12, math.floor((headerH - 7 * titleSize) / 2) + 1, viewTitle, 0xF0F5FF, titleSize)
 
-        local menuBtnW = (sw >= 300) and 70 or 50
+        local menuBtnW = (sw >= 280) and 65 or 48
         local menuBtnH = headerH - 4
         local menuBtnX = sw - menuBtnW - 4
         local menuBtnY = 3
@@ -1113,6 +1131,14 @@ Drivers.toms = {
         else
             addBtn(menuBtnX, menuBtnY, menuBtnW, menuBtnH, "[= MENU]", 0x224488, 0xFFFFFF, function() scr.isMenuOpen = true end)
         end
+
+        local maxTitleW = menuBtnX - 16
+        local viewTitle = scr.isMenuOpen and "SELECT VIEW" or (VIEW_TITLES[scr.currentView] or scr.currentView)
+        local titleSize = 1
+        if (sw >= 300) and (#viewTitle * 6 * 2 <= maxTitleW) then
+            titleSize = 2
+        end
+        sTxt(10, math.floor((headerH - 7 * titleSize) / 2) + 1, viewTitle, 0xF0F5FF, titleSize)
 
         -- 2. 視圖分流路由 (6 大視圖)
         if scr.isMenuOpen then
@@ -1129,15 +1155,14 @@ Drivers.toms = {
                 end)
             end
 
-            addMenuCard(1, 1, "1. OVERVIEW (ALL-IN-ONE)", "OVERVIEW", 0x1B3A60)
-            addMenuCard(2, 1, "2. PFD (FLIGHT HORIZON)", "PFD", 0x145A32)
-            addMenuCard(1, 2, "3. ECAM (ENGINE GAUGES)", "ECAM", 0x78281F)
-            addMenuCard(2, 2, "4. CTRL (FLIGHT CONTROLS)", "CTRL", 0x117864)
-            addMenuCard(1, 3, "5. NAV (ALT PRESETS)", "NAV", 0x2471A3)
+            addMenuCard(1, 1, "1. OVERVIEW", "OVERVIEW", 0x1B3A60)
+            addMenuCard(2, 1, "2. PFD (FLIGHT)", "PFD", 0x145A32)
+            addMenuCard(1, 2, "3. ECAM (QUAD ENG)", "ECAM", 0x78281F)
+            addMenuCard(2, 2, "4. CTRL (CONTROLS)", "CTRL", 0x117864)
+            addMenuCard(1, 3, "5. NAV (PRESETS)", "NAV", 0x2471A3)
             addMenuCard(2, 3, "6. SYS (DIAGNOSTICS)", "SYS", 0x512E5F)
 
         elseif scr.currentView == "OVERVIEW" then
-            -- 綜合畫面 (儀表 + 引擎 + 精簡控制整合)
             local currAlt = FlightCore.altiSensor and FlightCore.altiSensor.getHeight() or 0
             local currVspeed = FlightCore.altiSensor and FlightCore.altiSensor.getVerticalSpeed() or 0
             local currPitch, currRoll = FlightCore.getGimbalData()
@@ -1149,7 +1174,7 @@ Drivers.toms = {
 
             sFR(pfdX, instY, leftW, instH, 0x141A26)
             sR(pfdX, instY, leftW, instH, 0x283850)
-            sTxt(pfdX + 8, instY + 6, "PRIMARY FLIGHT DISPLAY", 0xAAD2E6, 1)
+            sTxt(pfdX + 8, instY + 6, "PRIMARY FLIGHT", 0xAAD2E6, 1)
 
             local gR = math.min(32, math.floor(instH * 0.28))
             local gCX = pfdX + math.floor(leftW * 0.26)
@@ -1302,52 +1327,66 @@ Drivers.toms = {
             addBtn(6 + (bW+4)*5, bY, bW, bH, "STOP", stopBg, 0xFFFFFF, function() FlightCore.stopEngines() end)
 
         elseif scr.currentView == "ECAM" then
-            -- 純發動機動力監控 (超大儀表專區，無擁擠按鈕)
-            local instY = headerH + 6
-            local instH = sh - instY - 26
-            sFR(6, instY, sw - 12, instH, 0x121822)
-            sR(6, instY, sw - 12, instH, 0x283850)
+            -- 2x2 四象限發動機直觀監控 (左上:FL, 右上:FR, 左下:BL, 右下:BR)
+            local topY = headerH + 6
+            local btmH = 22
+            local areaH = sh - topY - btmH - 6
+            local quadW = math.floor((sw - 18) / 2)
+            local quadH = math.floor((areaH - 6) / 2)
 
-            local slotW = math.floor((sw - 20) / 4)
-            local slots = {"FL", "FR", "BL", "BR"}
-            local dialR = math.min(math.floor(slotW * 0.40), math.floor(instH * 0.35))
-            local engCenterY = instY + math.floor(instH * 0.46)
+            local quadDefs = {
+                {slot="FL", col=1, row=1, name="[FL] FRONT-LEFT (左前)"},
+                {slot="FR", col=2, row=1, name="[FR] FRONT-RIGHT (右前)"},
+                {slot="BL", col=1, row=2, name="[BL] BACK-LEFT (左後)"},
+                {slot="BR", col=2, row=2, name="[BR] BACK-RIGHT (右後)"}
+            }
 
-            for i, slot in ipairs(slots) do
-                local engCenterX = 8 + math.floor((i - 0.5) * slotW)
-                local node = FlightCore.engines[slot]
-                local lbl = node and (node.label or node.name or slot) or slot
-                if #lbl > 5 then lbl = lbl:sub(1, 5) end
+            for _, q in ipairs(quadDefs) do
+                local qx = 6 + (q.col - 1) * (quadW + 6)
+                local qy = topY + (q.row - 1) * (quadH + 6)
+                sFR(qx, qy, quadW, quadH, 0x141C28)
+                sR(qx, qy, quadW, quadH, 0x283850)
 
-                sTxt(engCenterX - math.floor(#lbl * 3), engCenterY - dialR - 12, lbl, 0xC8E6FF, 1)
+                local node = FlightCore.engines[q.slot]
+                local h = FlightCore.turtleHealth[q.slot]
+                local online = (h and h.online) or (node ~= nil)
+                sTxt(qx + 6, qy + 5, q.name, online and 0xC8E6FF or 0xFF7878, 1)
+
+                local dialR = math.min(math.floor(quadW * 0.28), math.floor(quadH * 0.30))
+                local engCenterX = qx + math.floor(quadW / 2)
+                local engCenterY = qy + math.floor(quadH * 0.52)
+
                 sArc(engCenterX, engCenterY, dialR, 210, -30, 10, 0x8CA0B4)
                 sArc(engCenterX, engCenterY, dialR, 10, -30, 10, 0xFF3232)
 
-                local ratio = math.min(1.0, math.max(0.0, FlightCore.virtualOutputs[slot] / 15.0))
+                local ratio = math.min(1.0, math.max(0.0, FlightCore.virtualOutputs[q.slot] / 15.0))
                 local nRad = math.rad(210 - ratio * 240)
                 local nx = math.floor(engCenterX + (dialR - 2) * math.cos(nRad) + 0.5)
                 local ny = math.floor(engCenterY - (dialR - 2) * math.sin(nRad) + 0.5)
                 sLS(engCenterX, engCenterY, nx, ny, 0x32FF64)
 
-                local boxW = math.max(36, math.floor(dialR * 1.55))
-                local boxH = 14
+                local boxW = math.max(34, math.floor(dialR * 1.55))
+                local boxH = 13
                 local boxX = engCenterX - math.floor(boxW / 2)
                 local boxY = engCenterY + math.floor(dialR * 0.28)
                 sFR(boxX, boxY, boxW, boxH, 0x0C121C)
                 sR(boxX, boxY, boxW, boxH, 0x2896C8)
 
-                local valStr = string.format("%4.1f", FlightCore.virtualOutputs[slot])
-                sTxt(boxX + math.floor((boxW - #valStr * 6) / 2), boxY + 4, valStr, 0x46FF78, 1)
+                local valStr = string.format("%4.1f", FlightCore.virtualOutputs[q.slot])
+                sTxt(boxX + math.floor((boxW - #valStr * 6) / 2), boxY + 3, valStr, 0x46FF78, 1)
 
-                local sigStr = string.format("%d/15", FlightCore.engineOutputs[slot] or 0)
-                sTxt(engCenterX - math.floor(#sigStr * 3), boxY + boxH + 3, sigStr, 0x96BEE1, 1)
+                local sigStr = string.format("PWM: %d", FlightCore.engineOutputs[q.slot] or 0)
+                sTxt(engCenterX - math.floor(#sigStr * 3), boxY + boxH + 2, sigStr, 0x96BEE1, 1)
+
+                local idStr = (h and h.id) and string.format("#%d", h.id) or "N/A"
+                local statStr = string.format("%s %s", online and "ON" or "OFF", idStr)
+                sTxt(qx + 6, qy + quadH - 10, statStr, online and 0x50FF78 or 0xFF5050, 1)
             end
 
-            local statY = instY + instH + 4
-            local statH = sh - statY - 4
-            sFR(6, statY, sw - 12, statH, 0x1E2432)
-            sR(6, statY, sw - 12, statH, 0x3C4B64)
-            sTxt(12, statY + 4, string.format("BASE: %4.2f/15  |  PID MIXER: BALANCED  |  STATUS: %s", FlightCore.state.baseThrottle, FlightCore.state.statusMsg:sub(1,32)), 0x50E6FF, 1)
+            local statY = topY + areaH + 4
+            sFR(6, statY, sw - 12, btmH, 0x1E2432)
+            sR(6, statY, sw - 12, btmH, 0x3C4B64)
+            sTxt(10, statY + 7, string.format("BASE: %4.2f/15 | PID: BALANCED | STATUS: %s", FlightCore.state.baseThrottle, FlightCore.state.statusMsg:sub(1, 28)), 0x50E6FF, 1)
 
         elseif scr.currentView == "CTRL" then
             -- 獨立飛行控制面板 (專屬寬敞操作按鈕)
@@ -1603,7 +1642,7 @@ Drivers.normal = {
         if isTerm then
             titleText = string.format(" VTOL %s [%s]", VERSION, scr.isMenuOpen and "MENU" or scr.currentView)
         else
-            titleText = string.format(" %s", scr.isMenuOpen and "VIEW SELECTION" or (VIEW_TITLES[scr.currentView] or scr.currentView))
+            titleText = string.format(" %s", scr.isMenuOpen and "SELECT VIEW" or (VIEW_TITLES[scr.currentView] or scr.currentView))
         end
 
         local menuBtnW = (w >= 38) and 8 or 6
@@ -1635,7 +1674,7 @@ Drivers.normal = {
 
             addMenuCard(1, 1, "1. OVERVIEW", "OVERVIEW", "3")
             addMenuCard(2, 1, "2. PFD FLIGHT", "PFD", "5")
-            addMenuCard(1, 2, "3. ECAM ENGINES", "ECAM", "e")
+            addMenuCard(1, 2, "3. ECAM QUAD", "ECAM", "e")
             addMenuCard(2, 2, "4. CTRL CONTROLS", "CTRL", "b")
             addMenuCard(1, 3, "5. NAV PRESETS", "NAV", "9")
             addMenuCard(2, 3, "6. SYS DIAGNOSE", "SYS", "a")
@@ -1735,25 +1774,40 @@ Drivers.normal = {
             addBtn(7 + bW*5, bY, bW, 2, "STOP", "e", "0", function() FlightCore.stopEngines() end)
 
         elseif scr.currentView == "ECAM" then
-            -- 純發動機監控 (寬敞無擠壓)
-            local slots = {"FL", "FR", "BL", "BR"}
-            local colW = math.floor((w - 5) / 4)
-            for i, slot in ipairs(slots) do
-                local dx = 2 + (i - 1) * (colW + 1)
-                local node = FlightCore.engines[slot]
-                local lbl = node and (node.label or node.name or slot) or slot
-                local val = FlightCore.virtualOutputs[slot] or 0.0
-                local sig = FlightCore.engineOutputs[slot] or 0
+            -- 2x2 四象限發動機直觀監控 (左上:FL, 右上:FR, 左下:BL, 右下:BR)
+            local quadW = math.floor((w - 3) / 2)
+            local quadH = math.max(3, math.floor((h - 5) / 2))
+            local startY = 3
 
-                for r = 3, h - 3 do
-                    self:safeBlit(scr, dx, r, string.rep(" ", colW), "0", "7")
+            local quadDefs = {
+                {slot="FL", col=1, row=1, name="[FL] FRONT-LEFT (左前)"},
+                {slot="FR", col=2, row=1, name="[FR] FRONT-RIGHT (右前)"},
+                {slot="BL", col=1, row=2, name="[BL] BACK-LEFT (左後)"},
+                {slot="BR", col=2, row=2, name="[BR] BACK-RIGHT (右後)"}
+            }
+
+            for _, q in ipairs(quadDefs) do
+                local qx = 2 + (q.col - 1) * (quadW + 1)
+                local qy = startY + (q.row - 1) * (quadH + 1)
+                local node = FlightCore.engines[q.slot]
+                local hStatus = FlightCore.turtleHealth[q.slot]
+                local online = (hStatus and hStatus.online) or (node ~= nil)
+                local val = FlightCore.virtualOutputs[q.slot] or 0.0
+                local sig = FlightCore.engineOutputs[q.slot] or 0
+
+                for r = 0, quadH - 1 do
+                    self:safeBlit(scr, qx, qy + r, string.rep(" ", quadW), "0", "7")
                 end
-                self:safeBlit(scr, dx, 3, string.format(" [%s] ", lbl:sub(1, colW - 4)), "9", "8")
-                self:safeBlit(scr, dx, 5, string.format("THR: %4.1f", val), "5", "7")
-                self:safeBlit(scr, dx, 7, string.format("PWM: %2d/15", sig), "3", "7")
+                self:safeBlit(scr, qx + 1, qy, q.name:sub(1, quadW - 2), "9", "8")
+                self:safeBlit(scr, qx + 1, qy + 1, string.format("THRUST: %4.1f", val), "5", "7")
+                self:safeBlit(scr, qx + 1, qy + 2, string.format("PWM: %2d/15", sig), "3", "7")
+                if quadH >= 4 then
+                    local idStr = (hStatus and hStatus.id) and string.format("#%d", hStatus.id) or "N/A"
+                    self:safeBlit(scr, qx + 1, qy + 3, string.format("STATUS: %s (ID:%s)", online and "ONLINE" or "OFFLINE", idStr), online and "5" or "e", "7")
+                end
             end
 
-            self:safeBlit(scr, 2, h - 1, string.format("BASE: %4.2f/15 | STATUS: %s", FlightCore.state.baseThrottle, FlightCore.state.statusMsg:sub(1, w - 24)), "0", "b")
+            self:safeBlit(scr, 2, h, string.format("BASE: %4.2f/15 | STATUS: %s", FlightCore.state.baseThrottle, FlightCore.state.statusMsg:sub(1, w - 24)), "0", "b")
 
         elseif scr.currentView == "CTRL" then
             -- 獨立飛行控制面板
@@ -1819,15 +1873,15 @@ Drivers.normal = {
                 local cx = 2 + (s.col - 1) * (cardW + 1)
                 local cy = 3 + (s.row - 1) * (cardH + 1)
                 local node = FlightCore.engines[s.slot]
-                local h = FlightCore.turtleHealth[s.slot]
-                local online = (h and h.online) or (node ~= nil)
+                local hStatus = FlightCore.turtleHealth[s.slot]
+                local online = (hStatus and hStatus.online) or (node ~= nil)
                 local bg = online and "5" or "e"
 
                 for r = 0, cardH - 1 do
                     self:safeBlit(scr, cx, cy + r, string.rep(" ", cardW), "0", bg)
                 end
-                local idStr = (h and h.id) and string.format("#%d", h.id) or "N/A"
-                local ageStr = (h and h.lastSeen > 0) and string.format("%.1fs", (now - h.lastSeen)/1000) or "N/A"
+                local idStr = (hStatus and hStatus.id) and string.format("#%d", hStatus.id) or "N/A"
+                local ageStr = (hStatus and hStatus.lastSeen > 0) and string.format("%.1fs", (now - hStatus.lastSeen)/1000) or "N/A"
                 self:safeBlit(scr, cx + 1, cy, string.format("[%s] ID:%s HB:%s", s.slot, idStr, ageStr), "0", bg)
                 self:safeBlit(scr, cx + 1, cy + 1, string.format("STATUS: %s", online and "ONLINE (1Hz HB)" or "OFFLINE"), "0", bg)
             end
