@@ -151,7 +151,7 @@ local Driver = {
             scr.screenW, scr.screenH = w, h
         end
         local sw, sh = scr.screenW, scr.screenH
-        local isFull = (sw >= 190 and sh >= 190) -- 5x5 (640x640) 或以上為完整顯示，3x3/4x4/5x4/4x5 為精簡版
+        local isFull = (sw >= 300 and sh >= 300) -- 5x5 (320x320) 或以上為完整顯示，3x3/4x4/5x4/4x5 (<=256) 為精簡版
 
         local function toARGB(c) return self:toARGB(c) end
         local function sFill(c) pcall(function() scr.gpu.fill(toARGB(c)) end) end

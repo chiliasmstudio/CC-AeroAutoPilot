@@ -589,7 +589,7 @@ Drivers.direct = {
         end
         local sw = scr.screenW or 320
         local sh = scr.screenH or 240
-        local isFull = (sw >= 190 and sh >= 190) -- 5x5 或以上為完整顯示，3x3/4x4/5x4/4x5 為精簡版
+        local isFull = (sw >= 750 and sh >= 750) -- 5x5 (820x820) 或以上為完整顯示，3x3/4x4/5x4/4x5 (<=656) 為精簡版
 
         gpu.clear(dispId, 15, 20, 30)
         scr.buttons = {}
@@ -1434,7 +1434,7 @@ Drivers.tom = {
             scr.screenW, scr.screenH = w, h
         end
         local sw, sh = scr.screenW, scr.screenH
-        local isFull = (sw >= 190 and sh >= 190) -- 5x5 (640x640) 或以上為完整顯示，3x3/4x4/5x4/4x5 為精簡版
+        local isFull = (sw >= 300 and sh >= 300) -- 5x5 (320x320) 或以上為完整顯示，3x3/4x4/5x4/4x5 (<=256) 為精簡版
 
         local function toARGB(c) return self:toARGB(c) end
         local function sFill(c) pcall(function() scr.gpu.fill(toARGB(c)) end) end

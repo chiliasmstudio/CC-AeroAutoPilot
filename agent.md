@@ -249,10 +249,19 @@ safeBlit(scr, x, y, text, fg, bg)
 
 依據螢幕實體大小嚴格分為**精簡版本 (Compact Edition)** 與 **完整航電版本 (Full Avionics A350 Edition)**：
 
-| 模式 | 判定門檻 (DirectGPU / Tom's GPU) | 判定門檻 (CC Native Monitor) | 佈局特點 |
+| 驅動類型 | 3x3 ~ 4x5 尺寸解析度 (精簡版本 Compact) | $\ge 5\times 5$ 尺寸解析度 (完整航電 Full) | `isFull` 判定門檻 |
 | :--- | :--- | :--- | :--- |
-| **精簡版本 (Compact)** | 寬度 $< 190\text{px}$ 或 高度 $< 190\text{px}$<br>*(適配 $3\times 3, 4\times 4, 5\times 4, 4\times 5$)* | 寬度 $< 135$ 或 高度 $< 55$ 字元 | • $3\times 3$ 窄螢幕啟用單欄垂直數據堆疊<br>• 自動切換簡寫文字標籤<br>• 底部鎖定 2 排按鈕防溢出 |
-| **完整航電 (Full)** | 寬度 $\ge 190\text{px}$ 且 高度 $\ge 190\text{px}$<br>*(適配 $\ge 5\times 5$ 螢幕)* | 寬度 $\ge 135$ 且 高度 $\ge 55$ 字元 | • A350 風格圓形指針大錶盤<br>• 完整飛行剖面、姿態球、四象限診斷<br>• 底部 3 排完整控制功能鍵 |
+| **Tom's Peripherals GPU** | • $3\times 3$: $192\times 192\text{px}$<br>• $4\times 4$: $256\times 256\text{px}$<br>• $5\times 4$: $320\times 256\text{px}$<br>• $4\times 5$: $256\times 320\text{px}$ | • $5\times 5$: $320\times 320\text{px}$<br>• $6\times 6+$: $\ge 384\times 384\text{px}$ | `sw >= 300 and sh >= 300` |
+| **CC-DirectGPU-Mod** | • $3\times 3$: $492\times 492\text{px}$<br>• $4\times 4$: $656\times 656\text{px}$<br>• $5\times 4$: $820\times 656\text{px}$<br>• $4\times 5$: $656\times 820\text{px}$ | • $5\times 5$: $820\times 820\text{px}$<br>• $6\times 6+$: $\ge 984\times 984\text{px}$ | `sw >= 750 and sh >= 750` |
+| **CC Native Monitor** | • $3\times 3$: $86\times 36$ 字元<br>• $4\times 4$: $116\times 48$ 字元<br>• $5\times 4$: $145\times 48$ 字元<br>• $4\times 5$: $116\times 60$ 字元 | • $5\times 5$: $145\times 60$ 字元<br>• $6\times 6+$: $\ge 174\times 72$ 字元 | `w >= 140 and h >= 55` |
+
+#### 模式特性差異：
+* **精簡版本 (Compact Edition)**：
+  * $3\times 3$ 螢幕（欄寬 $colW \approx 90\text{px}$）：啟用緊湊卡片、雙排按鈕、簡寫狀態，絕不發生文字重疊或按鈕被截斷。
+  * 底部按鈕鎖定為 2 排（第 1 排 4 個：`+10`, `-10`, `B+`, `B-`；第 2 排 2 個：`HOLD`, `STOP`）。
+* **完整航電版本 (Full Avionics Edition, $\ge 5\times 5$)**：
+  * 啟用大型 A350 刻度儀表盤、完整姿態水平球、四象限發動機獨立遙測。
+  * 底部 3 排按鈕群（第 1 排 6 個快速升降鍵、第 2 排 4 個基準油門調整鍵、第 3 排 2 個操作模式鍵）。
 
 ---
 
