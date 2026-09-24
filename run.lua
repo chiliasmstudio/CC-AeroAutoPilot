@@ -1855,20 +1855,47 @@ Drivers.tom = {
                     local engCountStr = (quadW < 130) and string.format("%dE", qH.total) or string.format("ENG:%d", qH.total)
                     sTxt(qx + quadW - #engCountStr * 6 - 6, qy + 4, engCountStr, 0x96BEE6, 1)
 
-                    -- 圓形刻度盤 (Tom's GPU)
+                    -- 圓形刻度盤 (Tom's GPU - Airbus A350/A320 ECAM Style)
                     local dialR = math.min(math.floor(quadW * 0.28), math.floor(quadH * 0.28))
                     local engCenterX = qx + math.floor(quadW / 2)
-                    local engCenterY = qy + math.floor(quadH * 0.52)
-                    sArc(engCenterX, engCenterY, dialR, 135, 405, 10, 0x384860)
+                    local engCenterY = qy + math.floor(quadH * 0.46)
 
-                    local angle = 135 + (val / 15.0) * 270
-                    local rad = math.rad(angle)
-                    local px = engCenterX + math.floor(dialR * 0.8 * math.cos(rad) + 0.5)
-                    local py = engCenterY + math.floor(dialR * 0.8 * math.sin(rad) + 0.5)
+                    -- 1. 主圓弧軌跡 (210° 底左 -> 90° 頂部 -> -30° 底右，頂部拱起，底部開放)
+                    sArc(engCenterX, engCenterY, dialR, 210, -30, 8, 0x647890)
+                    -- 紅色超限警告區間 (10° -> -30°)
+                    sArc(engCenterX, engCenterY, dialR, 10, -30, 5, 0xFF3737)
+
+                    -- 2. 刻度標記線 (210°=0, 90°=7.5, -30°=15)
+                    for _, deg in ipairs({210, 90, -30}) do
+                        local rad = math.rad(deg)
+                        local tx1 = engCenterX + math.floor((dialR - 3) * math.cos(rad) + 0.5)
+                        local ty1 = engCenterY - math.floor((dialR - 3) * math.sin(rad) + 0.5)
+                        local tx2 = engCenterX + math.floor((dialR + 3) * math.cos(rad) + 0.5)
+                        local ty2 = engCenterY - math.floor((dialR + 3) * math.sin(rad) + 0.5)
+                        sLS(tx1, ty1, tx2, ty2, 0x96B4DC)
+                    end
+
+                    -- 3. 指針 (0 時指向 210° 底左，隨推力順時針旋轉至 -30° 底右)
+                    local ratio = math.min(1.0, math.max(0.0, val / 15.0))
+                    local needleDeg = 210 - ratio * 240
+                    local nRad = math.rad(needleDeg)
+                    local px = engCenterX + math.floor((dialR - 2) * math.cos(nRad) + 0.5)
+                    local py = engCenterY - math.floor((dialR - 2) * math.sin(nRad) + 0.5)
                     sLS(engCenterX, engCenterY, px, py, 0x50FF78)
 
-                    local thrValStr = string.format("%.1f", val)
-                    sTxt(engCenterX - math.floor(#thrValStr * 3), engCenterY - 3, thrValStr, 0xFFFFFF, 1)
+                    -- 中心軸心點
+                    sFR(engCenterX - 1, engCenterY - 1, 3, 3, 0xC8E6FF)
+
+                    -- 4. 底部數位指示方框 (Airbus ECAM 數位讀數框，位於指針下方不遮擋)
+                    local boxW = math.max(28, math.floor(dialR * 1.3))
+                    local boxH = 11
+                    local boxX = engCenterX - math.floor(boxW / 2)
+                    local boxY = engCenterY + math.floor(dialR * 0.35)
+                    sFR(boxX, boxY, boxW, boxH, 0x0C121C)
+                    sR(boxX, boxY, boxW, boxH, 0x384860)
+
+                    local thrValStr = string.format("%4.1f", val)
+                    sTxt(boxX + math.floor((boxW - #thrValStr * 6) / 2) + 1, boxY + 2, thrValStr, 0x50FF78, 1)
 
                     local statText = string.format("ACT:%d/%d", qH.online, qH.total)
                     if qH.total == 0 then statText = "NO ENG" end
