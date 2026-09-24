@@ -1327,11 +1327,11 @@ Drivers.tom = {
                     -- 必須先 setSize + refreshSize 才能 getSize 得到正確像素解析度
                     pcall(function() if gpu.setSize then gpu.setSize(64) end end)
                     pcall(function() if gpu.refreshSize then gpu.refreshSize() end end)
-                    local w, h = 320, 240
+                    local w, h = 192, 192
                     local ok, gw, gh = pcall(function() return gpu.getSize() end)
                     if ok and gw and gh and gw > 0 and gh > 0 then
-                        if gw < 32 then gw = gw * 128 end
-                        if gh < 32 then gh = gh * 128 end
+                        if gw < 32 then gw = gw * 64 end
+                        if gh < 32 then gh = gh * 64 end
                         w, h = gw, gh
                     end
                     local prev = existing[name]
@@ -1434,13 +1434,13 @@ Drivers.tom = {
     end,
     drawScreen = function(self, scr)
         local ok, w, h = pcall(function() return scr.gpu.getSize() end)
-        -- Tom's GPU getSize() 返回像素大小；若回傳值疑似圖塊單位（< 32）則乘以 128 換算
+        -- Tom's GPU getSize() 返回像素大小；若回傳值為圖塊單位（< 32）則以 64px (setSize 64) 換算
         if ok and w and h and w > 0 and h > 0 then
-            if w < 32 then w = w * 128 end
-            if h < 32 then h = h * 128 end
+            if w < 32 then w = w * 64 end
+            if h < 32 then h = h * 64 end
             scr.screenW, scr.screenH = w, h
         end
-        local sw, sh = scr.screenW, scr.screenH
+        local sw, sh = scr.screenW or 192, scr.screenH or 192
         local isFull = (sw >= 300 and sh >= 300) -- 5x5 (320x320) 或以上為完整顯示，3x3/4x4/5x4/4x5 (<=256) 為精簡版
 
         local function toARGB(c) return self:toARGB(c) end
@@ -1595,6 +1595,9 @@ Drivers.tom = {
                     local qH = FlightCore.getQuadHealth(ms.slot)
                     local val = FlightCore.virtualOutputs[ms.slot]
                     local online = qH.online > 0
+
+                    sFR(sx, sy, subW, subH, 0x18202E)
+                    sR(sx, sy, subW, subH, online and 0x284864 or 0x642828)
 
                     local slotTitle = (subW < 100) and string.format("[%s]", ms.slot) or string.format("[%s] %d ENG", ms.slot, qH.total)
                     sTxt(sx + 4, sy + 3, slotTitle, 0xC8E6FF, 1)
@@ -1901,7 +1904,8 @@ Drivers.tom = {
             sFR(4, statY, sw - 8, btmH, 0x19202D)
             sR(4, statY, sw - 8, btmH, 0x3C4B64)
             if isFull then
-                sTxt(8, statY + 4, string.format("BASE: %4.2f/15 | BALANCED | STATUS: %s", FlightCore.state.baseThrottle, FlightCore.state.statusMsg:sub(1, 26)), 0x50E6FF, 1)
+                local statChars = math.max(6, math.floor((sw - 160) / 6))
+                sTxt(8, statY + 4, string.format("BASE: %4.2f/15 | BALANCED | STATUS: %s", FlightCore.state.baseThrottle, FlightCore.state.statusMsg:sub(1, statChars)), 0x50E6FF, 1)
             else
                 local statChars = math.max(6, math.floor((sw - 60) / 6))
                 sTxt(6, statY + 3, string.format("B:%4.2f | %s", FlightCore.state.baseThrottle, FlightCore.state.statusMsg:sub(1, statChars)), 0x50E6FF, 1)

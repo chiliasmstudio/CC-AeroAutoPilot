@@ -1,11 +1,13 @@
 # Ignore IDE and editor folders
 .idea/
 .vscode/
+*.iml
 
 # Ignore cloned reference repos and compiled jars
 info/CreateAvionics/
 info/CC-DirectGPU-Mod/
 *.jar
+
 
 
 
