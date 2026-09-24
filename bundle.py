@@ -51,7 +51,10 @@ def bundle():
     print("=" * 60)
 
     # 1. 讀取各模組原始碼
-    font_code = read_file(os.path.join(MODULES_DIR, "font_5x7.lua"))
+    font_path = os.path.join(MODULES_DIR, "bitmap_font.lua")
+    if not os.path.exists(font_path):
+        font_path = os.path.join(MODULES_DIR, "font_5x7.lua")
+    font_code = read_file(font_path)
     flight_core_code = read_file(os.path.join(MODULES_DIR, "flight_core.lua"))
     driver_direct_code = read_file(os.path.join(DRIVERS_DIR, "directgpu.lua"))
     driver_tom_code = read_file(os.path.join(DRIVERS_DIR, "tom.lua"))

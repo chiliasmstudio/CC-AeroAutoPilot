@@ -8,7 +8,7 @@
 1. [系統總覽與檔案職責](#1-系統總覽與檔案職責)
 2. [前後端分離架構與呼叫流程](#2-前後端分離架構與呼叫流程)
 3. [核心模組深入剖析](#3-核心模組深入剖析)
-   - [3.1 點陣字體模組 (`font_5x7.lua`)](#31-點陣字體模組-font_5x7lua)
+   - [3.1 點陣字體庫模組 (`bitmap_font.lua`)](#31-點陣字體庫模組-bitmap_fontlua)
    - [3.2 飛控核心大腦 (`flight_core.lua`)](#32-飛控核心大腦-flight_corelua)
    - [3.3 顯示驅動層 (`modules/drivers/*`)](#33-顯示驅動層-modulesdrivers)
 4. [核心 API 規格與硬體通訊協議](#4-核心-api-規格與硬體通訊協議)
@@ -31,7 +31,7 @@ C:\code\CC-AeroAutoPilot\
 ├── info\                        # 📚 外部開源參考儲存庫與規格文件
 └── modules\                     # 📦 模組化原始碼層
     ├── init.lua                 # 總模組載入器 (Unified Package Loader)
-    ├── font_5x7.lua             # 5x7 點陣字體表 (ASCII 32~127 點陣矩陣)
+    ├── bitmap_font.lua          # 點陣字體庫 (ASCII 32~127 5x7 像素點陣矩陣)
     ├── flight_core.lua          # 飛控核心大腦 (PID、感測器、烏龜掃描、狀態機)
     └── drivers\                 # 前端多螢幕顯示驅動層
         ├── directgpu.lua        # CC-DirectGPU-Mod 24-bit RGB 向量圖形驅動
@@ -43,10 +43,10 @@ C:\code\CC-AeroAutoPilot\
 
 | 檔案路徑 | 職責定義 | 依賴項 | 核心輸出 |
 | :--- | :--- | :--- | :--- |
-| **`modules/font_5x7.lua`** | 嵌入式點陣字型庫。提供 5 列 × 7 行之 ASCII 32~127 字符點陣資料。 | 無 | `FONT_5X7` 點陣資料表 |
+| **`modules/bitmap_font.lua`** | 嵌入式點陣字型庫（Bitmap Font Library）。提供全套 ASCII 字符之微小點陣資料（5 像素寬 × 7 像素高），供任意尺寸之 GPU 螢幕渲染清晰文字。 | 無 | `FONT_5X7` 點陣資料表 |
 | **`modules/flight_core.lua`** | 後端純邏輯與硬體控制核心。掌管高度 PID、陀螺儀平衡、烏龜通訊與物理狀態機。 | `peripheral`, `redstone` | `FlightCore` 單例物件與全域飛控狀態 |
 | **`modules/drivers/directgpu.lua`** | DirectGPU 專屬前端驅動。支援 164×164/方塊 高解析向量繪圖與原生觸控。 | `FlightCore` | `DirectGPUDriver` |
-| **`modules/drivers/tom.lua`** | Tom's GPU 專屬前端驅動。支援 ARGB 點陣文字、`lineS` 平滑刻度盤與自適應佈局。 | `FlightCore`, `font_5x7` | `TomGPUDriver` |
+| **`modules/drivers/tom.lua`** | Tom's GPU 專屬前端驅動。支援 ARGB 點陣文字、`lineS` 平滑刻度盤與自適應佈局。 | `FlightCore`, `bitmap_font` | `TomGPUDriver` |
 | **`modules/drivers/normal.lua`** | CC 原生高級螢幕與主電腦終端機驅動。支援 16 色 `blit` 與多螢幕鏡像。 | `FlightCore` | `NormalDriver` |
 | **`modules/init.lua`** | 模組化環境總入口。負責在開發階段引導載入核心與所有驅動。 | 所有子模組 | `VTOLAvionics` 主物件 |
 | **`bundle.py`** | 自動化構建系統。靜態提取模組並拼裝為零依賴的單檔 `run.lua`。 | Python 3 | `run.lua` 與語法平衡報告 |
@@ -96,9 +96,9 @@ flowchart TD
 
 ## 3. 核心模組深入剖析
 
-### 3.1 點陣字體模組 (`font_5x7.lua`)
+### 3.1 點陣字體庫模組 (`bitmap_font.lua`)
 
-Tom's GPU 雖然具備像素繪圖能力，但原生並無中文或高品質點陣字體支援。本模組內建完整的 5x7 點陣字型矩陣（ASCII 32~127），支援 1x 與 2x 縮放。
+Tom's GPU 雖然具備像素繪圖能力，但原生並無中文或高品質點陣字體支援。本模組內建完整的 5x7 像素點陣字型矩陣（ASCII 32~127，代表每個英文字母寬 5 像素、高 7 像素），可應用於任意解析度之螢幕，並支援 1x 與 2x 縮放。
 
 #### 點陣編碼原理
 每個字符以 **5 個位元組（5 Bytes）** 表示 5 條縱向行（Columns），每個 Byte 的低 7 位元代表由上至下的 7 個像素點（Rows）：
@@ -279,7 +279,7 @@ FlightCore.stopEngines()
 
 ```mermaid
 flowchart LR
-    A["modules/font_5x7.lua"] -->|提取 FONT_5X7 點陣| B["bundle.py 打包核心"]
+    A["modules/bitmap_font.lua"] -->|提取 FONT_5X7 點陣| B["bundle.py 打包核心"]
     C["modules/flight_core.lua"] -->|提取 FlightCore 模組| B
     D["modules/drivers/directgpu.lua"] -->|提取 DirectGPU 驅動| B
     E["modules/drivers/tom.lua"] -->|提取 Tom's GPU 驅動| B

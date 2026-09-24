@@ -10,7 +10,7 @@ local function safeRequire(mod)
 end
 
 local FlightCore = safeRequire("modules.flight_core")
-local FONT_5X7 = safeRequire("modules.font_5x7")
+local FONT_5X7 = safeRequire("modules.bitmap_font") or safeRequire("modules.font_5x7")
 local DirectDriver = safeRequire("modules.drivers.directgpu")
 local TomDriver = safeRequire("modules.drivers.tom")
 local NormalDriver = safeRequire("modules.drivers.normal")
@@ -18,6 +18,7 @@ local NormalDriver = safeRequire("modules.drivers.normal")
 return {
     FlightCore = FlightCore,
     FONT_5X7 = FONT_5X7,
+    BitmapFont = FONT_5X7,
     Drivers = {
         direct = DirectDriver,
         tom = TomDriver,

@@ -10,7 +10,7 @@ local function safeRequire(mod)
 end
 
 local FlightCore = package.loaded["modules.flight_core"] or safeRequire("modules.flight_core") or _G.FlightCore
-local FONT_5X7 = package.loaded["modules.font_5x7"] or safeRequire("modules.font_5x7") or _G.FONT_5X7
+local FONT_5X7 = package.loaded["modules.bitmap_font"] or package.loaded["modules.font_5x7"] or safeRequire("modules.bitmap_font") or safeRequire("modules.font_5x7") or _G.FONT_5X7
 
 local VIEW_TITLES = {
     OVERVIEW = "FLIGHT MONITOR",

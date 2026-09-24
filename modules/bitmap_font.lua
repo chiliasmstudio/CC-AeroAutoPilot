@@ -1,6 +1,6 @@
 --[[
-    modules/font_5x7.lua
-    5x7 Bitmap Font Dictionary for CC Pixel Rendering (ASCII 32 to 127)
+    modules/bitmap_font.lua
+    Bitmap Font Library for GPU/Pixel Rendering (ASCII 32 to 127)
 --]]
 
 local FONT_5X7 = {

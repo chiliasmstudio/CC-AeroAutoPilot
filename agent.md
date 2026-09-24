@@ -44,7 +44,7 @@ C:\code\CC-AeroAutoPilot\
 │   └── CreateAvionics\          # CreateAvionics 參考儲存庫
 └── modules\                     # 📦 模組化原始碼目錄 (開發與維護層)
     ├── init.lua                 # 總模組載入器 (Unified Package Loader)
-    ├── font_5x7.lua             # 5x7 點陣字體表 (ASCII 32~127)
+    ├── bitmap_font.lua          # 點陣字體庫 (ASCII 32~127 5x7 像素點陣矩陣)
     ├── flight_core.lua          # 飛控核心 (PID、高度/陀螺儀感測器、烏龜掃描、狀態機)
     └── drivers\                 # 顯示驅動層
         ├── directgpu.lua        # CC-DirectGPU-Mod 高解析全彩向量驅動
@@ -58,10 +58,10 @@ C:\code\CC-AeroAutoPilot\
 
 在 Minecraft CC: Tweaked 環境中，單一獨立 `.lua` 檔案（All-in-One Bundle）最方便透過指令或磁碟直接分發與執行；而在開發維護上，分散的模組化結構（Modular Files）能降低耦合度並提升可讀性。
 
-本專案透過根目錄的 [`bundle.py`](file:///E:/playground/auto%20pilot/bundle.py) 實現自動化編譯與打包：
+本專案透過根目錄的 [`bundle.py`](file:///C:/code/CC-AeroAutoPilot/bundle.py) 實現自動化編譯與打包：
 
 ### 1. 合併與提取邏輯
-1. **讀取 `modules/font_5x7.lua`**：提取字體點陣表 `FONT_5X7`。
+1. **讀取 `modules/bitmap_font.lua`**：提取字體點陣表 `FONT_5X7`。
 2. **讀取 `modules/flight_core.lua`**：去除最底部的 `return FlightCore`，保留所有 PID、感測器、四軸混控與狀態機邏輯作為全域/局部後端。
 3. **讀取 `modules/drivers/*.lua`**：
    * 去除各驅動頂部的 `require` 與 `package.loaded` 包裝。
