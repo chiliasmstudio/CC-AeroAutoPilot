@@ -1,5 +1,11 @@
 # 🚀 CC-AeroAutoPilot: 四軸航空自動導航與多螢幕飛控系統
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+> [!NOTE]
+> **🤖 AI 生成聲明 (AI-Generated Notice)**：
+> 本專案中**絕大多數代碼（包括飛控演算法、多螢幕顯示驅動、點陣字型庫、打包工具與技術手冊）皆由 AI 生成與輔助迭代開發**。
+
 **CC-AeroAutoPilot** 是專為 **Minecraft (Create: Aeronautics / Simulated + CC: Tweaked)** 設計的下一代垂直起降 (VTOL) 四軸飛艇航空級自動駕駛儀與儀表系統。
 
 採用 **「駕駛艙主電腦單一大腦 + 4 隻有線烏龜 (FL, FR, BL, BR) 動力輸出」** 的高可靠性架構，支援 **Tom's Peripherals GPU**、**CC-DirectGPU-Mod** 與 **CC 原生進階螢幕** 3 大顯示技術，並具備全自動多螢幕並行渲染與觸控操作功能。
@@ -129,3 +135,9 @@ python bundle.py
 
 - **詳細技術手冊、模組分工與 API 規格**：請參閱 [`wiki.md`](wiki.md)。
 - **外部開源參考資料與技術規格**：請參閱 [`info/README.md`](info/README.md)。
+
+---
+
+## 📄 授權條款 (License)
+
+本專案採用 [MIT License](LICENSE) 開源授權。任何人皆可自由使用、修改、分發與商業應用，惟須保留原著作權與授權聲明。
