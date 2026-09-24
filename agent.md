@@ -1,6 +1,6 @@
 # 🚀 VTOL Airship Flight Computer & Avionics Reference Document (`agent.md`)
 
-本文檔彙整本專案（`E:\playground\auto pilot\`）之**開發與 Git 規範、官方參考資料、檔案模組化與打包編譯原理、模組硬體規格、顯示驅動 API、通訊協議、感測器驅動、物理混控演算法與雙尺寸自適應模型**。
+本文檔彙整本專案（`C:\code\CC-AeroAutoPilot\`）之**開發與 Git 規範、官方參考資料、檔案模組化與打包編譯原理、模組硬體規格、顯示驅動 API、通訊協議、感測器驅動、物理混控演算法與雙尺寸自適應模型**。
 
 ---
 
@@ -8,7 +8,7 @@
 
 > [!IMPORTANT]
 > **每次修改皆必須提交 Git (Mandatory Git Commit on Every Modification)**：
-> 1. 本專案目錄 `E:\playground\auto pilot\` 受 Git 版本控制管理。
+> 1. 本專案目錄 `C:\code\CC-AeroAutoPilot\` 受 Git 版本控制管理。
 > 2. **任何代碼、模組檔案（`modules/`）、打包主程式（`run.lua`）或文檔（`agent.md`）的變更與修復，在完成驗證後必須立即執行 `git add` 與 `git commit`。**
 > 3. Commit 訊息應清楚說明變更的組件（如 `feat(avionics)`, `fix(renderer)`, `docs(agent)`）與修復重點。
 > 4. 若編輯了 `modules/` 內的原始碼，必須執行 `python bundle.py` 重新生成並校驗 `run.lua`，確認語法平衡後一併提交。
@@ -32,7 +32,7 @@
 專案結構劃分為**單檔獨立執行層 (`run.lua`)**、**模組原始碼層 (`modules/`)** 與 **打包建置腳本 (`bundle.py`)**：
 
 ```text
-E:\playground\auto pilot\
+C:\code\CC-AeroAutoPilot\
 ├── run.lua                      # 🚀 統一主執行檔 (單檔直接執行，含完整後端與 3 大前端驅動)
 ├── bundle.py                    # 🛠️ 模組編譯打包與語法驗證工具 (Compile & Validate)
 ├── agent.md                     # 📖 技術規格、官方文件連結、合併原理與 API 參考手冊
@@ -44,7 +44,7 @@ E:\playground\auto pilot\
     ├── flight_core.lua          # 飛控核心 (PID、高度/陀螺儀感測器、烏龜掃描、狀態機)
     └── drivers\                 # 顯示驅動層
         ├── directgpu.lua        # CC-DirectGPU-Mod 高解析全彩向量驅動
-        ├── tom.lua              # Tom's Peripherals GPU 全彩點陣/向量驅動
+        ├── tom.lua              # Tom's Peripherals GPU 全彩點陣/向量驅器
         └── normal.lua           # CC: Tweaked 原生 Advanced Monitor & Terminal 驅動
 ```
 
