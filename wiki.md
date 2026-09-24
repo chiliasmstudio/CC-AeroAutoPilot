@@ -21,7 +21,7 @@
 專案遵循高內聚、低耦合的模組化架構，將純數學物理運算、硬體 I/O 與各類螢幕的圖形渲染徹底解耦：
 
 ```text
-C:\code\CC-AeroAutoPilot\
+CC-AeroAutoPilot/
 ├── run.lua                      # 🚀 統一主執行檔 (單檔直接執行，可由 bundle.py 編譯產出)
 ├── bundle.py                    # 🛠️ 模組編譯打包與語法驗證工具 (Compile & Validate)
 ├── wiki.md                      # 📖 深度技術規格、模組架構、API 與合併原理 (本手冊)
@@ -273,7 +273,7 @@ FlightCore.stopEngines()
 
 在 Minecraft CC: Tweaked 環境中，玩家最希望直接下載或貼上**單一 `.lua` 檔案**即可執行；然而在開發階段，多模組檔案更有利於維護。
 
-本專案使用 [`bundle.py`](file:///C:/code/CC-AeroAutoPilot/bundle.py) 解決此衝突：
+本專案使用 `bundle.py` 解決此衝突：
 
 ### 5.1 代碼合併流程
 

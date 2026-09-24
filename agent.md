@@ -1,6 +1,6 @@
 # 🚀 VTOL Airship Flight Computer & Avionics Reference Document (`agent.md`)
 
-本文檔彙整本專案（`C:\code\CC-AeroAutoPilot\`）之**開發與 Git 規範、官方參考資料、檔案模組化與打包編譯原理、模組硬體規格、顯示驅動 API、通訊協議、感測器驅動、物理混控演算法與雙尺寸自適應模型**。
+本文檔彙整本專案（`CC-AeroAutoPilot`）之**開發與 Git 規範、官方參考資料、檔案模組化與打包編譯原理、模組硬體規格、顯示驅動 API、通訊協議、感測器驅動、物理混控演算法與雙尺寸自適應模型**。
 
 ---
 
@@ -8,8 +8,8 @@
 
 > [!IMPORTANT]
 > **每次修改皆必須提交 Git (Mandatory Git Commit on Every Modification)**：
-> 1. 本專案目錄 `C:\code\CC-AeroAutoPilot\` 受 Git 版本控制管理。
-> 2. **任何代碼、模組檔案（`modules/`）、打包主程式（`run.lua`）或文檔（`agent.md`）的變更與修復，在完成驗證後必須立即執行 `git add` 與 `git commit`。**
+> 1. 本專案目錄受 Git 版本控制管理。
+> 2. **任何代碼、模組檔案（`modules/`）、打包主程式（`run.lua`）或文檔（`agent.md` / `wiki.md`）的變更與修復，在完成驗證後必須立即執行 `git add` 與 `git commit`。**
 > 3. Commit 訊息應清楚說明變更的組件（如 `feat(avionics)`, `fix(renderer)`, `docs(agent)`）與修復重點。
 > 4. 若編輯了 `modules/` 內的原始碼，必須執行 `python bundle.py` 重新生成並校驗 `run.lua`，確認語法平衡後一併提交。
 
@@ -32,7 +32,7 @@
 專案結構劃分為**單檔獨立執行層 (`run.lua`)**、**模組原始碼層 (`modules/`)** 與 **打包建置腳本 (`bundle.py`)**：
 
 ```text
-C:\code\CC-AeroAutoPilot\
+CC-AeroAutoPilot/
 ├── run.lua                      # 🚀 統一主執行檔 (單檔直接執行，含完整後端與 3 大前端驅動)
 ├── bundle.py                    # 🛠️ 模組編譯打包與語法驗證工具 (Compile & Validate)
 ├── agent.md                     # 📖 技術規格、官方文件連結、合併原理與 API 參考手冊
@@ -58,7 +58,7 @@ C:\code\CC-AeroAutoPilot\
 
 在 Minecraft CC: Tweaked 環境中，單一獨立 `.lua` 檔案（All-in-One Bundle）最方便透過指令或磁碟直接分發與執行；而在開發維護上，分散的模組化結構（Modular Files）能降低耦合度並提升可讀性。
 
-本專案透過根目錄的 [`bundle.py`](file:///C:/code/CC-AeroAutoPilot/bundle.py) 實現自動化編譯與打包：
+本專案透過根目錄的 `bundle.py` 實現自動化編譯與打包：
 
 ### 1. 合併與提取邏輯
 1. **讀取 `modules/bitmap_font.lua`**：提取字體點陣表 `FONT_5X7`。

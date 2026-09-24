@@ -244,7 +244,7 @@ parallel.waitForAny(flightLoop, renderLoop, eventLoop)
     with open(OUTPUT_RUN_LUA, "w", encoding="utf-8") as f:
         f.write(bundled_content)
 
-    print(f"✅ Successfully compiled {OUTPUT_RUN_LUA} ({len(bundled_content.splitlines())} lines)")
+    print(f"✅ Successfully compiled {os.path.basename(OUTPUT_RUN_LUA)} ({len(bundled_content.splitlines())} lines)")
 
     # 3. 執行語法平衡與區塊校驗
     validate_syntax(OUTPUT_RUN_LUA)
