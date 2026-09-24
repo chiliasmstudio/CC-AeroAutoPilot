@@ -3,7 +3,9 @@
 .vscode/
 
 # Ignore cloned reference repos and compiled jars
-CreateAvionics/
-CC-DirectGPU-Mod/
+info/CreateAvionics/
+info/CC-DirectGPU-Mod/
 *.jar
+
+
 

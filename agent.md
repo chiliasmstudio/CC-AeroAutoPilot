@@ -38,6 +38,10 @@ C:\code\CC-AeroAutoPilot\
 ├── agent.md                     # 📖 技術規格、官方文件連結、合併原理與 API 參考手冊
 ├── README.md                    # 📖 專案說明與四軸有線烏龜配置指南
 ├── turtle_startup.lua           # 🐢 動力烏龜專用啟動程式 (FL, FR, BL, BR)
+├── info\                        # 📚 參考資料庫 (外部開源儲存庫與周邊規格文件)
+│   ├── README.md                # 參考資料清單與線上文件索引
+│   ├── CC-DirectGPU-Mod\        # CC-DirectGPU-Mod 參考儲存庫
+│   └── CreateAvionics\          # CreateAvionics 參考儲存庫
 └── modules\                     # 📦 模組化原始碼目錄 (開發與維護層)
     ├── init.lua                 # 總模組載入器 (Unified Package Loader)
     ├── font_5x7.lua             # 5x7 點陣字體表 (ASCII 32~127)
