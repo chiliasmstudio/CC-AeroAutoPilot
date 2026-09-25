@@ -1,0 +1,67 @@
+name: Build and Release
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Build and Validate run.lua
+        run: |
+          python bundle.py
+
+      - name: Generate Release Tag
+        id: vars
+        run: |
+          if [ "${{ startsWith(github.ref, 'refs/tags/') }}" = "true" ]; then
+            TAG_NAME="${{ github.ref_name }}"
+          else
+            TAG_NAME="v1.0.${{ github.run_number }}"
+          fi
+          echo "tag_name=${TAG_NAME}" >> $GITHUB_OUTPUT
+          echo "release_title=Release ${TAG_NAME}" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.vars.outputs.tag_name }}
+          name: ${{ steps.vars.outputs.release_title }}
+          body: |
+            ## 🚀 CC-AeroAutoPilot 自動化構建發布 (${{ steps.vars.outputs.tag_name }})
+
+            本 Release 由 GitHub Actions 自動編譯與語法校驗後產出。
+
+            ### 📦 發布附件 (Assets)
+            - **`run.lua`**：直接放入 Minecraft 駕駛艙 Advanced Computer 中執行的全功能飛控主程式。
+            - **`turtle_startup.lua`**：放置於四軸動力烏龜 (FL, FR, BL, BR) 中的開機韌體。
+
+            ### 📝 構建資訊
+            - **Commit SHA**: `${{ github.sha }}`
+            - **Branch / Ref**: `${{ github.ref_name }}`
+          files: |
+            run.lua
+            turtle_startup.lua
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
