@@ -19,6 +19,8 @@ MODULES_DIR = os.path.join(PROJECT_DIR, "modules")
 DRIVERS_DIR = os.path.join(MODULES_DIR, "drivers")
 OUTPUT_RUN_LUA = os.path.join(PROJECT_DIR, "run.lua")
 
+VERSION = "v3.8.2"
+
 def read_file(filepath):
     with open(filepath, "r", encoding="utf-8") as f:
         return f.read()
@@ -85,10 +87,10 @@ def bundle():
     normal_body = extract_driver_body(driver_normal_code)
 
     # 2. 組合主程式 run.lua
-    header = """--[[
+    header = f"""--[[
     Create: Avionics & CC: Tweaked
     Unified Multi-Engine Avionics Flight Computer (多軸模組化統一飛控大腦)
-    Version: v3.8.2 Modular Bundle
+    Version: {VERSION} Modular Bundle
     
     螢幕尺寸自適應分類 (Dual Screen Size Mode):
     - 完整顯示螢幕 (>= 5x5): 啟動超大 A350 儀表、細緻多引擎遙測與 3 排完整控制面板。
@@ -109,8 +111,8 @@ def bundle():
       run.lua normal       (強制使用 CC: Tweaked 原生螢幕/終端機驅動，支援多螢幕)
 --]]
 
-local VERSION = "v3.8.2"
-local args = {...}
+local VERSION = "{VERSION}"
+local args = {{...}}
 local requestedDriver = args[1] and string.lower(args[1]) or "auto"
 
 -- ========================================================
@@ -282,5 +284,17 @@ def validate_syntax(filepath):
     else:
         print(f"✅ Syntax Validation Passed: All blocks in {os.path.basename(filepath)} are perfectly balanced!")
 
+def get_version():
+    """從 run.lua 提取實際封裝版本，若不存在則回傳 VERSION 常數"""
+    if os.path.exists(OUTPUT_RUN_LUA):
+        content = read_file(OUTPUT_RUN_LUA)
+        m = re.search(r'local\s+VERSION\s*=\s*"([^"]+)"', content)
+        if m:
+            return m.group(1)
+    return VERSION
+
 if __name__ == "__main__":
-    bundle()
+    if len(sys.argv) > 1 and sys.argv[1] in ("--version", "-v", "version"):
+        print(get_version())
+    else:
+        bundle()
