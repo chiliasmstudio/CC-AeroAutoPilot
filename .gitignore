@@ -3,10 +3,10 @@
 .vscode/
 *.iml
 
-# Ignore cloned reference repos and compiled jars
-info/CreateAvionics/
-info/CC-DirectGPU-Mod/
+# Ignore reference documentation and sub-repos
+info/
 *.jar
+
 
 
 
