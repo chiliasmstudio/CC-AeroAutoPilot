@@ -842,6 +842,7 @@ local Driver = {
             for _, scr in ipairs(self.screens) do
                 if scr.id == p1 then targetScreen = scr; break end
             end
+            if not targetScreen and #self.screens > 0 then targetScreen = self.screens[1] end
             if targetScreen and type(p2) == "number" and type(p3) == "number" then
                 clickX, clickY = p2, p3
             elseif type(p1) == "number" and type(p2) == "number" then
@@ -855,31 +856,48 @@ local Driver = {
             end
             if not targetScreen and #self.screens > 0 then targetScreen = self.screens[1] end
             if targetScreen and type(p2) == "number" and type(p3) == "number" then
-                local mw, mh = 50, 19
-                local mon = peripheral.wrap(p1)
-                if mon and mon.getSize then
-                    local ok, w, h = pcall(function() return mon.getSize() end)
-                    if ok and w and h and w > 0 and h > 0 then mw, mh = w, h end
-                end
-                clickX = math.floor(((p2 - 0.5) / mw) * (targetScreen.screenW or 320))
-                clickY = math.floor(((p3 - 0.5) / mh) * (targetScreen.screenH or 240))
+                clickX, clickY = p2, p3
             end
 
         elseif event == "mouse_click" then
             targetScreen = self.screens[1]
             if targetScreen and type(p2) == "number" and type(p3) == "number" then
                 local tw, th = term.getSize()
-                clickX = math.floor(((p2 - 0.5) / tw) * (targetScreen.screenW or 320))
-                clickY = math.floor(((p3 - 0.5) / th) * (targetScreen.screenH or 240))
+                clickX = math.floor(((p2 - 0.5) / tw) * (targetScreen.screenW or 192))
+                clickY = math.floor(((p3 - 0.5) / th) * (targetScreen.screenH or 192))
             end
         end
 
         if targetScreen and clickX and clickY then
+            -- 1. 嘗試直接像素座標匹配
+            local hit = false
             for _, btn in ipairs(targetScreen.buttons) do
                 if clickX >= btn.x and clickX <= btn.x + btn.w and clickY >= btn.y and clickY <= btn.y + btn.h then
                     pcall(btn.action)
                     self:drawScreen(targetScreen)
+                    hit = true
                     break
+                end
+            end
+
+            -- 2. 若直接像素未命中且座標疑似為字元格（< 60），嘗試字元格縮放換算匹配
+            if not hit and clickX < 60 and (targetScreen.screenW or 192) >= 80 then
+                local mw, mh = 29, 19
+                local mon = peripheral.wrap(p1)
+                if mon and mon.getSize then
+                    local ok, w, h = pcall(function() return mon.getSize() end)
+                    if ok and w and h and w > 0 and h > 0 then
+                        if w < 60 then mw, mh = w, h end
+                    end
+                end
+                local mappedX = math.floor(((clickX - 0.5) / mw) * (targetScreen.screenW or 192))
+                local mappedY = math.floor(((clickY - 0.5) / mh) * (targetScreen.screenH or 192))
+                for _, btn in ipairs(targetScreen.buttons) do
+                    if mappedX >= btn.x and mappedX <= btn.x + btn.w and mappedY >= btn.y and mappedY <= btn.y + btn.h then
+                        pcall(btn.action)
+                        self:drawScreen(targetScreen)
+                        break
+                    end
                 end
             end
         end

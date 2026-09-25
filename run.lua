@@ -106,7 +106,7 @@ FlightCore.turtles = {}
 FlightCore.altiSensor = nil
 FlightCore.gimbalSensor = nil
 FlightCore.gimbalAvailable = false
-FlightCore.masterModem = nil
+FlightCore.modems = {}
 FlightCore.outputSides = {"bottom", "top", "left", "right", "back"}
 FlightCore.pwmTick = 0
 
@@ -118,9 +118,15 @@ end
 function FlightCore.initSensorsAndModem()
     FlightCore.altiSensor = peripheral.find("altitude_sensor")
     FlightCore.gimbalSensor = peripheral.find("gimbal_sensor")
-    FlightCore.masterModem = peripheral.find("modem")
-    if FlightCore.masterModem then
-        pcall(function() FlightCore.masterModem.open(101) end)
+    FlightCore.modems = {}
+    for _, name in ipairs(peripheral.getNames()) do
+        if peripheral.getType(name) == "modem" then
+            local m = peripheral.wrap(name)
+            if m then
+                pcall(function() m.open(101) end)
+                table.insert(FlightCore.modems, m)
+            end
+        end
     end
 end
 
@@ -220,22 +226,17 @@ function FlightCore.getQuadHealth(role)
     }
 end
 
-function FlightCore.processModemMessages()
-    if not FlightCore.masterModem then return end
-    while true do
-        local event, side, ch, replyCh, msg, dist = os.pullEventRaw("modem_message")
-        if event == "modem_message" and ch == 101 and type(msg) == "table" then
-            if msg.type == "HEARTBEAT" and msg.role and msg.id then
-                FlightCore.turtles[msg.id] = {
-                    role = msg.role,
-                    label = msg.label or ("Turtle-" .. msg.id),
-                    sig = msg.sig or 0,
-                    ver = msg.ver or "unknown",
-                    lastSeen = os.epoch("utc")
-                }
-            end
-        else
-            break
+-- 非阻塞數據機訊息處理器 (由主事件循環呼叫，絕不在 flightLoop 中調用阻塞 pullEvent)
+function FlightCore.handleModemMessage(side, ch, replyCh, msg, dist)
+    if ch == 101 and type(msg) == "table" then
+        if msg.type == "HEARTBEAT" and msg.role and msg.id then
+            FlightCore.turtles[msg.id] = {
+                role = msg.role,
+                label = msg.label or ("Turtle-" .. msg.id),
+                sig = msg.sig or 0,
+                ver = msg.ver or "unknown",
+                lastSeen = os.epoch("utc")
+            }
         end
     end
 end
@@ -243,19 +244,26 @@ end
 function FlightCore.outputToEngines(sigFL, sigFR, sigBL, sigBR)
     local targets = { FL = sigFL, FR = sigFR, BL = sigBL, BR = sigBR }
 
-    if FlightCore.masterModem then
-        pcall(function()
-            FlightCore.masterModem.transmit(100, 101, {
-                type = "FLIGHT_SYNC",
-                FL = sigFL,
-                FR = sigFR,
-                BL = sigBL,
-                BR = sigBR,
-                timestamp = os.epoch("utc")
-            })
-        end)
+    -- 1. 廣播至所有已連接之 Wired/Wireless Modem (Channel 100)
+    local payload = {
+        type = "FLIGHT_SYNC",
+        FL = sigFL,
+        FR = sigFR,
+        BL = sigBL,
+        BR = sigBR,
+        timestamp = os.epoch("utc")
+    }
+    for _, m in ipairs(FlightCore.modems) do
+        pcall(function() m.transmit(100, 101, payload) end)
     end
 
+    -- 2. 直接輸出電腦本體所有側面的類比紅石訊號 (以防本體直連紅石)
+    local maxSig = math.max(sigFL, sigFR, sigBL, sigBR)
+    for _, s in ipairs({"top", "bottom", "left", "right", "back", "front"}) do
+        pcall(function() redstone.setAnalogOutput(s, maxSig) end)
+    end
+
+    -- 3. 透過有線網路週邊直接控制被包裝的烏龜或周邊裝置
     for role, sig in pairs(targets) do
         local engList = FlightCore.engines[role] or {}
         for _, dev in ipairs(engList) do
@@ -2132,6 +2140,7 @@ Drivers.tom = {
             for _, scr in ipairs(self.screens) do
                 if scr.id == p1 then targetScreen = scr; break end
             end
+            if not targetScreen and #self.screens > 0 then targetScreen = self.screens[1] end
             if targetScreen and type(p2) == "number" and type(p3) == "number" then
                 clickX, clickY = p2, p3
             elseif type(p1) == "number" and type(p2) == "number" then
@@ -2145,31 +2154,48 @@ Drivers.tom = {
             end
             if not targetScreen and #self.screens > 0 then targetScreen = self.screens[1] end
             if targetScreen and type(p2) == "number" and type(p3) == "number" then
-                local mw, mh = 50, 19
-                local mon = peripheral.wrap(p1)
-                if mon and mon.getSize then
-                    local ok, w, h = pcall(function() return mon.getSize() end)
-                    if ok and w and h and w > 0 and h > 0 then mw, mh = w, h end
-                end
-                clickX = math.floor(((p2 - 0.5) / mw) * (targetScreen.screenW or 320))
-                clickY = math.floor(((p3 - 0.5) / mh) * (targetScreen.screenH or 240))
+                clickX, clickY = p2, p3
             end
 
         elseif event == "mouse_click" then
             targetScreen = self.screens[1]
             if targetScreen and type(p2) == "number" and type(p3) == "number" then
                 local tw, th = term.getSize()
-                clickX = math.floor(((p2 - 0.5) / tw) * (targetScreen.screenW or 320))
-                clickY = math.floor(((p3 - 0.5) / th) * (targetScreen.screenH or 240))
+                clickX = math.floor(((p2 - 0.5) / tw) * (targetScreen.screenW or 192))
+                clickY = math.floor(((p3 - 0.5) / th) * (targetScreen.screenH or 192))
             end
         end
 
         if targetScreen and clickX and clickY then
+            -- 1. 嘗試直接像素座標匹配
+            local hit = false
             for _, btn in ipairs(targetScreen.buttons) do
                 if clickX >= btn.x and clickX <= btn.x + btn.w and clickY >= btn.y and clickY <= btn.y + btn.h then
                     pcall(btn.action)
                     self:drawScreen(targetScreen)
+                    hit = true
                     break
+                end
+            end
+
+            -- 2. 若直接像素未命中且座標疑似為字元格（< 60），嘗試字元格縮放換算匹配
+            if not hit and clickX < 60 and (targetScreen.screenW or 192) >= 80 then
+                local mw, mh = 29, 19
+                local mon = peripheral.wrap(p1)
+                if mon and mon.getSize then
+                    local ok, w, h = pcall(function() return mon.getSize() end)
+                    if ok and w and h and w > 0 and h > 0 then
+                        if w < 60 then mw, mh = w, h end
+                    end
+                end
+                local mappedX = math.floor(((clickX - 0.5) / mw) * (targetScreen.screenW or 192))
+                local mappedY = math.floor(((clickY - 0.5) / mh) * (targetScreen.screenH or 192))
+                for _, btn in ipairs(targetScreen.buttons) do
+                    if mappedX >= btn.x and mappedX <= btn.x + btn.w and mappedY >= btn.y and mappedY <= btn.y + btn.h then
+                        pcall(btn.action)
+                        self:drawScreen(targetScreen)
+                        break
+                    end
                 end
             end
         end
@@ -2676,7 +2702,6 @@ print(string.format("Screens (after reinit): %d", #activeDriver.screens))
 
 local function flightLoop()
     while true do
-        FlightCore.processModemMessages()
         FlightCore.updateFlightLogic()
         sleep(0.05)
     end
@@ -2693,7 +2718,9 @@ local function eventLoop()
     while true do
         local eventData = {os.pullEvent()}
         local event = eventData[1]
-        if event == "peripheral" or event == "peripheral_detach" or event == "monitor_resize" or event == "tm_monitor_resize" or event == "directgpu_resize" then
+        if event == "modem_message" then
+            FlightCore.handleModemMessage(eventData[2], eventData[3], eventData[4], eventData[5], eventData[6])
+        elseif event == "peripheral" or event == "peripheral_detach" or event == "monitor_resize" or event == "tm_monitor_resize" or event == "directgpu_resize" then
             if activeDriver and activeDriver.refreshScreens then
                 pcall(function() activeDriver:refreshScreens() end)
             end

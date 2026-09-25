@@ -79,7 +79,7 @@ FlightCore.turtles = {}
 FlightCore.altiSensor = nil
 FlightCore.gimbalSensor = nil
 FlightCore.gimbalAvailable = false
-FlightCore.masterModem = nil
+FlightCore.modems = {}
 FlightCore.outputSides = {"bottom", "top", "left", "right", "back"}
 FlightCore.pwmTick = 0
 
@@ -91,9 +91,15 @@ end
 function FlightCore.initSensorsAndModem()
     FlightCore.altiSensor = peripheral.find("altitude_sensor")
     FlightCore.gimbalSensor = peripheral.find("gimbal_sensor")
-    FlightCore.masterModem = peripheral.find("modem")
-    if FlightCore.masterModem then
-        pcall(function() FlightCore.masterModem.open(101) end)
+    FlightCore.modems = {}
+    for _, name in ipairs(peripheral.getNames()) do
+        if peripheral.getType(name) == "modem" then
+            local m = peripheral.wrap(name)
+            if m then
+                pcall(function() m.open(101) end)
+                table.insert(FlightCore.modems, m)
+            end
+        end
     end
 end
 
@@ -193,22 +199,17 @@ function FlightCore.getQuadHealth(role)
     }
 end
 
-function FlightCore.processModemMessages()
-    if not FlightCore.masterModem then return end
-    while true do
-        local event, side, ch, replyCh, msg, dist = os.pullEventRaw("modem_message")
-        if event == "modem_message" and ch == 101 and type(msg) == "table" then
-            if msg.type == "HEARTBEAT" and msg.role and msg.id then
-                FlightCore.turtles[msg.id] = {
-                    role = msg.role,
-                    label = msg.label or ("Turtle-" .. msg.id),
-                    sig = msg.sig or 0,
-                    ver = msg.ver or "unknown",
-                    lastSeen = os.epoch("utc")
-                }
-            end
-        else
-            break
+-- 非阻塞數據機訊息處理器 (由主事件循環呼叫，絕不在 flightLoop 中調用阻塞 pullEvent)
+function FlightCore.handleModemMessage(side, ch, replyCh, msg, dist)
+    if ch == 101 and type(msg) == "table" then
+        if msg.type == "HEARTBEAT" and msg.role and msg.id then
+            FlightCore.turtles[msg.id] = {
+                role = msg.role,
+                label = msg.label or ("Turtle-" .. msg.id),
+                sig = msg.sig or 0,
+                ver = msg.ver or "unknown",
+                lastSeen = os.epoch("utc")
+            }
         end
     end
 end
@@ -216,19 +217,26 @@ end
 function FlightCore.outputToEngines(sigFL, sigFR, sigBL, sigBR)
     local targets = { FL = sigFL, FR = sigFR, BL = sigBL, BR = sigBR }
 
-    if FlightCore.masterModem then
-        pcall(function()
-            FlightCore.masterModem.transmit(100, 101, {
-                type = "FLIGHT_SYNC",
-                FL = sigFL,
-                FR = sigFR,
-                BL = sigBL,
-                BR = sigBR,
-                timestamp = os.epoch("utc")
-            })
-        end)
+    -- 1. 廣播至所有已連接之 Wired/Wireless Modem (Channel 100)
+    local payload = {
+        type = "FLIGHT_SYNC",
+        FL = sigFL,
+        FR = sigFR,
+        BL = sigBL,
+        BR = sigBR,
+        timestamp = os.epoch("utc")
+    }
+    for _, m in ipairs(FlightCore.modems) do
+        pcall(function() m.transmit(100, 101, payload) end)
     end
 
+    -- 2. 直接輸出電腦本體所有側面的類比紅石訊號 (以防本體直連紅石)
+    local maxSig = math.max(sigFL, sigFR, sigBL, sigBR)
+    for _, s in ipairs({"top", "bottom", "left", "right", "back", "front"}) do
+        pcall(function() redstone.setAnalogOutput(s, maxSig) end)
+    end
+
+    -- 3. 透過有線網路週邊直接控制被包裝的烏龜或周邊裝置
     for role, sig in pairs(targets) do
         local engList = FlightCore.engines[role] or {}
         for _, dev in ipairs(engList) do

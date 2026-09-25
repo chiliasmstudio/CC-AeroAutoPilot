@@ -198,7 +198,6 @@ print(string.format("Screens (after reinit): %d", #activeDriver.screens))
 
 local function flightLoop()
     while true do
-        FlightCore.processModemMessages()
         FlightCore.updateFlightLogic()
         sleep(0.05)
     end
@@ -215,7 +214,9 @@ local function eventLoop()
     while true do
         local eventData = {os.pullEvent()}
         local event = eventData[1]
-        if event == "peripheral" or event == "peripheral_detach" or event == "monitor_resize" or event == "tm_monitor_resize" or event == "directgpu_resize" then
+        if event == "modem_message" then
+            FlightCore.handleModemMessage(eventData[2], eventData[3], eventData[4], eventData[5], eventData[6])
+        elseif event == "peripheral" or event == "peripheral_detach" or event == "monitor_resize" or event == "tm_monitor_resize" or event == "directgpu_resize" then
             if activeDriver and activeDriver.refreshScreens then
                 pcall(function() activeDriver:refreshScreens() end)
             end
