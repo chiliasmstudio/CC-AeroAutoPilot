@@ -1,7 +1,7 @@
 --[[
     Create: Avionics & CC: Tweaked
     Unified Multi-Engine Avionics Flight Computer (多軸模組化統一飛控大腦)
-    Version: v3.8.3 Modular Bundle
+    Version: v3.8.4 Modular Bundle
     
     螢幕尺寸自適應分類 (Dual Screen Size Mode):
     - 完整顯示螢幕 (>= 5x5): 啟動超大 A350 儀表、細緻多引擎遙測與 3 排完整控制面板。
@@ -22,7 +22,7 @@
       run.lua normal       (強制使用 CC: Tweaked 原生螢幕/終端機驅動，支援多螢幕)
 --]]
 
-local VERSION = "v3.8.3"
+local VERSION = "v3.8.4"
 local args = {...}
 local requestedDriver = args[1] and string.lower(args[1]) or "auto"
 
@@ -32,49 +32,45 @@ local requestedDriver = args[1] and string.lower(args[1]) or "auto"
 
 local FlightCore = {}
 
--- 1.1 內建 PID 控制器
-local PID = {}
-PID.__index = PID
+-- 1.1 高度與垂直阻尼控制器 (PD-V Controller: 專為 Minecraft/Create 物理引擎調校)
+local AltController = {}
+AltController.__index = AltController
 
-function PID.new(kp, ki, kd, minOutput, maxOutput)
-    local self = setmetatable({}, PID)
-    self.kp = kp or 1.0
-    self.ki = ki or 0.0
-    self.kd = kd or 0.0
-    self.minOutput = minOutput or -1.0
-    self.maxOutput = maxOutput or 1.0
+function AltController.new(kp, ki, kd, maxAdj)
+    local self = setmetatable({}, AltController)
+    self.kp = kp or 0.25         -- 高度比例增益 (每 1m 誤差調節 0.25 推力)
+    self.ki = ki or 0.01         -- 積分微調增益 (消除長效靜態誤差)
+    self.kd = kd or 0.85         -- 垂直速度阻尼 (1 m/s 速度產生 0.85 反向煞車推力，徹底消除上下震盪)
+    self.maxAdj = maxAdj or 5.0  -- 最大調節推力幅度 (防失控與推力突變)
     self.integral = 0
-    self.prevError = 0
     self.lastTime = os.epoch("utc") / 1000
     return self
 end
 
-function PID:reset()
+function AltController:reset()
     self.integral = 0
-    self.prevError = 0
     self.lastTime = os.epoch("utc") / 1000
 end
 
-function PID:update(error)
+function AltController:update(altError, vspeed)
     local now = os.epoch("utc") / 1000
     local dt = now - self.lastTime
-    if dt <= 0 then dt = 0.05 end
+    if dt <= 0 or dt > 0.5 then dt = 0.05 end
     self.lastTime = now
 
-    local p = self.kp * error
-    self.integral = self.integral + error * dt
-    local iMax = math.abs(self.maxOutput) * 0.5
-    if self.integral > iMax then self.integral = iMax end
-    if self.integral < -iMax then self.integral = -iMax end
+    local p = self.kp * altError
+    
+    self.integral = self.integral + altError * dt
+    local iLimit = 2.0
+    if self.integral > iLimit then self.integral = iLimit end
+    if self.integral < -iLimit then self.integral = -iLimit end
     local i = self.ki * self.integral
 
-    local derivative = (error - self.prevError) / dt
-    self.prevError = error
-    local d = self.kd * derivative
+    local d = -self.kd * (vspeed or 0)
 
     local output = p + i + d
-    if output > self.maxOutput then output = self.maxOutput end
-    if output < self.minOutput then output = self.minOutput end
+    if output > self.maxAdj then output = self.maxAdj end
+    if output < -self.maxAdj then output = -self.maxAdj end
     return output
 end
 
@@ -93,8 +89,8 @@ FlightCore.state = {
     rampRate = 0.015          -- 平緩線性加力速率 (每 tick +0.015)
 }
 
--- 垂直速度與高度雙閉環 PID 控制器 (具備全幅度 -15.0 ~ +15.0 動態權限)
-FlightCore.altPID = PID.new(1.5, 0.05, 1.2, -15.0, 15.0)
+-- 垂直速度阻尼高度控制器 (平滑懸停，杜絕驟開驟停與彈簧震盪)
+FlightCore.altPID = AltController.new(0.25, 0.01, 0.85, 5.0)
 
 -- 支援一側/象限配置多個引擎 (陣列結構)
 FlightCore.engines = { FL = {}, FR = {}, BL = {}, BR = {} }
@@ -356,6 +352,14 @@ function FlightCore.updateFlightLogic()
     local currentVspeed = FlightCore.altiSensor and FlightCore.altiSensor.getVerticalSpeed() or 0
     local currPitch, currRoll = FlightCore.getGimbalData()
 
+    local function approach(current, target, maxStep)
+        if current < target then
+            return math.min(target, current + maxStep)
+        else
+            return math.max(target, current - maxStep)
+        end
+    end
+
     if FlightCore.state.mode == "CALIBRATING" then
         if FlightCore.state.calibPhase == "GROUND_SEARCH" then
             FlightCore.state.calibThrottle = FlightCore.state.calibThrottle + FlightCore.state.rampRate
@@ -382,23 +386,25 @@ function FlightCore.updateFlightLogic()
         elseif FlightCore.state.calibPhase == "STABILIZE" then
             local targetAlt = FlightCore.state.calibTargetAlt
             local altError = targetAlt - currentAlt
-            -- 期望垂直速度 (限幅 -2.0 ~ +2.0 m/s)
-            local targetVspeed = math.max(-2.0, math.min(2.0, altError * 0.8))
-            local vspeedError = targetVspeed - currentVspeed
-            local pidAdj = FlightCore.altPID:update(vspeedError)
+            local thrustAdj = FlightCore.altPID:update(altError, currentVspeed)
 
             -- 閉環微調 BaseThrottle 尋找精確無漂移懸停點
-            if currentVspeed > 0.04 then
-                FlightCore.state.baseThrottle = math.max(0.1, FlightCore.state.baseThrottle - 0.002)
-            elseif currentVspeed < -0.04 then
-                FlightCore.state.baseThrottle = math.min(15.0, FlightCore.state.baseThrottle + 0.002)
+            if currentVspeed > 0.05 then
+                FlightCore.state.baseThrottle = math.max(0.1, FlightCore.state.baseThrottle - 0.001)
+            elseif currentVspeed < -0.05 then
+                FlightCore.state.baseThrottle = math.min(15.0, FlightCore.state.baseThrottle + 0.001)
             end
 
-            local finalThrust = math.max(0, math.min(15, FlightCore.state.baseThrottle + pidAdj))
-            FlightCore.virtualOutputs.FL = finalThrust
-            FlightCore.virtualOutputs.FR = finalThrust
-            FlightCore.virtualOutputs.BL = finalThrust
-            FlightCore.virtualOutputs.BR = finalThrust
+            local rawFL = math.max(0, math.min(15, FlightCore.state.baseThrottle + thrustAdj))
+            local rawFR = math.max(0, math.min(15, FlightCore.state.baseThrottle + thrustAdj))
+            local rawBL = math.max(0, math.min(15, FlightCore.state.baseThrottle + thrustAdj))
+            local rawBR = math.max(0, math.min(15, FlightCore.state.baseThrottle + thrustAdj))
+
+            local maxSlew = 0.35
+            FlightCore.virtualOutputs.FL = approach(FlightCore.virtualOutputs.FL, rawFL, maxSlew)
+            FlightCore.virtualOutputs.FR = approach(FlightCore.virtualOutputs.FR, rawFR, maxSlew)
+            FlightCore.virtualOutputs.BL = approach(FlightCore.virtualOutputs.BL, rawBL, maxSlew)
+            FlightCore.virtualOutputs.BR = approach(FlightCore.virtualOutputs.BR, rawBR, maxSlew)
 
             if math.abs(currentAlt - targetAlt) < 0.4 and math.abs(currentVspeed) < 0.1 then
                 FlightCore.state.stableTimer = FlightCore.state.stableTimer + 0.05
@@ -423,18 +429,21 @@ function FlightCore.updateFlightLogic()
 
     elseif FlightCore.state.mode == "HOLD_ALT" then
         local altError = FlightCore.state.targetAlt - currentAlt
-        -- 期望垂直速度 (限幅 -3.0 ~ +3.0 m/s，平滑平飛無超調)
-        local targetVspeed = math.max(-3.0, math.min(3.0, altError * 0.8))
-        local vspeedError = targetVspeed - currentVspeed
-        local pidAdj = FlightCore.altPID:update(vspeedError)
+        local thrustAdj = FlightCore.altPID:update(altError, currentVspeed)
 
         local pitchCorr = -currPitch * 0.05
         local rollCorr = currRoll * 0.05
 
-        FlightCore.virtualOutputs.FL = math.max(0, math.min(15, FlightCore.state.baseThrottle + pidAdj + pitchCorr - rollCorr))
-        FlightCore.virtualOutputs.FR = math.max(0, math.min(15, FlightCore.state.baseThrottle + pidAdj + pitchCorr + rollCorr))
-        FlightCore.virtualOutputs.BL = math.max(0, math.min(15, FlightCore.state.baseThrottle + pidAdj - pitchCorr - rollCorr))
-        FlightCore.virtualOutputs.BR = math.max(0, math.min(15, FlightCore.state.baseThrottle + pidAdj - pitchCorr + rollCorr))
+        local rawFL = math.max(0, math.min(15, FlightCore.state.baseThrottle + thrustAdj + pitchCorr - rollCorr))
+        local rawFR = math.max(0, math.min(15, FlightCore.state.baseThrottle + thrustAdj + pitchCorr + rollCorr))
+        local rawBL = math.max(0, math.min(15, FlightCore.state.baseThrottle + thrustAdj - pitchCorr - rollCorr))
+        local rawBR = math.max(0, math.min(15, FlightCore.state.baseThrottle + thrustAdj - pitchCorr + rollCorr))
+
+        local maxSlew = 0.35
+        FlightCore.virtualOutputs.FL = approach(FlightCore.virtualOutputs.FL, rawFL, maxSlew)
+        FlightCore.virtualOutputs.FR = approach(FlightCore.virtualOutputs.FR, rawFR, maxSlew)
+        FlightCore.virtualOutputs.BL = approach(FlightCore.virtualOutputs.BL, rawBL, maxSlew)
+        FlightCore.virtualOutputs.BR = approach(FlightCore.virtualOutputs.BR, rawBR, maxSlew)
 
         local diff = FlightCore.state.targetAlt - currentAlt
         if diff > 0.8 then
