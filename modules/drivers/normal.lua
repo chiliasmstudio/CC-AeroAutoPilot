@@ -473,8 +473,8 @@ local Driver = {
             if hasTrans then
                 table.insert(slots, {slot="FWD", col=1, row=3, name="FWD Thrust"})
                 table.insert(slots, {slot="BWD", col=2, row=3, name="BWD Thrust"})
-                table.insert(slots, {slot="LEFT", col=1, row=4, name="LEFT Thrust"})
-                table.insert(slots, {slot="RIGHT", col=2, row=4, name="RIGHT Thrust"})
+                table.insert(slots, {slot="LEFT", col=1, row=4, name="LEFT Turn"})
+                table.insert(slots, {slot="RIGHT", col=2, row=4, name="RIGHT Turn"})
             end
 
             local maxRows = hasTrans and 4 or 2

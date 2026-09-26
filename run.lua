@@ -87,8 +87,9 @@ FlightCore.state = {
     calibPhase = "GROUND_SEARCH", -- "GROUND_SEARCH", "STABILIZE"
     calibThrottle = 0.0,      -- 校正微調油門
     rampRate = 0.015,         -- 平緩線性加力速率 (每 tick +0.015)
-    fwdThrottle = 0.0,        -- 前進/後退油門 (-15.0 ~ 15.0，正為前推，負為後推)
-    strafeThrottle = 0.0      -- 左右平移油門 (-15.0 ~ 15.0，正為右推，負為左推)
+    fwdThrottle = 0.0,        -- 前進/後退油門 (-15.0 ~ 15.0，正為前進，負為後退)
+    turnThrottle = 0.0,       -- 轉向推力 (-15.0 ~ 15.0，正為右推/面向右，負為左推/面向左)
+    strafeThrottle = 0.0      -- 相容別名
 }
 
 -- 1.3 導航與定位狀態 (Navigation & Positioning)
@@ -104,7 +105,9 @@ FlightCore.nav = {
     targetHeading = 0.0,  -- 目標航向 (0~359°)
     headingHold = false,  -- 航向鎖定開關
     targetX = nil,        -- 航點目標 X
-    targetZ = nil         -- 航點目標 Z
+    targetZ = nil,        -- 航點目標 Z
+    wpActive = false,     -- 航點自動巡航自駕儀
+    arrivalRadius = 20.0  -- 目的地到達判定半徑 (可偏差半徑 20 格)
 }
 
 -- 垂直速度阻尼高度控制器 (平滑懸停，杜絕驟開驟停與彈簧震盪)
@@ -229,17 +232,19 @@ local function resolveRole(lbl)
         return "BWD"
     end
 
-    -- 4. 左推 / 左平移 (Left / STRAFE_LEFT)
-    if u == "LEFT" or u == "STRAFE_LEFT" or u == "PUSH_LEFT" or u == "TL" or u == "左" or u == "左推" or u == "左平移" or
-       u:find("^LEFT[-_ ]") or u:find("^PUSH_LEFT") or u:find("^STRAFE_LEFT") or
-       u:find("^左推") or u:find("^左平移") then
+    -- 4. 左推 / 左轉向 (Left Turn / 面向左)
+    if u == "LEFT" or u == "TURN_LEFT" or u == "PUSH_LEFT" or u == "ORIENT_LEFT" or u == "TL" or
+       u == "左" or u == "左推" or u == "左轉" or u == "左舵" or u == "左向" or u == "左平移" or
+       u:find("^LEFT[-_ ]") or u:find("^PUSH_LEFT") or u:find("^TURN_LEFT") or
+       u:find("^左推") or u:find("^左轉") or u:find("^左舵") then
         return "LEFT"
     end
 
-    -- 5. 右推 / 右平移 (Right / STRAFE_RIGHT)
-    if u == "RIGHT" or u == "STRAFE_RIGHT" or u == "PUSH_RIGHT" or u == "TR" or u == "右" or u == "右推" or u == "右平移" or
-       u:find("^RIGHT[-_ ]") or u:find("^PUSH_RIGHT") or u:find("^STRAFE_RIGHT") or
-       u:find("^右推") or u:find("^右平移") then
+    -- 5. 右推 / 右轉向 (Right Turn / 面向右)
+    if u == "RIGHT" or u == "TURN_RIGHT" or u == "PUSH_RIGHT" or u == "ORIENT_RIGHT" or u == "TR" or
+       u == "右" or u == "右推" or u == "右轉" or u == "右舵" or u == "右向" or u == "右平移" or
+       u:find("^RIGHT[-_ ]") or u:find("^PUSH_RIGHT") or u:find("^TURN_RIGHT") or
+       u:find("^右推") or u:find("^右轉") or u:find("^右舵") then
         return "RIGHT"
     end
 
@@ -475,24 +480,35 @@ function FlightCore.adjustForwardThrottle(delta)
     FlightCore.setForwardThrottle(FlightCore.state.fwdThrottle + delta)
 end
 
-function FlightCore.setStrafeThrottle(val)
-    FlightCore.state.strafeThrottle = math.max(-15.0, math.min(15.0, val))
-    if FlightCore.state.strafeThrottle > 0 then
-        FlightCore.state.statusMsg = string.format("Right Thrust: %.1f", FlightCore.state.strafeThrottle)
-    elseif FlightCore.state.strafeThrottle < 0 then
-        FlightCore.state.statusMsg = string.format("Left Thrust: %.1f", -FlightCore.state.strafeThrottle)
+function FlightCore.setTurnThrottle(val)
+    FlightCore.state.turnThrottle = math.max(-15.0, math.min(15.0, val))
+    FlightCore.state.strafeThrottle = FlightCore.state.turnThrottle
+    if FlightCore.state.turnThrottle > 0 then
+        FlightCore.state.statusMsg = string.format("Turn Right Thrust: %.1f", FlightCore.state.turnThrottle)
+    elseif FlightCore.state.turnThrottle < 0 then
+        FlightCore.state.statusMsg = string.format("Turn Left Thrust: %.1f", -FlightCore.state.turnThrottle)
     else
-        FlightCore.state.statusMsg = "Strafe Thrust: OFF"
+        FlightCore.state.statusMsg = "Turn Thrust: OFF"
     end
 end
 
+function FlightCore.adjustTurnThrottle(delta)
+    FlightCore.setTurnThrottle((FlightCore.state.turnThrottle or 0) + delta)
+end
+
+function FlightCore.setStrafeThrottle(val)
+    FlightCore.setTurnThrottle(val)
+end
+
 function FlightCore.adjustStrafeThrottle(delta)
-    FlightCore.setStrafeThrottle(FlightCore.state.strafeThrottle + delta)
+    FlightCore.adjustTurnThrottle(delta)
 end
 
 function FlightCore.stopHorizontalThrust()
     FlightCore.state.fwdThrottle = 0.0
+    FlightCore.state.turnThrottle = 0.0
     FlightCore.state.strafeThrottle = 0.0
+    FlightCore.nav.wpActive = false
     FlightCore.virtualOutputs.FWD = 0.0
     FlightCore.virtualOutputs.BWD = 0.0
     FlightCore.virtualOutputs.LEFT = 0.0
@@ -501,7 +517,21 @@ function FlightCore.stopHorizontalThrust()
     FlightCore.engineOutputs.BWD = 0
     FlightCore.engineOutputs.LEFT = 0
     FlightCore.engineOutputs.RIGHT = 0
-    FlightCore.state.statusMsg = "Translational Thrust: STOPPED"
+    FlightCore.state.statusMsg = "Directional Thrust: STOPPED"
+end
+
+function FlightCore.setWaypoint(x, z, radius)
+    FlightCore.nav.targetX = tonumber(x)
+    FlightCore.nav.targetZ = tonumber(z)
+    FlightCore.nav.arrivalRadius = tonumber(radius) or 20.0
+    FlightCore.nav.wpActive = true
+    FlightCore.state.statusMsg = string.format("Waypoint: (%d,%d) R:%.0fm", x, z, FlightCore.nav.arrivalRadius)
+end
+
+function FlightCore.cancelWaypoint()
+    FlightCore.nav.wpActive = false
+    FlightCore.state.fwdThrottle = 0.0
+    FlightCore.state.statusMsg = "Waypoint Navigation CANCELLED"
 end
 
 function FlightCore.setTargetAlt(alt)
@@ -530,7 +560,9 @@ end
 function FlightCore.stopEngines()
     FlightCore.state.mode = "IDLE"
     FlightCore.state.fwdThrottle = 0.0
+    FlightCore.state.turnThrottle = 0.0
     FlightCore.state.strafeThrottle = 0.0
+    FlightCore.nav.wpActive = false
     FlightCore.state.statusMsg = "Engines Stopped (IDLE)"
     FlightCore.engineOutputs = { FL = 0, FR = 0, BL = 0, BR = 0, FWD = 0, BWD = 0, LEFT = 0, RIGHT = 0 }
     FlightCore.virtualOutputs = { FL = 0.0, FR = 0.0, BL = 0.0, BR = 0.0, FWD = 0.0, BWD = 0.0, LEFT = 0.0, RIGHT = 0.0 }
@@ -622,6 +654,61 @@ function FlightCore.updateFlightLogic()
         end
     end
 
+    -- 1. 航點自動導航邏輯 (Waypoint Autopilot Navigation - 偏差半徑 20 格容許)
+    if FlightCore.nav.wpActive and FlightCore.nav.targetX and FlightCore.nav.targetZ then
+        if FlightCore.nav.x and FlightCore.nav.z then
+            local dx = FlightCore.nav.targetX - FlightCore.nav.x
+            local dz = FlightCore.nav.targetZ - FlightCore.nav.z
+            local dist = math.sqrt(dx * dx + dz * dz)
+            local acceptRadius = FlightCore.nav.arrivalRadius or 20.0
+
+            if dist <= acceptRadius then
+                -- 進入目的地容許半徑 (20 格) -> 抵達目的地，停止前進引擎
+                FlightCore.nav.wpActive = false
+                FlightCore.state.fwdThrottle = 0.0
+                FlightCore.state.statusMsg = string.format("ARRIVED DEST! (Dist: %.1fm <= %dm)", dist, math.floor(acceptRadius))
+            else
+                -- 計算指向目標的航向角 (0=北, 90=東, 180=南, 270=西)
+                local targetHeading = (math.deg(math.atan2(dx, -dz)) + 360) % 360
+                FlightCore.nav.targetHeading = targetHeading
+                FlightCore.nav.headingHold = true
+
+                local yawDiff = ((targetHeading - (FlightCore.nav.yaw or 0) + 180) % 360) - 180
+                if math.abs(yawDiff) < 35 then
+                    -- 航向基本對準，主前進引擎持續推力巡航
+                    local cruisePower = math.min(15.0, math.max(4.0, dist * 0.12))
+                    FlightCore.state.fwdThrottle = cruisePower
+                else
+                    -- 航向偏差較大，減速微推以便快速轉向
+                    FlightCore.state.fwdThrottle = 1.5
+                end
+            end
+        end
+    end
+
+    -- 2. 轉向自駕儀計算 (右推使船面向右，左推使船面向左)
+    local autoTurnRight = 0.0
+    local autoTurnLeft = 0.0
+    local yawCorr = 0.0
+
+    if FlightCore.nav.headingHold and FlightCore.nav.yaw then
+        local yawDiff = ((FlightCore.nav.targetHeading - FlightCore.nav.yaw + 180) % 360) - 180
+        -- 垂直升力差動轉向輔助 (Differential Lift Steering)
+        yawCorr = math.max(-1.5, math.min(1.5, yawDiff * 0.05))
+
+        -- 專用轉向推力引擎 (右推讓船面向右，左推讓船面向左)
+        if yawDiff > 1.2 then
+            -- 目標在右方，需要順時針右轉
+            autoTurnRight = math.min(15.0, math.max(1.0, yawDiff * 0.20 + (yawDiff > 8 and 2.5 or 0.5)))
+            autoTurnLeft = 0.0
+        elseif yawDiff < -1.2 then
+            -- 目標在左方，需要逆時針左轉
+            autoTurnLeft = math.min(15.0, math.max(1.0, -yawDiff * 0.20 + (-yawDiff > 8 and 2.5 or 0.5)))
+            autoTurnRight = 0.0
+        end
+    end
+
+    -- 3. 飛行高度模式 (CALIBRATING / HOLD_ALT)
     if FlightCore.state.mode == "CALIBRATING" then
         if FlightCore.state.calibPhase == "GROUND_SEARCH" then
             FlightCore.state.calibThrottle = FlightCore.state.calibThrottle + FlightCore.state.rampRate
@@ -631,7 +718,6 @@ function FlightCore.updateFlightLogic()
             if altDelta > 0.3 or currentVspeed > 0.15 then
                 FlightCore.state.calibPhase = "STABILIZE"
                 FlightCore.state.calibTargetAlt = FlightCore.state.calibTargetAlt
-                -- 扣除起飛初期的慣性累積量，精確鎖定懸停初值
                 FlightCore.state.baseThrottle = math.max(0.5, FlightCore.state.calibThrottle - 0.15)
                 FlightCore.state.stableTimer = 0
                 FlightCore.state.statusMsg = string.format("Lift Found (%.2f)! Stabilizing +3m...", FlightCore.state.baseThrottle)
@@ -650,7 +736,6 @@ function FlightCore.updateFlightLogic()
             local altError = targetAlt - currentAlt
             local thrustAdj = FlightCore.altPID:update(altError, currentVspeed)
 
-            -- 閉環微調 BaseThrottle 尋找精確無漂移懸停點
             if currentVspeed > 0.05 then
                 FlightCore.state.baseThrottle = math.max(0.1, FlightCore.state.baseThrottle - 0.001)
             elseif currentVspeed < -0.05 then
@@ -696,13 +781,6 @@ function FlightCore.updateFlightLogic()
         local pitchCorr = -currPitch * 0.05
         local rollCorr = currRoll * 0.05
 
-        -- 偏航差動轉向 (Yaw Differential Steering)
-        local yawCorr = 0.0
-        if FlightCore.nav.headingHold and FlightCore.nav.yaw then
-            local yawDiff = ((FlightCore.nav.targetHeading - FlightCore.nav.yaw + 180) % 360) - 180
-            yawCorr = math.max(-1.5, math.min(1.5, yawDiff * 0.05))
-        end
-
         local rawFL = math.max(0, math.min(15, FlightCore.state.baseThrottle + thrustAdj + pitchCorr - rollCorr - yawCorr))
         local rawFR = math.max(0, math.min(15, FlightCore.state.baseThrottle + thrustAdj + pitchCorr + rollCorr + yawCorr))
         local rawBL = math.max(0, math.min(15, FlightCore.state.baseThrottle + thrustAdj - pitchCorr - rollCorr - yawCorr))
@@ -720,7 +798,12 @@ function FlightCore.updateFlightLogic()
         elseif diff < -0.8 then
             FlightCore.state.statusMsg = string.format("Descending: %.1fm -> %.1fm (V.S: %+.1f)", currentAlt, FlightCore.state.targetAlt, currentVspeed)
         else
-            if FlightCore.nav.headingHold then
+            if FlightCore.nav.wpActive and FlightCore.nav.targetX then
+                local dx = FlightCore.nav.targetX - (FlightCore.nav.x or 0)
+                local dz = FlightCore.nav.targetZ - (FlightCore.nav.z or 0)
+                local d = math.sqrt(dx*dx + dz*dz)
+                FlightCore.state.statusMsg = string.format("NAV -> (%d,%d) D:%.0fm HDG:%03d*", math.floor(FlightCore.nav.targetX), math.floor(FlightCore.nav.targetZ), d, math.floor(FlightCore.nav.targetHeading))
+            elseif FlightCore.nav.headingHold then
                 FlightCore.state.statusMsg = string.format("Hold: %.1fm | HDG: %03d* (Tgt: %03d*)", currentAlt, math.floor(FlightCore.nav.yaw), FlightCore.nav.targetHeading)
             else
                 FlightCore.state.statusMsg = string.format("Holding Alt: %.1fm (Base: %.2f)", currentAlt, FlightCore.state.baseThrottle)
@@ -728,11 +811,15 @@ function FlightCore.updateFlightLogic()
         end
     end
 
-    -- 水平/平移推力平滑過渡 (Translational Thruster Slew)
+    -- 4. 轉向與推進推力分配 (Turn & Forward/Backward Slew)
+    local manTurn = FlightCore.state.turnThrottle or FlightCore.state.strafeThrottle or 0.0
+    local manTurnRight = math.max(0, manTurn)
+    local manTurnLeft = math.max(0, -manTurn)
+
+    local targetRIGHT = math.max(manTurnRight, autoTurnRight)
+    local targetLEFT = math.max(manTurnLeft, autoTurnLeft)
     local targetFWD = math.max(0, FlightCore.state.fwdThrottle or 0)
     local targetBWD = math.max(0, -(FlightCore.state.fwdThrottle or 0))
-    local targetLEFT = math.max(0, -(FlightCore.state.strafeThrottle or 0))
-    local targetRIGHT = math.max(0, FlightCore.state.strafeThrottle or 0)
 
     local maxTransSlew = 0.5
     FlightCore.virtualOutputs.FWD = approach(FlightCore.virtualOutputs.FWD or 0, targetFWD, maxTransSlew)
@@ -1492,8 +1579,8 @@ Drivers.direct = {
             if hasTrans then
                 table.insert(slots, {slot="FWD", col=1, row=3, name="FWD Thrust"})
                 table.insert(slots, {slot="BWD", col=2, row=3, name="BWD Thrust"})
-                table.insert(slots, {slot="LEFT", col=1, row=4, name="LEFT Thrust"})
-                table.insert(slots, {slot="RIGHT", col=2, row=4, name="RIGHT Thrust"})
+                table.insert(slots, {slot="LEFT", col=1, row=4, name="LEFT Turn"})
+                table.insert(slots, {slot="RIGHT", col=2, row=4, name="RIGHT Turn"})
             end
 
             local maxRows = hasTrans and 4 or 2
@@ -2517,8 +2604,8 @@ Drivers.tom = {
             if hasTrans then
                 table.insert(slots, {slot="FWD", col=1, row=3, name="FWD Thrust"})
                 table.insert(slots, {slot="BWD", col=2, row=3, name="BWD Thrust"})
-                table.insert(slots, {slot="LEFT", col=1, row=4, name="LEFT Thrust"})
-                table.insert(slots, {slot="RIGHT", col=2, row=4, name="RIGHT Thrust"})
+                table.insert(slots, {slot="LEFT", col=1, row=4, name="LEFT Turn"})
+                table.insert(slots, {slot="RIGHT", col=2, row=4, name="RIGHT Turn"})
             end
 
             local maxRows = hasTrans and 4 or 2
@@ -3093,8 +3180,8 @@ Drivers.normal = {
             if hasTrans then
                 table.insert(slots, {slot="FWD", col=1, row=3, name="FWD Thrust"})
                 table.insert(slots, {slot="BWD", col=2, row=3, name="BWD Thrust"})
-                table.insert(slots, {slot="LEFT", col=1, row=4, name="LEFT Thrust"})
-                table.insert(slots, {slot="RIGHT", col=2, row=4, name="RIGHT Thrust"})
+                table.insert(slots, {slot="LEFT", col=1, row=4, name="LEFT Turn"})
+                table.insert(slots, {slot="RIGHT", col=2, row=4, name="RIGHT Turn"})
             end
 
             local maxRows = hasTrans and 4 or 2
