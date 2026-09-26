@@ -165,21 +165,9 @@ function FlightCore.updateNavigation()
         local ok, h = pcall(function() return FlightCore.altiSensor.getHeight() end)
         if ok and h then
             FlightCore.nav.y = h
-            if FlightCore.nav.source ~= "GPS" then
+            if FlightCore.nav.source ~= "GPS" and FlightCore.nav.source ~= "INS" then
                 FlightCore.nav.source = "BARO"
             end
-        end
-    end
-
-    -- 5. GPS 非阻塞定期探測 (每 2 秒嘗試一次)
-    FlightCore.gpsTick = (FlightCore.gpsTick + 1) % 40
-    if FlightCore.gpsTick == 0 and gps and #FlightCore.modems > 0 then
-        local gx, gy, gz = gps.locate(0.02)
-        if gx then
-            FlightCore.nav.x = gx
-            FlightCore.nav.y = gy
-            FlightCore.nav.z = gz
-            FlightCore.nav.source = "GPS"
         end
     end
 end
@@ -428,17 +416,6 @@ function FlightCore.outputToEngines(sigFL, sigFR, sigBL, sigBR, sigFWD, sigBWD, 
     local maxSig = math.max(sigFL, sigFR, sigBL, sigBR)
     for _, s in ipairs({"top", "bottom", "left", "right", "back", "front"}) do
         pcall(function() redstone.setAnalogOutput(s, maxSig) end)
-    end
-
-    -- 3. 透過有線網路週邊直接控制被包裝的烏龜或周邊裝置
-    for role, sig in pairs(targets) do
-        local engList = FlightCore.engines[role] or {}
-        for _, dev in ipairs(engList) do
-            for _, s in ipairs(FlightCore.outputSides) do
-                pcall(function() dev.setOutput(s, sig > 0) end)
-                pcall(function() dev.setAnalogOutput(s, sig) end)
-            end
-        end
     end
 end
 

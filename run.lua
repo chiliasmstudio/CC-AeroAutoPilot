@@ -1,7 +1,7 @@
 --[[
     Create: Avionics & CC: Tweaked
     Unified Multi-Engine Avionics Flight Computer (多軸模組化統一飛控大腦)
-    Version: v3.9.2 Modular Bundle
+    Version: v3.9.3 Modular Bundle
     
     螢幕尺寸自適應分類 (Dual Screen Size Mode):
     - 完整顯示螢幕 (>= 5x5): 啟動超大 A350 儀表、細緻多引擎遙測與 3 排完整控制面板。
@@ -22,7 +22,7 @@
       run.lua normal       (強制使用 CC: Tweaked 原生螢幕/終端機驅動，支援多螢幕)
 --]]
 
-local VERSION = "v3.9.2"
+local VERSION = "v3.9.3"
 local args = {...}
 local requestedDriver = args[1] and string.lower(args[1]) or "auto"
 
@@ -192,21 +192,9 @@ function FlightCore.updateNavigation()
         local ok, h = pcall(function() return FlightCore.altiSensor.getHeight() end)
         if ok and h then
             FlightCore.nav.y = h
-            if FlightCore.nav.source ~= "GPS" then
+            if FlightCore.nav.source ~= "GPS" and FlightCore.nav.source ~= "INS" then
                 FlightCore.nav.source = "BARO"
             end
-        end
-    end
-
-    -- 5. GPS 非阻塞定期探測 (每 2 秒嘗試一次)
-    FlightCore.gpsTick = (FlightCore.gpsTick + 1) % 40
-    if FlightCore.gpsTick == 0 and gps and #FlightCore.modems > 0 then
-        local gx, gy, gz = gps.locate(0.02)
-        if gx then
-            FlightCore.nav.x = gx
-            FlightCore.nav.y = gy
-            FlightCore.nav.z = gz
-            FlightCore.nav.source = "GPS"
         end
     end
 end
@@ -455,17 +443,6 @@ function FlightCore.outputToEngines(sigFL, sigFR, sigBL, sigBR, sigFWD, sigBWD, 
     local maxSig = math.max(sigFL, sigFR, sigBL, sigBR)
     for _, s in ipairs({"top", "bottom", "left", "right", "back", "front"}) do
         pcall(function() redstone.setAnalogOutput(s, maxSig) end)
-    end
-
-    -- 3. 透過有線網路週邊直接控制被包裝的烏龜或周邊裝置
-    for role, sig in pairs(targets) do
-        local engList = FlightCore.engines[role] or {}
-        for _, dev in ipairs(engList) do
-            for _, s in ipairs(FlightCore.outputSides) do
-                pcall(function() dev.setOutput(s, sig > 0) end)
-                pcall(function() dev.setAnalogOutput(s, sig) end)
-            end
-        end
     end
 end
 
