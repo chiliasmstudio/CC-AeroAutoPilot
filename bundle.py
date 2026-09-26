@@ -19,7 +19,7 @@ MODULES_DIR = os.path.join(PROJECT_DIR, "modules")
 DRIVERS_DIR = os.path.join(MODULES_DIR, "drivers")
 OUTPUT_RUN_LUA = os.path.join(PROJECT_DIR, "run.lua")
 
-VERSION = "v3.8.4"
+VERSION = "v3.9.0"
 
 def read_file(filepath):
     with open(filepath, "r", encoding="utf-8") as f:
@@ -101,7 +101,7 @@ def bundle():
       2. PFD (主飛行儀表: 巨大人工地平線姿態儀 + 數位高度錶 + 升降速度)
       3. ECAM (發動機動力監控: 2x2 四象限直觀排布，支援單側多引擎即時監控)
       4. CTRL (飛行控制畫面: 完整獨立控制面板、高度微調、油門調整、模式切換)
-      5. NAV (快速導航與預設高度: 0m/80m/150m/200m/300m/鎖定)
+      5. NAV (航向與 XZ 導航控制: 步進微調/主方位快速鎖定/自駕儀航向保持)
       6. SYS (系統診斷與硬體自檢: 4 象限烏龜即時心跳、延遲與 PWM 反饋)
 
     使用方式:
@@ -129,7 +129,7 @@ local VIEW_TITLES = {
     PFD      = "PRIMARY FLIGHT",
     ECAM     = "ECAM 2x2",
     CTRL     = "FLIGHT CONTROLS",
-    NAV      = "NAV PRESETS",
+    NAV      = "HEADING & NAV",
     SYS      = "SYSTEM STATUS"
 }
 

@@ -62,6 +62,22 @@ FlightCore.state = {
     rampRate = 0.015          -- 平緩線性加力速率 (每 tick +0.015)
 }
 
+-- 1.3 導航與定位狀態 (Navigation & Positioning)
+FlightCore.nav = {
+    x = nil,
+    y = nil,
+    z = nil,
+    yaw = 0.0,            -- 當前航向角 (0~359°, 0=北, 90=東, 180=南, 270=西)
+    pitch = 0.0,
+    roll = 0.0,
+    speed = 0.0,          -- 水平線速度 (m/s)
+    source = "BARO",      -- "INS", "GPS", "BARO", "NONE"
+    targetHeading = 0.0,  -- 目標航向 (0~359°)
+    headingHold = false,  -- 航向鎖定開關
+    targetX = nil,        -- 航點目標 X
+    targetZ = nil         -- 航點目標 Z
+}
+
 -- 垂直速度阻尼高度控制器 (平滑懸停，杜絕驟開驟停與彈簧震盪)
 FlightCore.altPID = AltController.new(0.25, 0.01, 0.85, 5.0)
 
@@ -75,10 +91,80 @@ FlightCore.turtles = {}
 
 FlightCore.altiSensor = nil
 FlightCore.gimbalSensor = nil
+FlightCore.navTable = nil
 FlightCore.gimbalAvailable = false
 FlightCore.modems = {}
 FlightCore.outputSides = {"bottom", "top", "left", "right", "back"}
 FlightCore.pwmTick = 0
+FlightCore.gpsTick = 0
+
+local hasCCPE, CCPE_SS = pcall(require, "ccpe.sensor_system")
+
+function FlightCore.updateNavigation()
+    -- 1. 優先嘗試 CCPE (INS / AIC)
+    if hasCCPE and CCPE_SS and CCPE_SS.isOnBody and CCPE_SS.isOnBody() then
+        local okPos, pos = pcall(function() return CCPE_SS.getBodyPosition() or CCPE_SS.getPosition() end)
+        local okVel, vel = pcall(function() return CCPE_SS.getVelocity() end)
+        local okAng, ang = pcall(function() return CCPE_SS.getAngles() end)
+
+        if okPos and pos and type(pos) == "table" then
+            FlightCore.nav.x = pos.x
+            FlightCore.nav.y = pos.y
+            FlightCore.nav.z = pos.z
+            FlightCore.nav.source = "INS"
+        end
+
+        if okVel and vel and type(vel) == "table" then
+            FlightCore.nav.speed = math.sqrt((vel.x or 0)^2 + (vel.z or 0)^2)
+        end
+
+        if okAng and ang and type(ang) == "table" then
+            FlightCore.nav.pitch = ang.pitch or 0
+            FlightCore.nav.roll = ang.roll or 0
+            FlightCore.nav.yaw = ((ang.yaw or 0) % 360 + 360) % 360
+        end
+        return
+    end
+
+    -- 2. 嘗試 Navigation Table (Create: Avionics)
+    if not FlightCore.navTable then
+        FlightCore.navTable = peripheral.find("navigation_table")
+    end
+    if FlightCore.navTable then
+        local ok, hdg = pcall(function() return FlightCore.navTable.getHeading() end)
+        if ok and hdg then
+            FlightCore.nav.yaw = (hdg % 360 + 360) % 360
+        end
+    end
+
+    -- 3. 姿態儀 (Gimbal Sensor)
+    local p, r = FlightCore.getGimbalData()
+    FlightCore.nav.pitch = p
+    FlightCore.nav.roll = r
+
+    -- 4. 高度計 (Altitude Sensor)
+    if FlightCore.altiSensor then
+        local ok, h = pcall(function() return FlightCore.altiSensor.getHeight() end)
+        if ok and h then
+            FlightCore.nav.y = h
+            if FlightCore.nav.source ~= "GPS" then
+                FlightCore.nav.source = "BARO"
+            end
+        end
+    end
+
+    -- 5. GPS 非阻塞定期探測 (每 2 秒嘗試一次)
+    FlightCore.gpsTick = (FlightCore.gpsTick + 1) % 40
+    if FlightCore.gpsTick == 0 and gps and #FlightCore.modems > 0 then
+        local gx, gy, gz = gps.locate(0.02)
+        if gx then
+            FlightCore.nav.x = gx
+            FlightCore.nav.y = gy
+            FlightCore.nav.z = gz
+            FlightCore.nav.source = "GPS"
+        end
+    end
+end
 
 local function matchPrefix(lbl, prefix)
     local u = string.upper(lbl or "")
@@ -307,8 +393,35 @@ function FlightCore.startCalibration()
     FlightCore.altPID:reset()
 end
 
+function FlightCore.setTargetHeading(hdg)
+    FlightCore.nav.targetHeading = (math.floor(hdg) % 360 + 360) % 360
+    FlightCore.nav.headingHold = true
+    FlightCore.state.statusMsg = string.format("Target Heading: %03d*", FlightCore.nav.targetHeading)
+end
+
+function FlightCore.adjustTargetHeading(delta)
+    FlightCore.setTargetHeading(FlightCore.nav.targetHeading + delta)
+end
+
+function FlightCore.toggleHeadingHold()
+    FlightCore.nav.headingHold = not FlightCore.nav.headingHold
+    if FlightCore.nav.headingHold then
+        FlightCore.nav.targetHeading = math.floor(FlightCore.nav.yaw or 0)
+        FlightCore.state.statusMsg = string.format("Heading Hold: %03d*", FlightCore.nav.targetHeading)
+    else
+        FlightCore.state.statusMsg = "Heading Hold: OFF"
+    end
+end
+
+function FlightCore.syncHeading()
+    FlightCore.nav.targetHeading = math.floor(FlightCore.nav.yaw or 0)
+    FlightCore.nav.headingHold = true
+    FlightCore.state.statusMsg = string.format("Heading Synced: %03d*", FlightCore.nav.targetHeading)
+end
+
 function FlightCore.updateFlightLogic()
     FlightCore.pwmTick = (FlightCore.pwmTick + 1) % 10
+    FlightCore.updateNavigation()
 
     if FlightCore.state.mode == "IDLE" then
         FlightCore.engineOutputs = { FL = 0, FR = 0, BL = 0, BR = 0 }
@@ -321,9 +434,10 @@ function FlightCore.updateFlightLogic()
         FlightCore.altiSensor = peripheral.find("altitude_sensor")
     end
 
-    local currentAlt = FlightCore.altiSensor and FlightCore.altiSensor.getHeight() or 0
+    local currentAlt = FlightCore.altiSensor and FlightCore.altiSensor.getHeight() or (FlightCore.nav.y or 0)
     local currentVspeed = FlightCore.altiSensor and FlightCore.altiSensor.getVerticalSpeed() or 0
-    local currPitch, currRoll = FlightCore.getGimbalData()
+    local currPitch = FlightCore.nav.pitch or 0
+    local currRoll = FlightCore.nav.roll or 0
 
     local function approach(current, target, maxStep)
         if current < target then
@@ -407,10 +521,17 @@ function FlightCore.updateFlightLogic()
         local pitchCorr = -currPitch * 0.05
         local rollCorr = currRoll * 0.05
 
-        local rawFL = math.max(0, math.min(15, FlightCore.state.baseThrottle + thrustAdj + pitchCorr - rollCorr))
-        local rawFR = math.max(0, math.min(15, FlightCore.state.baseThrottle + thrustAdj + pitchCorr + rollCorr))
-        local rawBL = math.max(0, math.min(15, FlightCore.state.baseThrottle + thrustAdj - pitchCorr - rollCorr))
-        local rawBR = math.max(0, math.min(15, FlightCore.state.baseThrottle + thrustAdj - pitchCorr + rollCorr))
+        -- 偏航差動轉向 (Yaw Differential Steering)
+        local yawCorr = 0.0
+        if FlightCore.nav.headingHold and FlightCore.nav.yaw then
+            local yawDiff = ((FlightCore.nav.targetHeading - FlightCore.nav.yaw + 180) % 360) - 180
+            yawCorr = math.max(-1.5, math.min(1.5, yawDiff * 0.05))
+        end
+
+        local rawFL = math.max(0, math.min(15, FlightCore.state.baseThrottle + thrustAdj + pitchCorr - rollCorr - yawCorr))
+        local rawFR = math.max(0, math.min(15, FlightCore.state.baseThrottle + thrustAdj + pitchCorr + rollCorr + yawCorr))
+        local rawBL = math.max(0, math.min(15, FlightCore.state.baseThrottle + thrustAdj - pitchCorr - rollCorr - yawCorr))
+        local rawBR = math.max(0, math.min(15, FlightCore.state.baseThrottle + thrustAdj - pitchCorr + rollCorr + yawCorr))
 
         local maxSlew = 0.35
         FlightCore.virtualOutputs.FL = approach(FlightCore.virtualOutputs.FL, rawFL, maxSlew)
@@ -424,7 +545,11 @@ function FlightCore.updateFlightLogic()
         elseif diff < -0.8 then
             FlightCore.state.statusMsg = string.format("Descending: %.1fm -> %.1fm (V.S: %+.1f)", currentAlt, FlightCore.state.targetAlt, currentVspeed)
         else
-            FlightCore.state.statusMsg = string.format("Holding Alt: %.1fm (Base: %.2f)", currentAlt, FlightCore.state.baseThrottle)
+            if FlightCore.nav.headingHold then
+                FlightCore.state.statusMsg = string.format("Hold: %.1fm | HDG: %03d* (Tgt: %03d*)", currentAlt, math.floor(FlightCore.nav.yaw), FlightCore.nav.targetHeading)
+            else
+                FlightCore.state.statusMsg = string.format("Holding Alt: %.1fm (Base: %.2f)", currentAlt, FlightCore.state.baseThrottle)
+            end
         end
     end
 
