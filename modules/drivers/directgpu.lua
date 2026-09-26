@@ -709,11 +709,10 @@ local Driver = {
             addBtn(6 + (bW4+4)*3, r3Y, bW4, rowH, isFull and "[ STOP IDLE ]" or "STOP", stopBg, {255, 255, 255}, function() FlightCore.stopEngines() end)
 
         elseif scr.currentView == "SYS" then
-            local cardW = math.floor((sw - 18) / 2)
-            local btmSysH = btnRowH
-            local btmY = sh - btmSysH - 4
-            local cardH = math.floor((btmY - topMargin - 6) / 2)
-            local startY = topMargin
+            local hasTrans = (FlightCore.getQuadHealth("FWD").total > 0) or
+                             (FlightCore.getQuadHealth("BWD").total > 0) or
+                             (FlightCore.getQuadHealth("LEFT").total > 0) or
+                             (FlightCore.getQuadHealth("RIGHT").total > 0)
 
             local slots = {
                 {slot="FL", col=1, row=1, name="FL Quad"},
@@ -721,19 +720,35 @@ local Driver = {
                 {slot="BL", col=1, row=2, name="BL Quad"},
                 {slot="BR", col=2, row=2, name="BR Quad"}
             }
+            if hasTrans then
+                table.insert(slots, {slot="FWD", col=1, row=3, name="FWD Thrust"})
+                table.insert(slots, {slot="BWD", col=2, row=3, name="BWD Thrust"})
+                table.insert(slots, {slot="LEFT", col=1, row=4, name="LEFT Thrust"})
+                table.insert(slots, {slot="RIGHT", col=2, row=4, name="RIGHT Thrust"})
+            end
+
+            local maxRows = hasTrans and 4 or 2
+            local cardW = math.floor((sw - 18) / 2)
+            local btmSysH = btnRowH
+            local btmY = sh - btmSysH - 4
+            local cardH = math.max(14, math.floor((btmY - topMargin - 4 - (maxRows - 1) * 3) / maxRows))
+            local startY = topMargin
 
             for _, s in ipairs(slots) do
                 local cx = 6 + (s.col - 1) * (cardW + 6)
-                local cy = startY + (s.row - 1) * (cardH + 4)
+                local cy = startY + (s.row - 1) * (cardH + 3)
                 local qH = FlightCore.getQuadHealth(s.slot)
                 local online = qH.online > 0
                 local bg = online and {20, 35, 30} or {40, 20, 20}
                 gpu.fillRect(dispId, cx, cy, cardW, cardH, bg[1], bg[2], bg[3])
 
                 local tagCol = online and {80, 255, 120} or {255, 80, 80}
-                gpu.drawText(dispId, string.format("[%s] %d ENG", s.slot, qH.total), cx + 4, cy + 4, 220, 235, 255, "Arial", 9, "bold")
+                gpu.drawText(dispId, string.format("[%s] %d ENG", s.slot, qH.total), cx + 4, cy + 3, 220, 235, 255, "Arial", 9, "bold")
                 local actStr = (cardW < 75) and string.format("ON:%d P:%d", qH.online, FlightCore.engineOutputs[s.slot] or 0) or string.format("ACT:%d/%d | P:%d", qH.online, qH.total, FlightCore.engineOutputs[s.slot] or 0)
-                gpu.drawText(dispId, actStr, cx + 4, cy + math.max(10, math.floor(cardH * 0.45)), tagCol[1], tagCol[2], tagCol[3], "Arial", 8, "bold")
+                local textY = (cardH >= 24) and (cy + math.floor(cardH * 0.45)) or (cy + cardH - 9)
+                if cardH >= 16 then
+                    gpu.drawText(dispId, actStr, cx + 4, textY, tagCol[1], tagCol[2], tagCol[3], "Arial", 8, "bold")
+                end
             end
 
             local btmW = math.floor((sw - 16) / 2)

@@ -459,14 +459,27 @@ local Driver = {
             addBtn(5 + colW*3, bY3, colW, rowH, isFull and "[ STOP IDLE ]" or "STOP", "0", stopBg, function() FlightCore.stopEngines() end)
 
         elseif scr.currentView == "SYS" then
+            local hasTrans = (FlightCore.getQuadHealth("FWD").total > 0) or
+                             (FlightCore.getQuadHealth("BWD").total > 0) or
+                             (FlightCore.getQuadHealth("LEFT").total > 0) or
+                             (FlightCore.getQuadHealth("RIGHT").total > 0)
+
             local slots = {
                 {slot="FL", col=1, row=1, name="FL Quad"},
                 {slot="FR", col=2, row=1, name="FR Quad"},
                 {slot="BL", col=1, row=2, name="BL Quad"},
                 {slot="BR", col=2, row=2, name="BR Quad"}
             }
+            if hasTrans then
+                table.insert(slots, {slot="FWD", col=1, row=3, name="FWD Thrust"})
+                table.insert(slots, {slot="BWD", col=2, row=3, name="BWD Thrust"})
+                table.insert(slots, {slot="LEFT", col=1, row=4, name="LEFT Thrust"})
+                table.insert(slots, {slot="RIGHT", col=2, row=4, name="RIGHT Thrust"})
+            end
+
+            local maxRows = hasTrans and 4 or 2
             local cardW = math.floor((w - 3) / 2)
-            local cardH = math.max(3, math.floor((h - 8) / 2))
+            local cardH = math.max(2, math.floor((h - 6 - maxRows) / maxRows))
             local startY = 4
 
             for _, s in ipairs(slots) do
@@ -479,7 +492,9 @@ local Driver = {
                     self:safeBlit(scr, cx, cy + r, string.rep(" ", cardW), "0", bg)
                 end
                 self:safeBlit(scr, cx + 1, cy, string.format("[%s] %d ENG", s.slot, qH.total), "0", bg)
-                self:safeBlit(scr, cx + 1, cy + 1, string.format("ACT: %d/%d", qH.online, qH.total), "0", bg)
+                if cardH >= 2 then
+                    self:safeBlit(scr, cx + 1, cy + 1, string.format("ACT: %d/%d P:%d", qH.online, qH.total, FlightCore.engineOutputs[s.slot] or 0), "0", bg)
+                end
             end
 
             local btmY = h - 2

@@ -59,7 +59,9 @@ FlightCore.state = {
     calibTargetAlt = 0,       -- 校正爬升目標高度 (啟動高度 + 3m)
     calibPhase = "GROUND_SEARCH", -- "GROUND_SEARCH", "STABILIZE"
     calibThrottle = 0.0,      -- 校正微調油門
-    rampRate = 0.015          -- 平緩線性加力速率 (每 tick +0.015)
+    rampRate = 0.015,         -- 平緩線性加力速率 (每 tick +0.015)
+    fwdThrottle = 0.0,        -- 前進/後退油門 (-15.0 ~ 15.0，正為前推，負為後推)
+    strafeThrottle = 0.0      -- 左右平移油門 (-15.0 ~ 15.0，正為右推，負為左推)
 }
 
 -- 1.3 導航與定位狀態 (Navigation & Positioning)
@@ -81,10 +83,19 @@ FlightCore.nav = {
 -- 垂直速度阻尼高度控制器 (平滑懸停，杜絕驟開驟停與彈簧震盪)
 FlightCore.altPID = AltController.new(0.25, 0.01, 0.85, 5.0)
 
--- 支援一側/象限配置多個引擎 (陣列結構)
-FlightCore.engines = { FL = {}, FR = {}, BL = {}, BR = {} }
-FlightCore.engineOutputs  = { FL = 0, FR = 0, BL = 0, BR = 0 }
-FlightCore.virtualOutputs = { FL = 0.0, FR = 0.0, BL = 0.0, BR = 0.0 }
+-- 支援一側/象限/平移方向配置多個引擎 (陣列結構)
+FlightCore.engines = {
+    FL = {}, FR = {}, BL = {}, BR = {},
+    FWD = {}, BWD = {}, LEFT = {}, RIGHT = {}
+}
+FlightCore.engineOutputs  = {
+    FL = 0, FR = 0, BL = 0, BR = 0,
+    FWD = 0, BWD = 0, LEFT = 0, RIGHT = 0
+}
+FlightCore.virtualOutputs = {
+    FL = 0.0, FR = 0.0, BL = 0.0, BR = 0.0,
+    FWD = 0.0, BWD = 0.0, LEFT = 0.0, RIGHT = 0.0
+}
 
 -- 烏龜心跳與遙測健康度資料庫 (按 Turtle ID 索引)
 FlightCore.turtles = {}
@@ -166,9 +177,46 @@ function FlightCore.updateNavigation()
     end
 end
 
-local function matchPrefix(lbl, prefix)
-    local u = string.upper(lbl or "")
-    return u == prefix or u:sub(1, #prefix + 1) == (prefix .. "_") or u:sub(1, #prefix + 1) == (prefix .. "-") or u:sub(1, #prefix + 1) == (prefix .. " ")
+local function resolveRole(lbl)
+    if not lbl or lbl == "" then return nil end
+    local u = string.upper(tostring(lbl)):gsub("^%s*(.-)%s*$", "%1")
+
+    -- 1. 四象限垂直升力 (FL, FR, BL, BR)
+    if u == "FL" or u:find("^FL[-_ ]") or u:find("^前左") or u == "FRONT_LEFT" then return "FL"
+    elseif u == "FR" or u:find("^FR[-_ ]") or u:find("^前右") or u == "FRONT_RIGHT" then return "FR"
+    elseif u == "BL" or u:find("^BL[-_ ]") or u:find("^後左") or u == "BACK_LEFT" then return "BL"
+    elseif u == "BR" or u:find("^BR[-_ ]") or u:find("^後右") or u == "BACK_RIGHT" then return "BR"
+    end
+
+    -- 2. 前進 / 前推 (Forward / FWD)
+    if u == "FWD" or u == "FORWARD" or u == "FRONT" or u == "前進" or u == "前推" or u == "前" or
+       u:find("^FWD[-_ ]") or u:find("^FORWARD[-_ ]") or u:find("^PUSH_FWD") or u:find("^PUSH_FORWARD") or
+       u:find("^前進") or u:find("^前推") then
+        return "FWD"
+    end
+
+    -- 3. 後退 / 後推 (Backward / BWD)
+    if u == "BWD" or u == "BACK" or u == "BACKWARD" or u == "REVERSE" or u == "後退" or u == "後推" or u == "後" or
+       u:find("^BWD[-_ ]") or u:find("^BACK[-_ ]") or u:find("^PUSH_BWD") or u:find("^PUSH_BACK") or
+       u:find("^後退") or u:find("^後推") then
+        return "BWD"
+    end
+
+    -- 4. 左推 / 左平移 (Left / STRAFE_LEFT)
+    if u == "LEFT" or u == "STRAFE_LEFT" or u == "PUSH_LEFT" or u == "TL" or u == "左" or u == "左推" or u == "左平移" or
+       u:find("^LEFT[-_ ]") or u:find("^PUSH_LEFT") or u:find("^STRAFE_LEFT") or
+       u:find("^左推") or u:find("^左平移") then
+        return "LEFT"
+    end
+
+    -- 5. 右推 / 右平移 (Right / STRAFE_RIGHT)
+    if u == "RIGHT" or u == "STRAFE_RIGHT" or u == "PUSH_RIGHT" or u == "TR" or u == "右" or u == "右推" or u == "右平移" or
+       u:find("^RIGHT[-_ ]") or u:find("^PUSH_RIGHT") or u:find("^STRAFE_RIGHT") or
+       u:find("^右推") or u:find("^右平移") then
+        return "RIGHT"
+    end
+
+    return nil
 end
 
 function FlightCore.initSensorsAndModem()
@@ -203,10 +251,9 @@ end
 
 function FlightCore.scanQuadTurtles()
     FlightCore.initSensorsAndModem()
-    FlightCore.engines.FL = {}
-    FlightCore.engines.FR = {}
-    FlightCore.engines.BL = {}
-    FlightCore.engines.BR = {}
+    for _, r in ipairs({"FL", "FR", "BL", "BR", "FWD", "BWD", "LEFT", "RIGHT"}) do
+        FlightCore.engines[r] = {}
+    end
 
     local unmapped = {}
     for _, name in ipairs(peripheral.getNames()) do
@@ -219,22 +266,10 @@ function FlightCore.scanQuadTurtles()
             end
             if label == "" then label = name end
 
-            local mapped = false
-            if matchPrefix(label, "FL") then
-                table.insert(FlightCore.engines.FL, wrapped)
-                mapped = true
-            elseif matchPrefix(label, "FR") then
-                table.insert(FlightCore.engines.FR, wrapped)
-                mapped = true
-            elseif matchPrefix(label, "BL") then
-                table.insert(FlightCore.engines.BL, wrapped)
-                mapped = true
-            elseif matchPrefix(label, "BR") then
-                table.insert(FlightCore.engines.BR, wrapped)
-                mapped = true
-            end
-
-            if not mapped then
+            local role = resolveRole(label)
+            if role and FlightCore.engines[role] then
+                table.insert(FlightCore.engines[role], wrapped)
+            else
                 table.insert(unmapped, wrapped)
             end
         end
@@ -285,9 +320,17 @@ end
 -- 非阻塞數據機訊息處理器 (由主事件循環呼叫，絕不在 flightLoop 中調用阻塞 pullEvent)
 function FlightCore.handleModemMessage(side, ch, replyCh, msg, dist)
     if ch == 101 and type(msg) == "table" then
-        if msg.type == "HEARTBEAT" and msg.role and msg.id then
+        if msg.type == "HEARTBEAT" and msg.id then
+            local determinedRole = msg.role
+            if not determinedRole or determinedRole == "UNKNOWN" or determinedRole == "" then
+                determinedRole = resolveRole(msg.label) or "UNKNOWN"
+            else
+                local r = resolveRole(determinedRole) or resolveRole(msg.label)
+                if r then determinedRole = r end
+            end
+
             FlightCore.turtles[msg.id] = {
-                role = msg.role,
+                role = determinedRole,
                 label = msg.label or ("Turtle-" .. msg.id),
                 sig = msg.sig or 0,
                 ver = msg.ver or "unknown",
@@ -297,8 +340,20 @@ function FlightCore.handleModemMessage(side, ch, replyCh, msg, dist)
     end
 end
 
-function FlightCore.outputToEngines(sigFL, sigFR, sigBL, sigBR)
-    local targets = { FL = sigFL, FR = sigFR, BL = sigBL, BR = sigBR }
+function FlightCore.outputToEngines(sigFL, sigFR, sigBL, sigBR, sigFWD, sigBWD, sigLEFT, sigRIGHT)
+    sigFL = sigFL or FlightCore.engineOutputs.FL or 0
+    sigFR = sigFR or FlightCore.engineOutputs.FR or 0
+    sigBL = sigBL or FlightCore.engineOutputs.BL or 0
+    sigBR = sigBR or FlightCore.engineOutputs.BR or 0
+    sigFWD = sigFWD or FlightCore.engineOutputs.FWD or 0
+    sigBWD = sigBWD or FlightCore.engineOutputs.BWD or 0
+    sigLEFT = sigLEFT or FlightCore.engineOutputs.LEFT or 0
+    sigRIGHT = sigRIGHT or FlightCore.engineOutputs.RIGHT or 0
+
+    local targets = {
+        FL = sigFL, FR = sigFR, BL = sigBL, BR = sigBR,
+        FWD = sigFWD, BWD = sigBWD, LEFT = sigLEFT, RIGHT = sigRIGHT
+    }
 
     -- 1. 廣播至所有已連接之 Wired/Wireless Modem (Channel 100)
     local payload = {
@@ -307,8 +362,55 @@ function FlightCore.outputToEngines(sigFL, sigFR, sigBL, sigBR)
         FR = sigFR,
         BL = sigBL,
         BR = sigBR,
+        -- 前進/前推別名廣播
+        FWD = sigFWD,
+        FORWARD = sigFWD,
+        FRONT = sigFWD,
+        ["前進"] = sigFWD,
+        ["前推"] = sigFWD,
+        PUSH_FWD = sigFWD,
+        PUSH_FORWARD = sigFWD,
+        -- 後退/後推別名廣播
+        BWD = sigBWD,
+        BACK = sigBWD,
+        BACKWARD = sigBWD,
+        REVERSE = sigBWD,
+        ["後退"] = sigBWD,
+        ["後推"] = sigBWD,
+        PUSH_BWD = sigBWD,
+        PUSH_BACK = sigBWD,
+        -- 左推別名廣播
+        LEFT = sigLEFT,
+        STRAFE_LEFT = sigLEFT,
+        PUSH_LEFT = sigLEFT,
+        TL = sigLEFT,
+        ["左"] = sigLEFT,
+        ["左推"] = sigLEFT,
+        ["左平移"] = sigLEFT,
+        -- 右推別名廣播
+        RIGHT = sigRIGHT,
+        STRAFE_RIGHT = sigRIGHT,
+        PUSH_RIGHT = sigRIGHT,
+        TR = sigRIGHT,
+        ["右"] = sigRIGHT,
+        ["右推"] = sigRIGHT,
+        ["右平移"] = sigRIGHT,
         timestamp = os.epoch("utc")
     }
+
+    -- 針對所有已連線/回報心跳之烏龜，以其具體 ID 與 Label 精準注入 payload，確保 100% 命中
+    for id, t in pairs(FlightCore.turtles) do
+        local r = t.role
+        if r and targets[r] ~= nil then
+            local val = targets[r]
+            payload[id] = val
+            if t.label and t.label ~= "" then
+                payload[t.label] = val
+                payload[string.upper(t.label)] = val
+            end
+        end
+    end
+
     for _, m in ipairs(FlightCore.modems) do
         pcall(function() m.transmit(100, 101, payload) end)
     end
@@ -329,6 +431,50 @@ function FlightCore.outputToEngines(sigFL, sigFR, sigBL, sigBR)
             end
         end
     end
+end
+
+function FlightCore.setForwardThrottle(val)
+    FlightCore.state.fwdThrottle = math.max(-15.0, math.min(15.0, val))
+    if FlightCore.state.fwdThrottle > 0 then
+        FlightCore.state.statusMsg = string.format("Forward Thrust: %.1f", FlightCore.state.fwdThrottle)
+    elseif FlightCore.state.fwdThrottle < 0 then
+        FlightCore.state.statusMsg = string.format("Backward Thrust: %.1f", -FlightCore.state.fwdThrottle)
+    else
+        FlightCore.state.statusMsg = "Forward Thrust: OFF"
+    end
+end
+
+function FlightCore.adjustForwardThrottle(delta)
+    FlightCore.setForwardThrottle(FlightCore.state.fwdThrottle + delta)
+end
+
+function FlightCore.setStrafeThrottle(val)
+    FlightCore.state.strafeThrottle = math.max(-15.0, math.min(15.0, val))
+    if FlightCore.state.strafeThrottle > 0 then
+        FlightCore.state.statusMsg = string.format("Right Thrust: %.1f", FlightCore.state.strafeThrottle)
+    elseif FlightCore.state.strafeThrottle < 0 then
+        FlightCore.state.statusMsg = string.format("Left Thrust: %.1f", -FlightCore.state.strafeThrottle)
+    else
+        FlightCore.state.statusMsg = "Strafe Thrust: OFF"
+    end
+end
+
+function FlightCore.adjustStrafeThrottle(delta)
+    FlightCore.setStrafeThrottle(FlightCore.state.strafeThrottle + delta)
+end
+
+function FlightCore.stopHorizontalThrust()
+    FlightCore.state.fwdThrottle = 0.0
+    FlightCore.state.strafeThrottle = 0.0
+    FlightCore.virtualOutputs.FWD = 0.0
+    FlightCore.virtualOutputs.BWD = 0.0
+    FlightCore.virtualOutputs.LEFT = 0.0
+    FlightCore.virtualOutputs.RIGHT = 0.0
+    FlightCore.engineOutputs.FWD = 0
+    FlightCore.engineOutputs.BWD = 0
+    FlightCore.engineOutputs.LEFT = 0
+    FlightCore.engineOutputs.RIGHT = 0
+    FlightCore.state.statusMsg = "Translational Thrust: STOPPED"
 end
 
 function FlightCore.setTargetAlt(alt)
@@ -356,10 +502,12 @@ end
 
 function FlightCore.stopEngines()
     FlightCore.state.mode = "IDLE"
+    FlightCore.state.fwdThrottle = 0.0
+    FlightCore.state.strafeThrottle = 0.0
     FlightCore.state.statusMsg = "Engines Stopped (IDLE)"
-    FlightCore.engineOutputs = { FL = 0, FR = 0, BL = 0, BR = 0 }
-    FlightCore.virtualOutputs = { FL = 0.0, FR = 0.0, BL = 0.0, BR = 0.0 }
-    FlightCore.outputToEngines(0, 0, 0, 0)
+    FlightCore.engineOutputs = { FL = 0, FR = 0, BL = 0, BR = 0, FWD = 0, BWD = 0, LEFT = 0, RIGHT = 0 }
+    FlightCore.virtualOutputs = { FL = 0.0, FR = 0.0, BL = 0.0, BR = 0.0, FWD = 0.0, BWD = 0.0, LEFT = 0.0, RIGHT = 0.0 }
+    FlightCore.outputToEngines(0, 0, 0, 0, 0, 0, 0, 0)
 end
 
 function FlightCore.holdAltitude()
@@ -424,9 +572,9 @@ function FlightCore.updateFlightLogic()
     FlightCore.updateNavigation()
 
     if FlightCore.state.mode == "IDLE" then
-        FlightCore.engineOutputs = { FL = 0, FR = 0, BL = 0, BR = 0 }
-        FlightCore.virtualOutputs = { FL = 0.0, FR = 0.0, BL = 0.0, BR = 0.0 }
-        FlightCore.outputToEngines(0, 0, 0, 0)
+        FlightCore.engineOutputs = { FL = 0, FR = 0, BL = 0, BR = 0, FWD = 0, BWD = 0, LEFT = 0, RIGHT = 0 }
+        FlightCore.virtualOutputs = { FL = 0.0, FR = 0.0, BL = 0.0, BR = 0.0, FWD = 0.0, BWD = 0.0, LEFT = 0.0, RIGHT = 0.0 }
+        FlightCore.outputToEngines(0, 0, 0, 0, 0, 0, 0, 0)
         return
     end
 
@@ -455,7 +603,7 @@ function FlightCore.updateFlightLogic()
             local altDelta = currentAlt - FlightCore.state.calibStartAlt
             if altDelta > 0.3 or currentVspeed > 0.15 then
                 FlightCore.state.calibPhase = "STABILIZE"
-                FlightCore.state.targetAlt = FlightCore.state.calibTargetAlt
+                FlightCore.state.calibTargetAlt = FlightCore.state.calibTargetAlt
                 -- 扣除起飛初期的慣性累積量，精確鎖定懸停初值
                 FlightCore.state.baseThrottle = math.max(0.5, FlightCore.state.calibThrottle - 0.15)
                 FlightCore.state.stableTimer = 0
@@ -553,9 +701,21 @@ function FlightCore.updateFlightLogic()
         end
     end
 
+    -- 水平/平移推力平滑過渡 (Translational Thruster Slew)
+    local targetFWD = math.max(0, FlightCore.state.fwdThrottle or 0)
+    local targetBWD = math.max(0, -(FlightCore.state.fwdThrottle or 0))
+    local targetLEFT = math.max(0, -(FlightCore.state.strafeThrottle or 0))
+    local targetRIGHT = math.max(0, FlightCore.state.strafeThrottle or 0)
+
+    local maxTransSlew = 0.5
+    FlightCore.virtualOutputs.FWD = approach(FlightCore.virtualOutputs.FWD or 0, targetFWD, maxTransSlew)
+    FlightCore.virtualOutputs.BWD = approach(FlightCore.virtualOutputs.BWD or 0, targetBWD, maxTransSlew)
+    FlightCore.virtualOutputs.LEFT = approach(FlightCore.virtualOutputs.LEFT or 0, targetLEFT, maxTransSlew)
+    FlightCore.virtualOutputs.RIGHT = approach(FlightCore.virtualOutputs.RIGHT or 0, targetRIGHT, maxTransSlew)
+
     local function calcPWM(val)
-        local intPart = math.floor(val)
-        local fracPart = val - intPart
+        local intPart = math.floor(val or 0)
+        local fracPart = (val or 0) - intPart
         local threshold = math.floor(fracPart * 10 + 0.5)
         if FlightCore.pwmTick < threshold then
             return math.min(15, intPart + 1)
@@ -568,12 +728,20 @@ function FlightCore.updateFlightLogic()
     FlightCore.engineOutputs.FR = calcPWM(FlightCore.virtualOutputs.FR)
     FlightCore.engineOutputs.BL = calcPWM(FlightCore.virtualOutputs.BL)
     FlightCore.engineOutputs.BR = calcPWM(FlightCore.virtualOutputs.BR)
+    FlightCore.engineOutputs.FWD = calcPWM(FlightCore.virtualOutputs.FWD)
+    FlightCore.engineOutputs.BWD = calcPWM(FlightCore.virtualOutputs.BWD)
+    FlightCore.engineOutputs.LEFT = calcPWM(FlightCore.virtualOutputs.LEFT)
+    FlightCore.engineOutputs.RIGHT = calcPWM(FlightCore.virtualOutputs.RIGHT)
 
     FlightCore.outputToEngines(
         FlightCore.engineOutputs.FL,
         FlightCore.engineOutputs.FR,
         FlightCore.engineOutputs.BL,
-        FlightCore.engineOutputs.BR
+        FlightCore.engineOutputs.BR,
+        FlightCore.engineOutputs.FWD,
+        FlightCore.engineOutputs.BWD,
+        FlightCore.engineOutputs.LEFT,
+        FlightCore.engineOutputs.RIGHT
     )
 end
 

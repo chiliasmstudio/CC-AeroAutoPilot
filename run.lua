@@ -1,7 +1,7 @@
 --[[
     Create: Avionics & CC: Tweaked
     Unified Multi-Engine Avionics Flight Computer (多軸模組化統一飛控大腦)
-    Version: v3.9.0 Modular Bundle
+    Version: v3.9.1 Modular Bundle
     
     螢幕尺寸自適應分類 (Dual Screen Size Mode):
     - 完整顯示螢幕 (>= 5x5): 啟動超大 A350 儀表、細緻多引擎遙測與 3 排完整控制面板。
@@ -22,7 +22,7 @@
       run.lua normal       (強制使用 CC: Tweaked 原生螢幕/終端機驅動，支援多螢幕)
 --]]
 
-local VERSION = "v3.9.0"
+local VERSION = "v3.9.1"
 local args = {...}
 local requestedDriver = args[1] and string.lower(args[1]) or "auto"
 
@@ -86,7 +86,9 @@ FlightCore.state = {
     calibTargetAlt = 0,       -- 校正爬升目標高度 (啟動高度 + 3m)
     calibPhase = "GROUND_SEARCH", -- "GROUND_SEARCH", "STABILIZE"
     calibThrottle = 0.0,      -- 校正微調油門
-    rampRate = 0.015          -- 平緩線性加力速率 (每 tick +0.015)
+    rampRate = 0.015,         -- 平緩線性加力速率 (每 tick +0.015)
+    fwdThrottle = 0.0,        -- 前進/後退油門 (-15.0 ~ 15.0，正為前推，負為後推)
+    strafeThrottle = 0.0      -- 左右平移油門 (-15.0 ~ 15.0，正為右推，負為左推)
 }
 
 -- 1.3 導航與定位狀態 (Navigation & Positioning)
@@ -108,10 +110,19 @@ FlightCore.nav = {
 -- 垂直速度阻尼高度控制器 (平滑懸停，杜絕驟開驟停與彈簧震盪)
 FlightCore.altPID = AltController.new(0.25, 0.01, 0.85, 5.0)
 
--- 支援一側/象限配置多個引擎 (陣列結構)
-FlightCore.engines = { FL = {}, FR = {}, BL = {}, BR = {} }
-FlightCore.engineOutputs  = { FL = 0, FR = 0, BL = 0, BR = 0 }
-FlightCore.virtualOutputs = { FL = 0.0, FR = 0.0, BL = 0.0, BR = 0.0 }
+-- 支援一側/象限/平移方向配置多個引擎 (陣列結構)
+FlightCore.engines = {
+    FL = {}, FR = {}, BL = {}, BR = {},
+    FWD = {}, BWD = {}, LEFT = {}, RIGHT = {}
+}
+FlightCore.engineOutputs  = {
+    FL = 0, FR = 0, BL = 0, BR = 0,
+    FWD = 0, BWD = 0, LEFT = 0, RIGHT = 0
+}
+FlightCore.virtualOutputs = {
+    FL = 0.0, FR = 0.0, BL = 0.0, BR = 0.0,
+    FWD = 0.0, BWD = 0.0, LEFT = 0.0, RIGHT = 0.0
+}
 
 -- 烏龜心跳與遙測健康度資料庫 (按 Turtle ID 索引)
 FlightCore.turtles = {}
@@ -193,9 +204,46 @@ function FlightCore.updateNavigation()
     end
 end
 
-local function matchPrefix(lbl, prefix)
-    local u = string.upper(lbl or "")
-    return u == prefix or u:sub(1, #prefix + 1) == (prefix .. "_") or u:sub(1, #prefix + 1) == (prefix .. "-") or u:sub(1, #prefix + 1) == (prefix .. " ")
+local function resolveRole(lbl)
+    if not lbl or lbl == "" then return nil end
+    local u = string.upper(tostring(lbl)):gsub("^%s*(.-)%s*$", "%1")
+
+    -- 1. 四象限垂直升力 (FL, FR, BL, BR)
+    if u == "FL" or u:find("^FL[-_ ]") or u:find("^前左") or u == "FRONT_LEFT" then return "FL"
+    elseif u == "FR" or u:find("^FR[-_ ]") or u:find("^前右") or u == "FRONT_RIGHT" then return "FR"
+    elseif u == "BL" or u:find("^BL[-_ ]") or u:find("^後左") or u == "BACK_LEFT" then return "BL"
+    elseif u == "BR" or u:find("^BR[-_ ]") or u:find("^後右") or u == "BACK_RIGHT" then return "BR"
+    end
+
+    -- 2. 前進 / 前推 (Forward / FWD)
+    if u == "FWD" or u == "FORWARD" or u == "FRONT" or u == "前進" or u == "前推" or u == "前" or
+       u:find("^FWD[-_ ]") or u:find("^FORWARD[-_ ]") or u:find("^PUSH_FWD") or u:find("^PUSH_FORWARD") or
+       u:find("^前進") or u:find("^前推") then
+        return "FWD"
+    end
+
+    -- 3. 後退 / 後推 (Backward / BWD)
+    if u == "BWD" or u == "BACK" or u == "BACKWARD" or u == "REVERSE" or u == "後退" or u == "後推" or u == "後" or
+       u:find("^BWD[-_ ]") or u:find("^BACK[-_ ]") or u:find("^PUSH_BWD") or u:find("^PUSH_BACK") or
+       u:find("^後退") or u:find("^後推") then
+        return "BWD"
+    end
+
+    -- 4. 左推 / 左平移 (Left / STRAFE_LEFT)
+    if u == "LEFT" or u == "STRAFE_LEFT" or u == "PUSH_LEFT" or u == "TL" or u == "左" or u == "左推" or u == "左平移" or
+       u:find("^LEFT[-_ ]") or u:find("^PUSH_LEFT") or u:find("^STRAFE_LEFT") or
+       u:find("^左推") or u:find("^左平移") then
+        return "LEFT"
+    end
+
+    -- 5. 右推 / 右平移 (Right / STRAFE_RIGHT)
+    if u == "RIGHT" or u == "STRAFE_RIGHT" or u == "PUSH_RIGHT" or u == "TR" or u == "右" or u == "右推" or u == "右平移" or
+       u:find("^RIGHT[-_ ]") or u:find("^PUSH_RIGHT") or u:find("^STRAFE_RIGHT") or
+       u:find("^右推") or u:find("^右平移") then
+        return "RIGHT"
+    end
+
+    return nil
 end
 
 function FlightCore.initSensorsAndModem()
@@ -230,10 +278,9 @@ end
 
 function FlightCore.scanQuadTurtles()
     FlightCore.initSensorsAndModem()
-    FlightCore.engines.FL = {}
-    FlightCore.engines.FR = {}
-    FlightCore.engines.BL = {}
-    FlightCore.engines.BR = {}
+    for _, r in ipairs({"FL", "FR", "BL", "BR", "FWD", "BWD", "LEFT", "RIGHT"}) do
+        FlightCore.engines[r] = {}
+    end
 
     local unmapped = {}
     for _, name in ipairs(peripheral.getNames()) do
@@ -246,22 +293,10 @@ function FlightCore.scanQuadTurtles()
             end
             if label == "" then label = name end
 
-            local mapped = false
-            if matchPrefix(label, "FL") then
-                table.insert(FlightCore.engines.FL, wrapped)
-                mapped = true
-            elseif matchPrefix(label, "FR") then
-                table.insert(FlightCore.engines.FR, wrapped)
-                mapped = true
-            elseif matchPrefix(label, "BL") then
-                table.insert(FlightCore.engines.BL, wrapped)
-                mapped = true
-            elseif matchPrefix(label, "BR") then
-                table.insert(FlightCore.engines.BR, wrapped)
-                mapped = true
-            end
-
-            if not mapped then
+            local role = resolveRole(label)
+            if role and FlightCore.engines[role] then
+                table.insert(FlightCore.engines[role], wrapped)
+            else
                 table.insert(unmapped, wrapped)
             end
         end
@@ -312,9 +347,17 @@ end
 -- 非阻塞數據機訊息處理器 (由主事件循環呼叫，絕不在 flightLoop 中調用阻塞 pullEvent)
 function FlightCore.handleModemMessage(side, ch, replyCh, msg, dist)
     if ch == 101 and type(msg) == "table" then
-        if msg.type == "HEARTBEAT" and msg.role and msg.id then
+        if msg.type == "HEARTBEAT" and msg.id then
+            local determinedRole = msg.role
+            if not determinedRole or determinedRole == "UNKNOWN" or determinedRole == "" then
+                determinedRole = resolveRole(msg.label) or "UNKNOWN"
+            else
+                local r = resolveRole(determinedRole) or resolveRole(msg.label)
+                if r then determinedRole = r end
+            end
+
             FlightCore.turtles[msg.id] = {
-                role = msg.role,
+                role = determinedRole,
                 label = msg.label or ("Turtle-" .. msg.id),
                 sig = msg.sig or 0,
                 ver = msg.ver or "unknown",
@@ -324,8 +367,20 @@ function FlightCore.handleModemMessage(side, ch, replyCh, msg, dist)
     end
 end
 
-function FlightCore.outputToEngines(sigFL, sigFR, sigBL, sigBR)
-    local targets = { FL = sigFL, FR = sigFR, BL = sigBL, BR = sigBR }
+function FlightCore.outputToEngines(sigFL, sigFR, sigBL, sigBR, sigFWD, sigBWD, sigLEFT, sigRIGHT)
+    sigFL = sigFL or FlightCore.engineOutputs.FL or 0
+    sigFR = sigFR or FlightCore.engineOutputs.FR or 0
+    sigBL = sigBL or FlightCore.engineOutputs.BL or 0
+    sigBR = sigBR or FlightCore.engineOutputs.BR or 0
+    sigFWD = sigFWD or FlightCore.engineOutputs.FWD or 0
+    sigBWD = sigBWD or FlightCore.engineOutputs.BWD or 0
+    sigLEFT = sigLEFT or FlightCore.engineOutputs.LEFT or 0
+    sigRIGHT = sigRIGHT or FlightCore.engineOutputs.RIGHT or 0
+
+    local targets = {
+        FL = sigFL, FR = sigFR, BL = sigBL, BR = sigBR,
+        FWD = sigFWD, BWD = sigBWD, LEFT = sigLEFT, RIGHT = sigRIGHT
+    }
 
     -- 1. 廣播至所有已連接之 Wired/Wireless Modem (Channel 100)
     local payload = {
@@ -334,8 +389,55 @@ function FlightCore.outputToEngines(sigFL, sigFR, sigBL, sigBR)
         FR = sigFR,
         BL = sigBL,
         BR = sigBR,
+        -- 前進/前推別名廣播
+        FWD = sigFWD,
+        FORWARD = sigFWD,
+        FRONT = sigFWD,
+        ["前進"] = sigFWD,
+        ["前推"] = sigFWD,
+        PUSH_FWD = sigFWD,
+        PUSH_FORWARD = sigFWD,
+        -- 後退/後推別名廣播
+        BWD = sigBWD,
+        BACK = sigBWD,
+        BACKWARD = sigBWD,
+        REVERSE = sigBWD,
+        ["後退"] = sigBWD,
+        ["後推"] = sigBWD,
+        PUSH_BWD = sigBWD,
+        PUSH_BACK = sigBWD,
+        -- 左推別名廣播
+        LEFT = sigLEFT,
+        STRAFE_LEFT = sigLEFT,
+        PUSH_LEFT = sigLEFT,
+        TL = sigLEFT,
+        ["左"] = sigLEFT,
+        ["左推"] = sigLEFT,
+        ["左平移"] = sigLEFT,
+        -- 右推別名廣播
+        RIGHT = sigRIGHT,
+        STRAFE_RIGHT = sigRIGHT,
+        PUSH_RIGHT = sigRIGHT,
+        TR = sigRIGHT,
+        ["右"] = sigRIGHT,
+        ["右推"] = sigRIGHT,
+        ["右平移"] = sigRIGHT,
         timestamp = os.epoch("utc")
     }
+
+    -- 針對所有已連線/回報心跳之烏龜，以其具體 ID 與 Label 精準注入 payload，確保 100% 命中
+    for id, t in pairs(FlightCore.turtles) do
+        local r = t.role
+        if r and targets[r] ~= nil then
+            local val = targets[r]
+            payload[id] = val
+            if t.label and t.label ~= "" then
+                payload[t.label] = val
+                payload[string.upper(t.label)] = val
+            end
+        end
+    end
+
     for _, m in ipairs(FlightCore.modems) do
         pcall(function() m.transmit(100, 101, payload) end)
     end
@@ -356,6 +458,50 @@ function FlightCore.outputToEngines(sigFL, sigFR, sigBL, sigBR)
             end
         end
     end
+end
+
+function FlightCore.setForwardThrottle(val)
+    FlightCore.state.fwdThrottle = math.max(-15.0, math.min(15.0, val))
+    if FlightCore.state.fwdThrottle > 0 then
+        FlightCore.state.statusMsg = string.format("Forward Thrust: %.1f", FlightCore.state.fwdThrottle)
+    elseif FlightCore.state.fwdThrottle < 0 then
+        FlightCore.state.statusMsg = string.format("Backward Thrust: %.1f", -FlightCore.state.fwdThrottle)
+    else
+        FlightCore.state.statusMsg = "Forward Thrust: OFF"
+    end
+end
+
+function FlightCore.adjustForwardThrottle(delta)
+    FlightCore.setForwardThrottle(FlightCore.state.fwdThrottle + delta)
+end
+
+function FlightCore.setStrafeThrottle(val)
+    FlightCore.state.strafeThrottle = math.max(-15.0, math.min(15.0, val))
+    if FlightCore.state.strafeThrottle > 0 then
+        FlightCore.state.statusMsg = string.format("Right Thrust: %.1f", FlightCore.state.strafeThrottle)
+    elseif FlightCore.state.strafeThrottle < 0 then
+        FlightCore.state.statusMsg = string.format("Left Thrust: %.1f", -FlightCore.state.strafeThrottle)
+    else
+        FlightCore.state.statusMsg = "Strafe Thrust: OFF"
+    end
+end
+
+function FlightCore.adjustStrafeThrottle(delta)
+    FlightCore.setStrafeThrottle(FlightCore.state.strafeThrottle + delta)
+end
+
+function FlightCore.stopHorizontalThrust()
+    FlightCore.state.fwdThrottle = 0.0
+    FlightCore.state.strafeThrottle = 0.0
+    FlightCore.virtualOutputs.FWD = 0.0
+    FlightCore.virtualOutputs.BWD = 0.0
+    FlightCore.virtualOutputs.LEFT = 0.0
+    FlightCore.virtualOutputs.RIGHT = 0.0
+    FlightCore.engineOutputs.FWD = 0
+    FlightCore.engineOutputs.BWD = 0
+    FlightCore.engineOutputs.LEFT = 0
+    FlightCore.engineOutputs.RIGHT = 0
+    FlightCore.state.statusMsg = "Translational Thrust: STOPPED"
 end
 
 function FlightCore.setTargetAlt(alt)
@@ -383,10 +529,12 @@ end
 
 function FlightCore.stopEngines()
     FlightCore.state.mode = "IDLE"
+    FlightCore.state.fwdThrottle = 0.0
+    FlightCore.state.strafeThrottle = 0.0
     FlightCore.state.statusMsg = "Engines Stopped (IDLE)"
-    FlightCore.engineOutputs = { FL = 0, FR = 0, BL = 0, BR = 0 }
-    FlightCore.virtualOutputs = { FL = 0.0, FR = 0.0, BL = 0.0, BR = 0.0 }
-    FlightCore.outputToEngines(0, 0, 0, 0)
+    FlightCore.engineOutputs = { FL = 0, FR = 0, BL = 0, BR = 0, FWD = 0, BWD = 0, LEFT = 0, RIGHT = 0 }
+    FlightCore.virtualOutputs = { FL = 0.0, FR = 0.0, BL = 0.0, BR = 0.0, FWD = 0.0, BWD = 0.0, LEFT = 0.0, RIGHT = 0.0 }
+    FlightCore.outputToEngines(0, 0, 0, 0, 0, 0, 0, 0)
 end
 
 function FlightCore.holdAltitude()
@@ -451,9 +599,9 @@ function FlightCore.updateFlightLogic()
     FlightCore.updateNavigation()
 
     if FlightCore.state.mode == "IDLE" then
-        FlightCore.engineOutputs = { FL = 0, FR = 0, BL = 0, BR = 0 }
-        FlightCore.virtualOutputs = { FL = 0.0, FR = 0.0, BL = 0.0, BR = 0.0 }
-        FlightCore.outputToEngines(0, 0, 0, 0)
+        FlightCore.engineOutputs = { FL = 0, FR = 0, BL = 0, BR = 0, FWD = 0, BWD = 0, LEFT = 0, RIGHT = 0 }
+        FlightCore.virtualOutputs = { FL = 0.0, FR = 0.0, BL = 0.0, BR = 0.0, FWD = 0.0, BWD = 0.0, LEFT = 0.0, RIGHT = 0.0 }
+        FlightCore.outputToEngines(0, 0, 0, 0, 0, 0, 0, 0)
         return
     end
 
@@ -482,7 +630,7 @@ function FlightCore.updateFlightLogic()
             local altDelta = currentAlt - FlightCore.state.calibStartAlt
             if altDelta > 0.3 or currentVspeed > 0.15 then
                 FlightCore.state.calibPhase = "STABILIZE"
-                FlightCore.state.targetAlt = FlightCore.state.calibTargetAlt
+                FlightCore.state.calibTargetAlt = FlightCore.state.calibTargetAlt
                 -- 扣除起飛初期的慣性累積量，精確鎖定懸停初值
                 FlightCore.state.baseThrottle = math.max(0.5, FlightCore.state.calibThrottle - 0.15)
                 FlightCore.state.stableTimer = 0
@@ -580,9 +728,21 @@ function FlightCore.updateFlightLogic()
         end
     end
 
+    -- 水平/平移推力平滑過渡 (Translational Thruster Slew)
+    local targetFWD = math.max(0, FlightCore.state.fwdThrottle or 0)
+    local targetBWD = math.max(0, -(FlightCore.state.fwdThrottle or 0))
+    local targetLEFT = math.max(0, -(FlightCore.state.strafeThrottle or 0))
+    local targetRIGHT = math.max(0, FlightCore.state.strafeThrottle or 0)
+
+    local maxTransSlew = 0.5
+    FlightCore.virtualOutputs.FWD = approach(FlightCore.virtualOutputs.FWD or 0, targetFWD, maxTransSlew)
+    FlightCore.virtualOutputs.BWD = approach(FlightCore.virtualOutputs.BWD or 0, targetBWD, maxTransSlew)
+    FlightCore.virtualOutputs.LEFT = approach(FlightCore.virtualOutputs.LEFT or 0, targetLEFT, maxTransSlew)
+    FlightCore.virtualOutputs.RIGHT = approach(FlightCore.virtualOutputs.RIGHT or 0, targetRIGHT, maxTransSlew)
+
     local function calcPWM(val)
-        local intPart = math.floor(val)
-        local fracPart = val - intPart
+        local intPart = math.floor(val or 0)
+        local fracPart = (val or 0) - intPart
         local threshold = math.floor(fracPart * 10 + 0.5)
         if FlightCore.pwmTick < threshold then
             return math.min(15, intPart + 1)
@@ -595,12 +755,20 @@ function FlightCore.updateFlightLogic()
     FlightCore.engineOutputs.FR = calcPWM(FlightCore.virtualOutputs.FR)
     FlightCore.engineOutputs.BL = calcPWM(FlightCore.virtualOutputs.BL)
     FlightCore.engineOutputs.BR = calcPWM(FlightCore.virtualOutputs.BR)
+    FlightCore.engineOutputs.FWD = calcPWM(FlightCore.virtualOutputs.FWD)
+    FlightCore.engineOutputs.BWD = calcPWM(FlightCore.virtualOutputs.BWD)
+    FlightCore.engineOutputs.LEFT = calcPWM(FlightCore.virtualOutputs.LEFT)
+    FlightCore.engineOutputs.RIGHT = calcPWM(FlightCore.virtualOutputs.RIGHT)
 
     FlightCore.outputToEngines(
         FlightCore.engineOutputs.FL,
         FlightCore.engineOutputs.FR,
         FlightCore.engineOutputs.BL,
-        FlightCore.engineOutputs.BR
+        FlightCore.engineOutputs.BR,
+        FlightCore.engineOutputs.FWD,
+        FlightCore.engineOutputs.BWD,
+        FlightCore.engineOutputs.LEFT,
+        FlightCore.engineOutputs.RIGHT
     )
 end
 
@@ -1310,11 +1478,10 @@ Drivers.direct = {
             addBtn(6 + (bW4+4)*3, r3Y, bW4, rowH, isFull and "[ STOP IDLE ]" or "STOP", stopBg, {255, 255, 255}, function() FlightCore.stopEngines() end)
 
         elseif scr.currentView == "SYS" then
-            local cardW = math.floor((sw - 18) / 2)
-            local btmSysH = btnRowH
-            local btmY = sh - btmSysH - 4
-            local cardH = math.floor((btmY - topMargin - 6) / 2)
-            local startY = topMargin
+            local hasTrans = (FlightCore.getQuadHealth("FWD").total > 0) or
+                             (FlightCore.getQuadHealth("BWD").total > 0) or
+                             (FlightCore.getQuadHealth("LEFT").total > 0) or
+                             (FlightCore.getQuadHealth("RIGHT").total > 0)
 
             local slots = {
                 {slot="FL", col=1, row=1, name="FL Quad"},
@@ -1322,19 +1489,35 @@ Drivers.direct = {
                 {slot="BL", col=1, row=2, name="BL Quad"},
                 {slot="BR", col=2, row=2, name="BR Quad"}
             }
+            if hasTrans then
+                table.insert(slots, {slot="FWD", col=1, row=3, name="FWD Thrust"})
+                table.insert(slots, {slot="BWD", col=2, row=3, name="BWD Thrust"})
+                table.insert(slots, {slot="LEFT", col=1, row=4, name="LEFT Thrust"})
+                table.insert(slots, {slot="RIGHT", col=2, row=4, name="RIGHT Thrust"})
+            end
+
+            local maxRows = hasTrans and 4 or 2
+            local cardW = math.floor((sw - 18) / 2)
+            local btmSysH = btnRowH
+            local btmY = sh - btmSysH - 4
+            local cardH = math.max(14, math.floor((btmY - topMargin - 4 - (maxRows - 1) * 3) / maxRows))
+            local startY = topMargin
 
             for _, s in ipairs(slots) do
                 local cx = 6 + (s.col - 1) * (cardW + 6)
-                local cy = startY + (s.row - 1) * (cardH + 4)
+                local cy = startY + (s.row - 1) * (cardH + 3)
                 local qH = FlightCore.getQuadHealth(s.slot)
                 local online = qH.online > 0
                 local bg = online and {20, 35, 30} or {40, 20, 20}
                 gpu.fillRect(dispId, cx, cy, cardW, cardH, bg[1], bg[2], bg[3])
 
                 local tagCol = online and {80, 255, 120} or {255, 80, 80}
-                gpu.drawText(dispId, string.format("[%s] %d ENG", s.slot, qH.total), cx + 4, cy + 4, 220, 235, 255, "Arial", 9, "bold")
+                gpu.drawText(dispId, string.format("[%s] %d ENG", s.slot, qH.total), cx + 4, cy + 3, 220, 235, 255, "Arial", 9, "bold")
                 local actStr = (cardW < 75) and string.format("ON:%d P:%d", qH.online, FlightCore.engineOutputs[s.slot] or 0) or string.format("ACT:%d/%d | P:%d", qH.online, qH.total, FlightCore.engineOutputs[s.slot] or 0)
-                gpu.drawText(dispId, actStr, cx + 4, cy + math.max(10, math.floor(cardH * 0.45)), tagCol[1], tagCol[2], tagCol[3], "Arial", 8, "bold")
+                local textY = (cardH >= 24) and (cy + math.floor(cardH * 0.45)) or (cy + cardH - 9)
+                if cardH >= 16 then
+                    gpu.drawText(dispId, actStr, cx + 4, textY, tagCol[1], tagCol[2], tagCol[3], "Arial", 8, "bold")
+                end
             end
 
             local btmW = math.floor((sw - 16) / 2)
@@ -2320,11 +2503,10 @@ Drivers.tom = {
             addBtn(6 + (bW4+4)*3, r3Y, bW4, rowH, isFull and "[ STOP IDLE ]" or "STOP", stopBg, 0xFFFFFF, function() FlightCore.stopEngines() end)
 
         elseif scr.currentView == "SYS" then
-            local cardW = math.floor((sw - 18) / 2)
-            local btmSysH = btnRowH
-            local btmY = sh - btmSysH - 4
-            local cardH = math.floor((btmY - topMargin - 6) / 2)
-            local startY = topMargin
+            local hasTrans = (FlightCore.getQuadHealth("FWD").total > 0) or
+                             (FlightCore.getQuadHealth("BWD").total > 0) or
+                             (FlightCore.getQuadHealth("LEFT").total > 0) or
+                             (FlightCore.getQuadHealth("RIGHT").total > 0)
 
             local slots = {
                 {slot="FL", col=1, row=1, name="FL Quad"},
@@ -2332,19 +2514,35 @@ Drivers.tom = {
                 {slot="BL", col=1, row=2, name="BL Quad"},
                 {slot="BR", col=2, row=2, name="BR Quad"}
             }
+            if hasTrans then
+                table.insert(slots, {slot="FWD", col=1, row=3, name="FWD Thrust"})
+                table.insert(slots, {slot="BWD", col=2, row=3, name="BWD Thrust"})
+                table.insert(slots, {slot="LEFT", col=1, row=4, name="LEFT Thrust"})
+                table.insert(slots, {slot="RIGHT", col=2, row=4, name="RIGHT Thrust"})
+            end
+
+            local maxRows = hasTrans and 4 or 2
+            local cardW = math.floor((sw - 18) / 2)
+            local btmSysH = btnRowH
+            local btmY = sh - btmSysH - 4
+            local cardH = math.max(14, math.floor((btmY - topMargin - 4 - (maxRows - 1) * 3) / maxRows))
+            local startY = topMargin
 
             for _, s in ipairs(slots) do
                 local cx = 6 + (s.col - 1) * (cardW + 6)
-                local cy = startY + (s.row - 1) * (cardH + 4)
+                local cy = startY + (s.row - 1) * (cardH + 3)
                 local qH = FlightCore.getQuadHealth(s.slot)
                 local online = qH.online > 0
                 sFR(cx, cy, cardW, cardH, online and 0x14231E or 0x281414)
                 sR(cx, cy, cardW, cardH, online and 0x28643C or 0x642828)
 
                 local tagCol = online and 0x50FF78 or 0xFF5050
-                sTxt(cx + 4, cy + 4, string.format("[%s] %d ENG", s.slot, qH.total), 0xDCEDFF, 1)
+                sTxt(cx + 4, cy + 3, string.format("[%s] %d ENG", s.slot, qH.total), 0xDCEDFF, 1)
                 local actStr = (cardW < 75) and string.format("ON:%d P:%d", qH.online, FlightCore.engineOutputs[s.slot] or 0) or string.format("ACT:%d/%d | P:%d", qH.online, qH.total, FlightCore.engineOutputs[s.slot] or 0)
-                sTxt(cx + 4, cy + math.max(10, math.floor(cardH * 0.45)), actStr, tagCol, 1)
+                local textY = (cardH >= 24) and (cy + math.floor(cardH * 0.45)) or (cy + cardH - 8)
+                if cardH >= 16 then
+                    sTxt(cx + 4, textY, actStr, tagCol, 1)
+                end
             end
 
             local btmW = math.floor((sw - 16) / 2)
@@ -2881,14 +3079,27 @@ Drivers.normal = {
             addBtn(5 + colW*3, bY3, colW, rowH, isFull and "[ STOP IDLE ]" or "STOP", "0", stopBg, function() FlightCore.stopEngines() end)
 
         elseif scr.currentView == "SYS" then
+            local hasTrans = (FlightCore.getQuadHealth("FWD").total > 0) or
+                             (FlightCore.getQuadHealth("BWD").total > 0) or
+                             (FlightCore.getQuadHealth("LEFT").total > 0) or
+                             (FlightCore.getQuadHealth("RIGHT").total > 0)
+
             local slots = {
                 {slot="FL", col=1, row=1, name="FL Quad"},
                 {slot="FR", col=2, row=1, name="FR Quad"},
                 {slot="BL", col=1, row=2, name="BL Quad"},
                 {slot="BR", col=2, row=2, name="BR Quad"}
             }
+            if hasTrans then
+                table.insert(slots, {slot="FWD", col=1, row=3, name="FWD Thrust"})
+                table.insert(slots, {slot="BWD", col=2, row=3, name="BWD Thrust"})
+                table.insert(slots, {slot="LEFT", col=1, row=4, name="LEFT Thrust"})
+                table.insert(slots, {slot="RIGHT", col=2, row=4, name="RIGHT Thrust"})
+            end
+
+            local maxRows = hasTrans and 4 or 2
             local cardW = math.floor((w - 3) / 2)
-            local cardH = math.max(3, math.floor((h - 8) / 2))
+            local cardH = math.max(2, math.floor((h - 6 - maxRows) / maxRows))
             local startY = 4
 
             for _, s in ipairs(slots) do
@@ -2901,7 +3112,9 @@ Drivers.normal = {
                     self:safeBlit(scr, cx, cy + r, string.rep(" ", cardW), "0", bg)
                 end
                 self:safeBlit(scr, cx + 1, cy, string.format("[%s] %d ENG", s.slot, qH.total), "0", bg)
-                self:safeBlit(scr, cx + 1, cy + 1, string.format("ACT: %d/%d", qH.online, qH.total), "0", bg)
+                if cardH >= 2 then
+                    self:safeBlit(scr, cx + 1, cy + 1, string.format("ACT: %d/%d P:%d", qH.online, qH.total, FlightCore.engineOutputs[s.slot] or 0), "0", bg)
+                end
             end
 
             local btmY = h - 2

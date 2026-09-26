@@ -19,7 +19,7 @@ MODULES_DIR = os.path.join(PROJECT_DIR, "modules")
 DRIVERS_DIR = os.path.join(MODULES_DIR, "drivers")
 OUTPUT_RUN_LUA = os.path.join(PROJECT_DIR, "run.lua")
 
-VERSION = "v3.9.0"
+VERSION = "v3.9.1"
 
 def read_file(filepath):
     with open(filepath, "r", encoding="utf-8") as f:
