@@ -53,18 +53,23 @@ jobs:
             本 Release 由 GitHub Actions 自動編譯模組並完成語法校驗後產出。
 
             ### 📦 發布附件 (Assets)
-            - **`run.lua`**：主飛控大腦程式 (版本：`${{ steps.vars.outputs.lua_version }}`)。直接放入 Minecraft 駕駛艙 Advanced Computer 中執行。
-            - **`turtle_startup.lua`**：四軸動力烏龜韌體程式。放置於四軸動力烏龜 (FL, FR, BL, BR) 內作為 `startup.lua` 運行。
+            - **`boot.lua`**：通用 Release 自動下載與開機自啟啟動器 (可下載最新版 run/fcc/display/turtle)。
+            - **`fcc.lua`**：分散式獨立飛控大腦 (Flight Control Computer) — 0% 畫面開銷，20Hz 極速 PD-V 飛控。
+            - **`display.lua`**：分散式駕駛艙螢幕系統 (Cockpit Display System) — 專職 DirectGPU / Tom's / Normal 儀表渲染。
+            - **`run.lua`**：單機一體化飛控大腦程式 (版本：`${{ steps.vars.outputs.lua_version }}`)。
+            - **`turtle_startup.lua`**：動力推進烏龜韌體程式 (放置於 FL/FR/BL/BR/FWD 烏龜中)。
 
-            ### ⚡ 快速下載指令 (CC: Tweaked 電腦內直接使用)
+            ### ⚡ 萬能自動下載指令 (推薦使用 boot.lua)
             ```bash
-            # 1. 主駕駛艙 Advanced Computer (下載主飛控):
-            wget https://github.com/chiliasmstudio/CC-AeroAutoPilot/releases/latest/download/run.lua run.lua
-            run.lua
+            # 1. 執行最新版 (自動從 Release 下載並執行):
+            wget run https://raw.githubusercontent.com/chiliasmstudio/CC-AeroAutoPilot/main/boot.lua fcc
+            wget run https://raw.githubusercontent.com/chiliasmstudio/CC-AeroAutoPilot/main/boot.lua display
+            wget run https://raw.githubusercontent.com/chiliasmstudio/CC-AeroAutoPilot/main/boot.lua run
 
-            # 2. 四軸動力烏龜 FL / FR / BL / BR (下載烏龜韌體):
-            wget https://github.com/chiliasmstudio/CC-AeroAutoPilot/releases/latest/download/turtle_startup.lua startup.lua
-            reboot
+            # 2. 安裝為本機開機自啟程式 (Install to startup.lua):
+            wget run https://raw.githubusercontent.com/chiliasmstudio/CC-AeroAutoPilot/main/boot.lua install fcc
+            wget run https://raw.githubusercontent.com/chiliasmstudio/CC-AeroAutoPilot/main/boot.lua install display
+            wget run https://raw.githubusercontent.com/chiliasmstudio/CC-AeroAutoPilot/main/boot.lua turtle
             ```
 
             ### 📝 構建資訊
@@ -72,7 +77,10 @@ jobs:
             - **Branch / Ref**: `${{ github.ref_name }}`
           files: |
             run.lua
+            fcc.lua
+            display.lua
             turtle_startup.lua
+            boot.lua
           draft: false
           prerelease: false
         env:

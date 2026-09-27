@@ -94,50 +94,81 @@
 ### 步驟 2：連接網路纜線
 * 使用 **CC Networking Cable** 將 4 隻烏龜的 Wired Modem、高度計、陀螺儀與外接螢幕全部拉線連接至駕駛艙的 **Advanced Computer**。
 
-### 步驟 3：啟動飛控系統
-將專案中的 [`run.lua`](run.lua) 放入主電腦中，直接執行：
+## 🚀 安裝與啟動 (一鍵自動下載最新 Release)
+
+本專案支援 **「分散式多電腦架構（推薦）」** 與 **「單機一體化架構」**。使用隨附的 `boot.lua` 可直接從 GitHub Release 自動下載最新程式：
+
+### 方案 A：分散式雙電腦航電（推薦，徹底解決 Too long without yielding）
+將飛控大腦與駕駛艙螢幕分開至兩台電腦：
+
 ```bash
-run
+# 1. 飛控大腦電腦 (FCC - 純計算，接高度計/姿態儀/導航桌/數據機):
+wget run https://raw.githubusercontent.com/chiliasmstudio/CC-AeroAutoPilot/main/boot.lua fcc
+
+# 若想將其安裝為開機自動啟動:
+wget run https://raw.githubusercontent.com/chiliasmstudio/CC-AeroAutoPilot/main/boot.lua install fcc
+
+# 2. 駕駛艙螢幕電腦 (CDS - 接螢幕/GPU/數據機，可安裝多台聯動):
+wget run https://raw.githubusercontent.com/chiliasmstudio/CC-AeroAutoPilot/main/boot.lua display
+
+# 若想將其安裝為開機自動啟動:
+wget run https://raw.githubusercontent.com/chiliasmstudio/CC-AeroAutoPilot/main/boot.lua install display
 ```
-*(系統會自動偵測所有已連接的 GPU 螢幕、一般螢幕與烏龜硬體，並啟動全彩航電儀表！)*
+
+### 方案 B：單機一體化航電 (適合小型飛船或單螢幕)
+```bash
+# 在駕駛艙單一電腦直接運行:
+wget run https://raw.githubusercontent.com/chiliasmstudio/CC-AeroAutoPilot/main/boot.lua run
+```
+
+### 方案 C：動力推進烏龜安裝
+```bash
+# 在動力烏龜 (FL, FR, BL, BR, FWD, BWD, LEFT, RIGHT) 內直接執行安裝:
+label set FL
+wget run https://raw.githubusercontent.com/chiliasmstudio/CC-AeroAutoPilot/main/boot.lua turtle
+```
 
 ---
 
 ## 🎮 駕駛艙儀表操作指南
 
-系統支援 5 大切換分頁（點擊頂部導航列即可切換）：
+系統支援 6 大功能分頁（點擊頂部導航列即可切換）：
 
 | 分頁代碼 | 頁面名稱 | 功能與儀表說明 |
 | :---: | :--- | :--- |
-| **`OVERVIEW`** | 主飛行概覽 | 顯示即時高度、垂直升降速度、陀螺儀姿態角與四象限動力小卡。 |
-| **`ECAM`** | 發動機監控 | 四角動力大型圓形/長條動態儀表盤，顯示在線狀態與各馬達即時 PWM 輸出。 |
-| **`CTRL`** | 飛行管理台 | 雙資訊卡（高度升降剖面 + 姿態平衡總覽）與 3 排飛行控制按鈕群。 |
-| **`NAV`** | 預設高度導航 | 一鍵快速飛往預設高度（0m 著陸、80m 樹梢、150m 巡航、200m 校準、300m 高空）。 |
+| **`OVERVIEW`** | 主飛行概覽 | 顯示即時高度、垂直升降速度、姿態人工地平線與四象限動力小卡。 |
+| **`PFD`** | 主飛行儀表 | 超大 A350 風格人工地平線、升降速帶與數位高度錶。 |
+| **`ECAM`** | 發動機監控 | 四角升降與水平推進動力監控，顯示在線狀態與即時 PWM 輸出。 |
+| **`CTRL`** | 飛行管理台 | 垂直高度微調、基礎懸停油門調整、模式切換控制。 |
+| **`NAV`** | 航向與自駕 | 航向角鎖定 (Heading Hold)、航向微調、XZ 航點導航。 |
 | **`SYS`** | 系統狀態診斷 | 檢視所有連接之螢幕型號、烏龜硬體在線率與感測器通訊診斷。 |
 
 ### 常用控制按鈕一覽
-- **`[ AUTO CALIBRATE ]`**：初次起飛時點擊，系統自動遞增推力找到浮力平衡點並切入高度鎖定。
-- **`+50m` / `+10m` / `+1m` / `-1m` / `-10m`**：快速增減目標飛行高度。
-- **`BASE +1.0` / `BASE -1.0` / `BASE +0.1` / `BASE -0.1`**：手動微調四角引擎基礎油門檔位。
-- **`[ HOLD ALTITUDE ]`**：啟動高度 PID 與姿態自穩平衡。
-- **`[ STOP / IDLE ]`**：緊急停機，立即將所有引擎推力歸零。
+- **`[ CALIB HOVER ]`**：原處微升 +3m 自動測量懸停平衡推力並鎖定高度。
+- **`[ HOLD ALT ]`**：以 PD-V 垂直速度阻尼演算法鎖定當前高度。
+- **`+10m` / `-10m` / `+1m` / `-1m`**：增減目標飛行高度。
+- **`BASE +0.1` / `BASE -0.1`**：微調基礎懸停油門。
+- **`HDG +10` / `HDG -10`**：調整目標飛行航向角。
+- **`[ HDG HOLD ]`**：啟動航向自動鎖定。
+- **`[ STOP IDLE ]`**：緊急停機，立即將所有引擎推力歸零。
 
 ---
 
 ## 📦 開發與編譯打包 (`bundle.py`)
 
-本專案採模組化開發架構，原始碼存於 `modules/` 目錄中。若修改了模組原始碼，可透過隨附的 Python 建置腳本一鍵編譯合併為單一獨立執行的 `run.lua`：
+本專案採模組化開發架構，原始碼存於 `modules/` 目錄中。執行 `bundle.py` 會自動編譯打包並校驗所有發布程式：
 
 ```bash
-# 在專案根目錄執行編譯與語法校驗
 python bundle.py
 ```
-
-- **詳細技術手冊、模組分工與 API 規格**：請參閱 [`wiki.md`](wiki.md)。
-- **外部開源參考資料與技術規格**：請參閱 [`info/README.md`](info/README.md)。
+- **`run.lua`**：單機一體化飛控大腦。
+- **`fcc.lua`**：分散式獨立飛控大腦 (FCC)。
+- **`display.lua`**：分散式駕駛艙螢幕系統 (CDS)。
+- **`boot.lua`**：通用 Release 自動下載與安裝啟動器。
 
 ---
 
 ## 📄 授權條款 (License)
 
 本專案採用 [MIT License](LICENSE) 開源授權。任何人皆可自由使用、修改、分發與商業應用，惟須保留原著作權與授權聲明。
+
