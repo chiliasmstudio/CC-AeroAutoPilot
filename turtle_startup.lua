@@ -1,10 +1,10 @@
 -- ========================================================
 -- Turtle Engine Node Firmware (startup.lua)
--- Version: v4.0.6 (OTA Remote Update & Auto Modem Detection Edition)
+-- Version: v4.0.7 (OTA Remote Update & Auto Modem Detection Edition)
 -- 放置於動力烏龜中，開機自動啟動，免手動操作
 -- ========================================================
 
-local VERSION = "v4.0.6"
+local VERSION = "v4.0.7"
 
 -- 1. 取得烏龜標籤 (FL / FR / BL / BR / FWD / BWD / LEFT / RIGHT)
 local label = os.getComputerLabel() or ""

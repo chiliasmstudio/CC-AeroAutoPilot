@@ -1,7 +1,7 @@
 --[[
     Create: Avionics & CC: Tweaked
     Unified Multi-Engine Avionics Flight Computer (多軸模組化統一飛控大腦)
-    Version: v4.0.6 Modular Bundle
+    Version: v4.0.7 Modular Bundle
     
     螢幕尺寸自適應分類 (Dual Screen Size Mode):
     - 完整顯示螢幕 (>= 5x5): 啟動超大 A350 儀表、細緻多引擎遙測與 3 排完整控制面板。
@@ -16,7 +16,7 @@
       run.lua normal       (強制使用 CC 原生螢幕/終端機驅動)
 --]]
 
-local VERSION = "v4.0.6"
+local VERSION = "v4.0.7"
 local args = {...}
 local requestedDriver = args[1] and string.lower(args[1]) or "auto"
 
@@ -489,6 +489,20 @@ function FlightCore.getGimbalData()
             return angles[1] or 0, angles[2] or 0
         end
     end
+
+    -- 備援：CCPE AIC / INS 姿態 (getAngles: {pitch, roll, yaw})
+    local ss = getCCPESensorSystem()
+    if ss and ss.isOnBody then
+        local okOn, onB = pcall(function() return ss.isOnBody() end)
+        if okOn and onB and ss.getAngles then
+            local okAng, ang = pcall(ss.getAngles)
+            if okAng and type(ang) == "table" then
+                FlightCore.gimbalAvailable = true
+                return ang.pitch or 0, ang.roll or 0
+            end
+        end
+    end
+
     FlightCore.gimbalAvailable = false
     return 0, 0
 end
@@ -847,8 +861,38 @@ function FlightCore.updateFlightLogic()
         FlightCore.altiSensor = peripheral.find("altitude_sensor")
     end
 
-    local currentAlt = FlightCore.altiSensor and FlightCore.altiSensor.getHeight() or 0
-    local rawVspeed = FlightCore.altiSensor and FlightCore.altiSensor.getVerticalSpeed and FlightCore.altiSensor.getVerticalSpeed() or nil
+    local currentAlt = 0
+    local rawVspeed = nil
+    if FlightCore.altiSensor then
+        local ok, h = pcall(function() return FlightCore.altiSensor.getHeight() end)
+        if ok and type(h) == "number" then currentAlt = h end
+        local okV, vs = pcall(function() return FlightCore.altiSensor.getVerticalSpeed and FlightCore.altiSensor.getVerticalSpeed() end)
+        if okV and type(vs) == "number" then rawVspeed = vs end
+    end
+
+    -- 備援：CCPE 靜壓孔 (Static Port) / 物理體高度與垂直速度
+    local ss = getCCPESensorSystem()
+    if ss and ss.isOnBody then
+        local okOn, onB = pcall(function() return ss.isOnBody() end)
+        if okOn and onB then
+            if currentAlt == 0 and ss.getAltitude then
+                local okAlt, a = pcall(ss.getAltitude)
+                if okAlt and type(a) == "number" then currentAlt = a end
+            end
+            if rawVspeed == nil and ss.getVelocity then
+                local okVel, vel = pcall(ss.getVelocity)
+                if okVel and type(vel) == "table" and type(vel.y) == "number" then
+                    rawVspeed = vel.y
+                end
+            end
+            if currentAlt == 0 and ss.getBodyPosition then
+                local okPos, pos = pcall(ss.getBodyPosition)
+                if okPos and type(pos) == "table" and type(pos.y) == "number" then
+                    currentAlt = pos.y
+                end
+            end
+        end
+    end
 
     -- 垂直速度計算與 EMA 低通平滑濾波
     local nowEpoch = os.epoch("utc") / 1000
