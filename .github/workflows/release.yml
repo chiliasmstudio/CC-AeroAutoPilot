@@ -117,6 +117,5 @@ jobs:
             gh release create "$TAG" $FILES \
               --title "$TITLE" \
               --notes-file release_notes.md \
-              --latest \
-              --clobber
+              --latest
           fi
