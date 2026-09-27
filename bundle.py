@@ -229,7 +229,7 @@ end
 
 local function eventLoop()
     while true do
-        local eventData = {os.pullEvent()}
+        local eventData = {os.pullEventRaw()}
         local event = eventData[1]
         if event == "modem_message" then
             FlightCore.handleModemMessage(eventData[2], eventData[3], eventData[4], eventData[5], eventData[6])
@@ -400,7 +400,7 @@ end
 
 local function eventLoop()
     while true do
-        local eventData = {os.pullEvent()}
+        local eventData = {os.pullEventRaw()}
         local event = eventData[1]
         if event == "modem_message" then
             local side, ch, replyCh, msg, dist = eventData[2], eventData[3], eventData[4], eventData[5], eventData[6]
@@ -797,7 +797,7 @@ end
 
 local function eventLoop()
     while true do
-        local eventData = {os.pullEvent()}
+        local eventData = {os.pullEventRaw()}
         local event = eventData[1]
         if event == "modem_message" then
             FlightCore.handleModemMessage(eventData[2], eventData[3], eventData[4], eventData[5], eventData[6])
