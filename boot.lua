@@ -38,6 +38,8 @@ for _, arg in ipairs(rawArgs) do
         targetType = "run"
     elseif lArg == "turtle" or lArg == "turtle_startup.lua" then
         targetType = "turtle"
+    elseif lArg == "cli" or lArg == "fcc-cli" or lArg == "fcc_cli" or lArg == "fcc-cli.lua" then
+        targetType = "cli"
     else
         table.insert(forwardArgs, arg)
     end
@@ -47,7 +49,8 @@ local assetMap = {
     run     = { asset = "run.lua",            saveAs = "run.lua" },
     fcc     = { asset = "fcc.lua",            saveAs = "fcc.lua" },
     display = { asset = "display.lua",        saveAs = "display.lua" },
-    turtle  = { asset = "turtle_startup.lua", saveAs = "startup.lua" }
+    turtle  = { asset = "turtle_startup.lua", saveAs = "startup.lua" },
+    cli     = { asset = "fcc-cli.lua",        saveAs = "fcc-cli.lua" }
 }
 
 local targetConfig = assetMap[targetType] or assetMap.run

@@ -57,6 +57,7 @@ jobs:
             - **`fcc.lua`**：分散式獨立飛控大腦 (Flight Control Computer) — 0% 畫面開銷，20Hz 極速 PD-V 飛控。
             - **`display.lua`**：分散式駕駛艙螢幕系統 (Cockpit Display System) — 專職 DirectGPU / Tom's / Normal 儀表渲染。
             - **`run.lua`**：單機一體化飛控大腦程式 (版本：`${{ steps.vars.outputs.lua_version }}`)。
+            - **`fcc-cli.lua`**：飛控命令列與互動終端 (FCC-CLI) — 支援 `go x z` 導航、高度/航向控制、遠端 OTA 更新與重啟烏龜。
             - **`turtle_startup.lua`**：動力推進烏龜韌體程式 (放置於 FL/FR/BL/BR/FWD 烏龜中)。
 
             ### ⚡ 萬能自動下載指令 (推薦使用 boot.lua)
@@ -64,11 +65,13 @@ jobs:
             # 1. 執行最新版 (自動從 Release 下載並執行):
             wget run https://raw.githubusercontent.com/chiliasmstudio/CC-AeroAutoPilot/main/boot.lua fcc
             wget run https://raw.githubusercontent.com/chiliasmstudio/CC-AeroAutoPilot/main/boot.lua display
+            wget run https://raw.githubusercontent.com/chiliasmstudio/CC-AeroAutoPilot/main/boot.lua cli
             wget run https://raw.githubusercontent.com/chiliasmstudio/CC-AeroAutoPilot/main/boot.lua run
 
             # 2. 安裝為本機開機自啟程式 (Install to startup.lua):
             wget run https://raw.githubusercontent.com/chiliasmstudio/CC-AeroAutoPilot/main/boot.lua install fcc
             wget run https://raw.githubusercontent.com/chiliasmstudio/CC-AeroAutoPilot/main/boot.lua install display
+            wget run https://raw.githubusercontent.com/chiliasmstudio/CC-AeroAutoPilot/main/boot.lua install cli
             wget run https://raw.githubusercontent.com/chiliasmstudio/CC-AeroAutoPilot/main/boot.lua turtle
             ```
 
@@ -79,6 +82,7 @@ jobs:
             run.lua
             fcc.lua
             display.lua
+            fcc-cli.lua
             turtle_startup.lua
             boot.lua
           draft: false

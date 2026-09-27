@@ -839,10 +839,13 @@ parallel.waitForAny(renderLoop, eventLoop)
     print(f"✅ Compiled {os.path.basename(OUTPUT_DISPLAY_LUA)} ({len(bundled_display.splitlines())} lines)")
     validate_syntax(OUTPUT_DISPLAY_LUA)
 
-    # 5. 驗證 boot.lua 與 turtle_startup.lua
+    # 5. 驗證 boot.lua, fcc-cli.lua 與 turtle_startup.lua
     boot_path = os.path.join(PROJECT_DIR, "boot.lua")
     if os.path.exists(boot_path):
         validate_syntax(boot_path)
+    cli_path = os.path.join(PROJECT_DIR, "fcc-cli.lua")
+    if os.path.exists(cli_path):
+        validate_syntax(cli_path)
     turtle_path = os.path.join(PROJECT_DIR, "turtle_startup.lua")
     if os.path.exists(turtle_path):
         validate_syntax(turtle_path)

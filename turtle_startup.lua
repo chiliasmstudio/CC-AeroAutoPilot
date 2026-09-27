@@ -1,10 +1,10 @@
 -- ========================================================
 -- Turtle Engine Node Firmware (startup.lua)
--- Version: v3.9.9 (Auto Modem Detection & Smart Output Edition)
+-- Version: v4.0.0 (OTA Remote Update & Auto Modem Detection Edition)
 -- 放置於動力烏龜中，開機自動啟動，免手動操作
 -- ========================================================
 
-local VERSION = "v3.9.9"
+local VERSION = "v4.0.0"
 
 -- 1. 取得烏龜標籤 (FL / FR / BL / BR / FWD / BWD / LEFT / RIGHT)
 local label = os.getComputerLabel() or ""
@@ -84,7 +84,7 @@ term.clear()
 term.setCursorPos(1, 1)
 print("================================")
 print("     VTOL Airship " .. VERSION .. "     ")
-print("  Engine Node (Heartbeat Active) ")
+print("  Engine Node (OTA Active)       ")
 print("================================")
 print("ID: " .. os.getComputerID() .. " | Label: " .. (label ~= "" and label or "(None)"))
 print("Role: [" .. role .. "] | Ver: " .. VERSION)
@@ -140,6 +140,44 @@ local function listenLoop()
         if event == "modem_message" then
             local side, channel, replyChannel, message = eventData[2], eventData[3], eventData[4], eventData[5]
             if channel == 100 and type(message) == "table" then
+                -- 遠端指令: 重啟烏龜 (Remote Reboot)
+                if message.cmd == "REBOOT" or message.type == "REBOOT" then
+                    term.setCursorPos(1, 9)
+                    term.clearLine()
+                    print("[REMOTE] Rebooting turtle...")
+                    applySignal(0)
+                    sleep(0.5)
+                    os.reboot()
+                    return
+                end
+
+                -- 遠端指令: 線上更新韌體 (Remote OTA Update)
+                if message.cmd == "UPDATE" or message.type == "OTA_UPDATE" then
+                    term.setCursorPos(1, 9)
+                    term.clearLine()
+                    print("[OTA] Downloading latest firmware...")
+                    applySignal(0)
+                    local url = "https://raw.githubusercontent.com/chiliasmstudio/CC-AeroAutoPilot/main/turtle_startup.lua"
+                    local ok, resp = pcall(function() return http.get(url, {["Cache-Control"]="no-cache"}) end)
+                    if ok and resp then
+                        local code = resp.readAll()
+                        resp.close()
+                        if code and #code > 50 then
+                            local f = fs.open("startup.lua", "w")
+                            if f then
+                                f.write(code)
+                                f.close()
+                                print("[OTA] Firmware updated! Rebooting...")
+                                sleep(1)
+                                os.reboot()
+                                return
+                            end
+                        end
+                    end
+                    print("[OTA ERR] Update failed. Check HTTP connection.")
+                end
+
+                -- 動力控制訊號處理
                 local sig = nil
                 if role ~= "UNKNOWN" and message[role] ~= nil then
                     sig = message[role]
