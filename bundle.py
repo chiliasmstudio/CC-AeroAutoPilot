@@ -407,8 +407,8 @@ local function handleFccCommand(side, ch, replyCh, msg, dist)
 end
 
 local function broadcastTelemetry()
-    local currentAlt = FlightCore.altiSensor and FlightCore.altiSensor.getHeight() or 0
-    local vspeed = FlightCore.altiSensor and FlightCore.altiSensor.getVerticalSpeed and FlightCore.altiSensor.getVerticalSpeed() or 0
+    local currentAlt = (FlightCore.altiSensor and FlightCore.altiSensor.getHeight and FlightCore.altiSensor.getHeight()) or FlightCore.nav.y or 0
+    local vspeed = (FlightCore.altiSensor and FlightCore.altiSensor.getVerticalSpeed and FlightCore.altiSensor.getVerticalSpeed()) or FlightCore.filteredVspeed or 0
     local currPitch, currRoll = FlightCore.getGimbalData()
 
     local teleMsg = {
@@ -516,8 +516,8 @@ local function uiLoop()
     while true do
         term.clear()
         term.setCursorPos(1, 1)
-        local currentAlt = FlightCore.altiSensor and FlightCore.altiSensor.getHeight() or 0
-        local vspeed = FlightCore.altiSensor and FlightCore.altiSensor.getVerticalSpeed and FlightCore.altiSensor.getVerticalSpeed() or 0
+        local currentAlt = (FlightCore.altiSensor and FlightCore.altiSensor.getHeight and FlightCore.altiSensor.getHeight()) or FlightCore.nav.y or 0
+        local vspeed = (FlightCore.altiSensor and FlightCore.altiSensor.getVerticalSpeed and FlightCore.altiSensor.getVerticalSpeed()) or FlightCore.filteredVspeed or 0
         local currPitch, currRoll = FlightCore.getGimbalData()
         local qFL = FlightCore.getQuadHealth("FL")
         local qFR = FlightCore.getQuadHealth("FR")

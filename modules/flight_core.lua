@@ -129,10 +129,10 @@ FlightCore.gpsTick = 0
 
 local function getCCPESensorSystem()
     local ok, ss = pcall(require, "ccpe.sensor_system")
-    if ok and type(ss) == "table" then return ss end
+    if ok and ss then return ss end
     local ok2, ss2 = pcall(require, "ccpe/sensor_system")
-    if ok2 and type(ss2) == "table" then return ss2 end
-    if type(_G.ccpe) == "table" and type(_G.ccpe.sensor_system) == "table" then
+    if ok2 and ss2 then return ss2 end
+    if _G.ccpe and _G.ccpe.sensor_system then
         return _G.ccpe.sensor_system
     end
     return nil
@@ -141,41 +141,37 @@ end
 function FlightCore.updateNavigation()
     -- 1. 優先嘗試 CCPE 物理實體感測系統 (ccpe.sensor_system)
     local ss = getCCPESensorSystem()
-    if ss and ss.isOnBody then
-        local okOn, onB = pcall(function() return ss.isOnBody() end)
+    if ss then
+        local okOn, onB = pcall(function()
+            if type(ss.isOnBody) == "function" then return ss.isOnBody() end
+            if ss.isOnBody ~= nil then return ss.isOnBody end
+            return true
+        end)
         if okOn and onB then
             -- 讀取座標 (優先 getBodyPosition，其次 getPosition)
-            local okPos, p1, p2, p3 = pcall(function()
-                if ss.getBodyPosition then return ss.getBodyPosition()
-                elseif ss.getPosition then return ss.getPosition()
-                end
+            local okPos, p1 = pcall(function()
+                if type(ss.getBodyPosition) == "function" then return ss.getBodyPosition() end
+                if type(ss.getPosition) == "function" then return ss.getPosition() end
                 return nil
             end)
             if okPos and p1 then
-                if type(p1) == "table" then
-                    local x = p1.x or p1[1]
-                    local y = p1.y or p1[2]
-                    local z = p1.z or p1[3]
-                    if x and z then
-                        FlightCore.nav.x = tonumber(x)
-                        FlightCore.nav.y = tonumber(y) or FlightCore.nav.y
-                        FlightCore.nav.z = tonumber(z)
-                        FlightCore.nav.source = "AIC"
-                    end
-                elseif type(p1) == "number" and type(p3) == "number" then
-                    FlightCore.nav.x = tonumber(p1)
-                    FlightCore.nav.y = tonumber(p2) or FlightCore.nav.y
-                    FlightCore.nav.z = tonumber(p3)
+                local x = (type(p1) == "table" or type(p1) == "userdata") and (p1.x or p1[1]) or (type(p1) == "number" and p1 or nil)
+                local y = (type(p1) == "table" or type(p1) == "userdata") and (p1.y or p1[2]) or nil
+                local z = (type(p1) == "table" or type(p1) == "userdata") and (p1.z or p1[3]) or nil
+                if x and z then
+                    FlightCore.nav.x = tonumber(x)
+                    FlightCore.nav.y = tonumber(y) or FlightCore.nav.y
+                    FlightCore.nav.z = tonumber(z)
                     FlightCore.nav.source = "AIC"
                 end
             end
 
             -- 備援：若 getBodyPosition 為空，嘗試 getSensors()
-            if not FlightCore.nav.x and ss.getSensors then
+            if not FlightCore.nav.x and type(ss.getSensors) == "function" then
                 local okSensors, sList = pcall(ss.getSensors)
-                if okSensors and type(sList) == "table" then
+                if okSensors and (type(sList) == "table" or type(sList) == "userdata") then
                     for _, s in ipairs(sList) do
-                        if s.pos and (s.pos.x or s.pos[1]) then
+                        if s and s.pos and (s.pos.x or s.pos[1]) then
                             FlightCore.nav.x = tonumber(s.pos.x or s.pos[1])
                             FlightCore.nav.y = tonumber(s.pos.y or s.pos[2]) or FlightCore.nav.y
                             FlightCore.nav.z = tonumber(s.pos.z or s.pos[3])
@@ -187,24 +183,30 @@ function FlightCore.updateNavigation()
             end
 
             -- 讀取線速度與航速 (getVelocity)
-            local okVel, v1, v2, v3 = pcall(function() return ss.getVelocity and ss.getVelocity() end)
+            local okVel, v1 = pcall(function()
+                if type(ss.getVelocity) == "function" then return ss.getVelocity() end
+                return nil
+            end)
             if okVel and v1 then
-                if type(v1) == "table" then
-                    local vx = v1.x or v1[1] or 0
-                    local vz = v1.z or v1[3] or 0
+                if type(v1) == "table" or type(v1) == "userdata" then
+                    local vx = tonumber(v1.x or v1[1] or 0) or 0
+                    local vz = tonumber(v1.z or v1[3] or 0) or 0
                     FlightCore.nav.speed = math.sqrt(vx*vx + vz*vz)
-                elseif type(v1) == "number" and type(v3) == "number" then
-                    FlightCore.nav.speed = math.sqrt(v1*v1 + v3*v3)
+                elseif type(v1) == "number" then
+                    FlightCore.nav.speed = math.abs(v1)
                 end
             end
 
             -- 讀取姿態與航向 (getAngles)
-            local okAng, a1, a2, a3 = pcall(function() return ss.getAngles and ss.getAngles() end)
+            local okAng, a1, a2, a3 = pcall(function()
+                if type(ss.getAngles) == "function" then return ss.getAngles() end
+                return nil
+            end)
             if okAng and a1 then
-                if type(a1) == "table" then
-                    FlightCore.nav.pitch = a1.pitch or a1.x or a1[1] or FlightCore.nav.pitch
-                    FlightCore.nav.roll = a1.roll or a1.z or a1[3] or FlightCore.nav.roll
-                    local yaw = a1.yaw or a1.y or a1[2]
+                if type(a1) == "table" or type(a1) == "userdata" then
+                    FlightCore.nav.pitch = tonumber(a1.pitch or a1.x or a1[1]) or FlightCore.nav.pitch
+                    FlightCore.nav.roll = tonumber(a1.roll or a1.z or a1[3]) or FlightCore.nav.roll
+                    local yaw = tonumber(a1.yaw or a1.y or a1[2])
                     if yaw then FlightCore.nav.yaw = ((yaw % 360) + 360) % 360 end
                 elseif type(a1) == "number" then
                     FlightCore.nav.pitch = a1
@@ -344,12 +346,16 @@ function FlightCore.getHardwareInventory()
     local onPhysicsBody = false
     local ccpeSensors = {}
     local ss = getCCPESensorSystem()
-    if ss and ss.isOnBody then
-        local okOn, onB = pcall(function() return ss.isOnBody() end)
+    if ss then
+        local okOn, onB = pcall(function()
+            if type(ss.isOnBody) == "function" then return ss.isOnBody() end
+            if ss.isOnBody ~= nil then return ss.isOnBody end
+            return true
+        end)
         if okOn and onB then
             onPhysicsBody = true
-            local okS, sList = pcall(function() return ss.getSensors and ss.getSensors() end)
-            if okS and type(sList) == "table" then
+            local okS, sList = pcall(function() return type(ss.getSensors) == "function" and ss.getSensors() end)
+            if okS and (type(sList) == "table" or type(sList) == "userdata") then
                 ccpeSensors = sList
             end
         end
@@ -471,13 +477,17 @@ function FlightCore.getGimbalData()
 
     -- 備援：CCPE AIC / INS 姿態 (getAngles: {pitch, roll, yaw})
     local ss = getCCPESensorSystem()
-    if ss and ss.isOnBody then
-        local okOn, onB = pcall(function() return ss.isOnBody() end)
-        if okOn and onB and ss.getAngles then
+    if ss then
+        local okOn, onB = pcall(function()
+            if type(ss.isOnBody) == "function" then return ss.isOnBody() end
+            if ss.isOnBody ~= nil then return ss.isOnBody end
+            return true
+        end)
+        if okOn and onB and type(ss.getAngles) == "function" then
             local okAng, ang = pcall(ss.getAngles)
-            if okAng and type(ang) == "table" then
+            if okAng and ang and (type(ang) == "table" or type(ang) == "userdata") then
                 FlightCore.gimbalAvailable = true
-                return ang.pitch or 0, ang.roll or 0
+                return tonumber(ang.pitch or ang.x or ang[1] or 0) or 0, tonumber(ang.roll or ang.z or ang[3] or 0) or 0
             end
         end
     end
@@ -851,22 +861,26 @@ function FlightCore.updateFlightLogic()
 
     -- 備援：CCPE 靜壓孔 (Static Port) / 物理體高度與垂直速度
     local ss = getCCPESensorSystem()
-    if ss and ss.isOnBody then
-        local okOn, onB = pcall(function() return ss.isOnBody() end)
+    if ss then
+        local okOn, onB = pcall(function()
+            if type(ss.isOnBody) == "function" then return ss.isOnBody() end
+            if ss.isOnBody ~= nil then return ss.isOnBody end
+            return true
+        end)
         if okOn and onB then
-            if currentAlt == 0 and ss.getAltitude then
+            if currentAlt == 0 and type(ss.getAltitude) == "function" then
                 local okAlt, a = pcall(ss.getAltitude)
                 if okAlt and type(a) == "number" then currentAlt = a end
             end
-            if rawVspeed == nil and ss.getVelocity then
+            if rawVspeed == nil and type(ss.getVelocity) == "function" then
                 local okVel, vel = pcall(ss.getVelocity)
-                if okVel and type(vel) == "table" and type(vel.y) == "number" then
+                if okVel and (type(vel) == "table" or type(vel) == "userdata") and type(vel.y) == "number" then
                     rawVspeed = vel.y
                 end
             end
-            if currentAlt == 0 and ss.getBodyPosition then
+            if currentAlt == 0 and type(ss.getBodyPosition) == "function" then
                 local okPos, pos = pcall(ss.getBodyPosition)
-                if okPos and type(pos) == "table" and type(pos.y) == "number" then
+                if okPos and (type(pos) == "table" or type(pos) == "userdata") and type(pos.y) == "number" then
                     currentAlt = pos.y
                 end
             end
