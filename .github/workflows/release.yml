@@ -6,6 +6,7 @@ on:
       - main
     tags:
       - 'v*'
+      - '20*'
 
 permissions:
   contents: write
@@ -25,24 +26,27 @@ jobs:
         with:
           python-version: '3.x'
 
-      - name: Build and Validate run.lua
+      - name: Build and Validate Lua Assets
         run: |
           python bundle.py
 
-      - name: Extract Version from run.lua
+      - name: Extract Versions and Build Date Tag
         id: vars
         run: |
-          LUA_VER=$(python bundle.py --version)
+          COMP_VER=$(python bundle.py --version-computer)
+          TURT_VER=$(python bundle.py --version-turtle)
+          DATE_TAG=$(date +'%Y%m%d')
           if [ "${{ startsWith(github.ref, 'refs/tags/') }}" = "true" ]; then
             TAG_NAME="${{ github.ref_name }}"
           else
-            TAG_NAME="${LUA_VER}"
+            TAG_NAME="${DATE_TAG}"
           fi
           echo "tag_name=${TAG_NAME}" >> $GITHUB_OUTPUT
-          echo "lua_version=${LUA_VER}" >> $GITHUB_OUTPUT
-          echo "release_title=Release ${TAG_NAME}" >> $GITHUB_OUTPUT
+          echo "comp_ver=${COMP_VER}" >> $GITHUB_OUTPUT
+          echo "turt_ver=${TURT_VER}" >> $GITHUB_OUTPUT
+          echo "release_title=Release ${TAG_NAME} (Computer: ${COMP_VER} | Turtle: ${TURT_VER})" >> $GITHUB_OUTPUT
 
-      - name: Create GitHub Release
+      - name: Create or Update GitHub Release
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.vars.outputs.tag_name }}
@@ -52,28 +56,42 @@ jobs:
 
             本 Release 由 GitHub Actions 自動編譯模組並完成語法校驗後產出。
 
-            ### 📦 發布附件 (Assets)
-            - **`boot.lua`**：通用 Release 自動下載與開機自啟啟動器 (可下載最新版 run/fcc/display/turtle)。
-            - **`fcc.lua`**：分散式獨立飛控大腦 (Flight Control Computer) — 0% 畫面開銷，20Hz 極速 PD-V 飛控。
-            - **`display.lua`**：分散式駕駛艙螢幕系統 (Cockpit Display System) — 專職 DirectGPU / Tom's / Normal 儀表渲染。
-            - **`run.lua`**：單機一體化飛控大腦程式 (版本：`${{ steps.vars.outputs.lua_version }}`)。
-            - **`fcc-cli.lua`**：飛控命令列與互動終端 (FCC-CLI) — 支援 `go x z` 導航、高度/航向控制、遠端 OTA 更新與重啟烏龜。
-            - **`turtle_startup.lua`**：動力推進烏龜韌體程式 (放置於 FL/FR/BL/BR/FWD 烏龜中)。
+            ### 🏷️ 韌體與軟體版本 (從 version.xml 自動同步)
+            - 🖥️ **飛控電腦軟體版本 (Computer Suite)**: `${{ steps.vars.outputs.comp_ver }}`
+            - 🐢 **動力烏龜韌體版本 (Turtle Firmware)**: `${{ steps.vars.outputs.turt_ver }}`
 
-            ### ⚡ 萬能自動下載指令 (推薦使用 boot.lua)
+            ### ⚡ 玩家使用指南（只需下載 boot.lua 即可安裝與執行全部功能）
+            在 CC 電腦或烏龜上執行以下單行指令啟動萬能啟動 / 安裝選單：
             ```bash
-            # 1. 執行最新版 (自動從 Release 下載並執行):
-            wget run https://raw.githubusercontent.com/chiliasmstudio/CC-AeroAutoPilot/main/boot.lua fcc
-            wget run https://raw.githubusercontent.com/chiliasmstudio/CC-AeroAutoPilot/main/boot.lua display
-            wget run https://raw.githubusercontent.com/chiliasmstudio/CC-AeroAutoPilot/main/boot.lua cli
-            wget run https://raw.githubusercontent.com/chiliasmstudio/CC-AeroAutoPilot/main/boot.lua run
-
-            # 2. 安裝為本機開機自啟程式 (Install to startup.lua):
-            wget run https://raw.githubusercontent.com/chiliasmstudio/CC-AeroAutoPilot/main/boot.lua install fcc
-            wget run https://raw.githubusercontent.com/chiliasmstudio/CC-AeroAutoPilot/main/boot.lua install display
-            wget run https://raw.githubusercontent.com/chiliasmstudio/CC-AeroAutoPilot/main/boot.lua install cli
-            wget run https://raw.githubusercontent.com/chiliasmstudio/CC-AeroAutoPilot/main/boot.lua turtle
+            wget run https://raw.githubusercontent.com/chiliasmstudio/CC-AeroAutoPilot/main/boot.lua
             ```
+            或下載後自由選擇：
+            ```bash
+            wget https://raw.githubusercontent.com/chiliasmstudio/CC-AeroAutoPilot/main/boot.lua boot
+            boot
+            ```
+
+            快捷指令（免進入選單直接執行或安裝）：
+            ```bash
+            # 安裝至本機開機自啟 (startup.lua):
+            boot install fcc      # 安裝 分散式飛控大腦
+            boot install cli      # 安裝 獨立命令列終端
+            boot install display  # 安裝 駕駛艙螢幕系統
+            boot install turtle   # 安裝 動力烏龜韌體並重啟
+
+            # 直接從 GitHub Release 下載最新版運行:
+            boot cli              # 啟動 FCC-CLI 命令終端
+            boot fcc              # 啟動 FCC 飛控大腦
+            boot display          # 啟動 駕駛艙螢幕
+            ```
+
+            ### 📦 本次發布包含附件 (Release Assets)
+            - **`boot.lua`**：萬能下載、安裝與開機自啟啟動器（自動由 GitHub Release 獲取資產）。
+            - **`fcc.lua`**：分散式獨立飛控大腦 (Flight Control Computer) — 0% 畫面開銷，20Hz 極速 PD-V 飛控。
+            - **`fcc-cli.lua`**：飛控命令列與即時儀表終端 (FCC-CLI) — 支援 `go x z` 導航、高度/航向控制、遠端 OTA 更新與重啟烏龜。
+            - **`display.lua`**：分散式駕駛艙螢幕系統 (Cockpit Display System) — 專職 DirectGPU / Tom's / Normal 儀表渲染。
+            - **`run.lua`**：單機一體化飛控大腦程式 (整合 FCC + 螢幕顯示)。
+            - **`turtle_startup.lua`**：動力推進烏龜韌體程式 (放置於 FL/FR/BL/BR/FWD 烏龜中)。
 
             ### 📝 構建資訊
             - **Commit SHA**: `${{ github.sha }}`

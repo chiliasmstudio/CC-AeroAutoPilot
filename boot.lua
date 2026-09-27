@@ -2,16 +2,19 @@
     boot.lua — CC-AeroAutoPilot Universal Release Launcher & Auto-Updater
     Version: v4.0.4
     ====================================================================
-    自動從 GitHub Releases 下載最新版本並執行，支援 API 速率限制自動備援降級。
+    自動從 GitHub Releases 下載最新版本並執行或安裝至本機磁碟。
 
     使用方式:
-      boot.lua                  (顯示互動式選單 [1] CLI [2] FCC [3] Display [4] Run [5] Turtle)
-      boot.lua cli              (啟動最新版 獨立命令終端 fcc-cli.lua)
-      boot.lua fcc              (啟動最新版 分散式飛控大腦 fcc.lua)
-      boot.lua display [driver] (啟動最新版 駕駛艙螢幕 display.lua)
-      boot.lua run              (啟動最新版 一體化飛控 run.lua)
-      boot.lua turtle           (安裝最新版 四軸動力烏龜 startup.lua)
-      boot.lua install [target] (下載並儲存至本機磁碟，設為開機自啟)
+      boot.lua                  (顯示互動式選單 [1] Install [2] Run)
+      boot.lua install          (顯示安裝選單 [1] FCC [2] CLI [3] Display [4] Run [5] Turtle)
+      boot.lua install fcc      (直接安裝 分散式飛控大腦 fcc.lua 為開機自啟 startup.lua)
+      boot.lua install cli      (直接安裝 獨立命令終端 fcc-cli.lua 為開機自啟 startup.lua)
+      boot.lua install display  (直接安裝 駕駛艙螢幕 display.lua 為開機自啟 startup.lua)
+      boot.lua install turtle   (直接安裝 動力烏龜韌體 startup.lua 並重啟)
+      boot.lua cli              (直接從 Release 下載並執行 fcc-cli.lua)
+      boot.lua fcc              (直接從 Release 下載並執行 fcc.lua)
+      boot.lua display          (直接從 Release 下載並執行 display.lua)
+      boot.lua run              (直接從 Release 下載並執行 run.lua)
 --]]
 
 local rawArgs = { ... }
@@ -24,7 +27,7 @@ if not http then
     return
 end
 
--- 解析參數
+-- 1. 解析命令列參數
 local isInstall = false
 local targetType = nil
 local forwardArgs = {}
@@ -41,56 +44,68 @@ for _, arg in ipairs(rawArgs) do
         targetType = "display"
     elseif lArg == "run" or lArg == "run.lua" or lArg == "all" then
         targetType = "run"
-    elseif lArg == "turtle" or lArg == "turtle_startup.lua" then
+    elseif lArg == "turtle" or lArg == "turtle_startup.lua" or lArg == "node" then
         targetType = "turtle"
     else
         table.insert(forwardArgs, arg)
     end
 end
 
--- 若無傳入目標參數，顯示互動式選擇選單
+-- 2. 若無傳入特定目標，顯示階層式互動選單
 if not targetType then
     term.clear()
     term.setCursorPos(1, 1)
     print("========================================")
-    print("   CC-AeroAutoPilot Release Launcher    ")
+    print("   CC-AeroAutoPilot Universal Booter    ")
     print("========================================")
-    print(" Select Mode to Launch:")
-    print("  [1] FCC-CLI Console   (命令列終端 - 輸入 go 100 100 等)")
-    print("  [2] FCC Flight Core   (飛控大腦 - 20Hz 純計算後台)")
-    print("  [3] Cockpit Display   (駕駛艙螢幕 - DirectGPU / 儀表板)")
-    print("  [4] All-In-One Run    (單機一體化全功能飛控)")
-    print("  [5] Turtle Firmware   (安裝動力烏龜韌體 startup.lua)")
-    print("  [6] Install to Disk   (安裝選定模式為本機開機自啟)")
-    print("========================================")
-    write(" Enter choice [1-6] (Default 1): ")
-    local choice = read()
-    choice = choice:gsub("^%s*(.-)%s*$", "%1")
+    
+    if not isInstall then
+        print(" Select Action:")
+        print("  [1] Install to Disk  (寫入磁碟 / 開機自啟)")
+        print("  [2] Run Directly     (直接從 GitHub Release 執行)")
+        print("========================================")
+        write(" Enter Action [1-2] (Default 1): ")
+        local actionChoice = read()
+        actionChoice = actionChoice:gsub("^%s*(.-)%s*$", "%1")
+        if actionChoice == "2" or actionChoice == "run" or actionChoice == "r" then
+            isInstall = false
+        else
+            isInstall = true
+        end
+    end
 
-    if choice == "2" or choice == "fcc" then
-        targetType = "fcc"
-    elseif choice == "3" or choice == "display" then
-        targetType = "display"
-    elseif choice == "4" or choice == "run" then
-        targetType = "run"
-    elseif choice == "5" or choice == "turtle" then
-        targetType = "turtle"
-    elseif choice == "6" or choice == "install" then
-        isInstall = true
-        print("\n Which component to install as startup?")
-        print(" [1] FCC-CLI [2] FCC Core [3] Cockpit Display [4] Run [5] Turtle")
-        write(" Choice [1-5]: ")
-        local subChoice = read():gsub("^%s*(.-)%s*$", "%1")
-        if subChoice == "2" then targetType = "fcc"
-        elseif subChoice == "3" then targetType = "display"
-        elseif subChoice == "4" then targetType = "run"
-        elseif subChoice == "5" then targetType = "turtle"
-        else targetType = "cli" end
+    if isInstall then
+        print("\n--- Install Component to Disk (startup.lua) ---")
+        print("  [1] FCC Flight Core   (飛控大腦 - 20Hz 純計算後台)")
+        print("  [2] FCC-CLI Console   (命令列終端 - 輸入 go 100 100 等)")
+        print("  [3] Cockpit Display   (駕駛艙螢幕 - DirectGPU / 儀表板)")
+        print("  [4] All-In-One Run    (單機一體化全功能飛控)")
+        print("  [5] Turtle Node       (動力烏龜韌體 - 安裝後自動重啟)")
+        print("----------------------------------------")
+        write(" Enter Component [1-5] (Default 1): ")
+        local sub = read():gsub("^%s*(.-)%s*$", "%1")
+        if sub == "2" or sub == "cli" then targetType = "cli"
+        elseif sub == "3" or sub == "display" then targetType = "display"
+        elseif sub == "4" or sub == "run" then targetType = "run"
+        elseif sub == "5" or sub == "turtle" then targetType = "turtle"
+        else targetType = "fcc" end
     else
-        targetType = "cli" -- 預設啟動 CLI
+        print("\n--- Run Latest Component from Release ---")
+        print("  [1] FCC-CLI Console   (命令列終端 - 即時儀表與指令)")
+        print("  [2] FCC Flight Core   (飛控大腦 - 20Hz 純計算後台)")
+        print("  [3] Cockpit Display   (駕駛艙螢幕 - DirectGPU / 儀表板)")
+        print("  [4] All-In-One Run    (單機一體化全功能飛控)")
+        print("----------------------------------------")
+        write(" Enter Component [1-4] (Default 1): ")
+        local sub = read():gsub("^%s*(.-)%s*$", "%1")
+        if sub == "2" or sub == "fcc" then targetType = "fcc"
+        elseif sub == "3" or sub == "display" then targetType = "display"
+        elseif sub == "4" or sub == "run" then targetType = "run"
+        else targetType = "cli" end
     end
 end
 
+-- 3. 設定資產對應表
 local assetMap = {
     run     = { asset = "run.lua",            saveAs = "run.lua" },
     fcc     = { asset = "fcc.lua",            saveAs = "fcc.lua" },
@@ -103,91 +118,113 @@ local targetConfig = assetMap[targetType] or assetMap.cli
 local ASSET_NAME = targetConfig.asset
 local SAVE_FILENAME = targetConfig.saveAs
 
-local apiHeaders = {
+print(string.format("\nTarget: %s (%s)", ASSET_NAME, isInstall and "INSTALL TO DISK" or "RUN LATEST"))
+
+-- 4. 從 GitHub Releases 直接下載發布資產 (Direct Release Asset Download)
+local releaseAssetUrl = string.format("https://github.com/%s/%s/releases/latest/download/%s", OWNER, REPO, ASSET_NAME)
+local httpHeaders = {
     ["User-Agent"] = "ComputerCraft-Client",
-    ["Accept"] = "application/vnd.github.v3+json",
     ["Cache-Control"] = "no-cache"
 }
 
-print(string.format("\nTarget: %s (%s)", ASSET_NAME, isInstall and "INSTALL TO DISK" or "RUN LATEST"))
-print("Checking GitHub for the latest release...")
+print(string.format("Connecting to GitHub Release: '%s'...", ASSET_NAME))
 
-local downloadUrl = nil
-local releaseTag = "latest"
+local code = nil
+local downloadSource = "Release Direct"
 
--- 1. 嘗試由 GitHub Releases API 獲取下載連結
-local apiUrl = ("https://api.github.com/repos/%s/%s/releases/latest"):format(OWNER, REPO)
-local okApi, releaseResponse = pcall(function() return http.get(apiUrl, apiHeaders) end)
+-- 嘗試 1: 直接從 Release Asset 下載 (最快、免 API 限制)
+local okRel, respRel = pcall(function() return http.get(releaseAssetUrl, httpHeaders) end)
+if okRel and respRel then
+    local resCode = respRel.getResponseCode()
+    if resCode == 200 then
+        code = respRel.readAll()
+    end
+    respRel.close()
+end
 
-if okApi and releaseResponse then
-    local releaseDataRaw = releaseResponse.readAll()
-    releaseResponse.close()
-    local releaseData = textutils.unserializeJSON(releaseDataRaw)
-    if releaseData and releaseData.assets then
-        releaseTag = releaseData.tag_name or "latest"
-        for _, asset in ipairs(releaseData.assets) do
-            if asset.name == ASSET_NAME then
-                downloadUrl = asset.browser_download_url
-                break
+-- 嘗試 2: 若直接下載失敗，透過 GitHub Releases API 獲取 browser_download_url
+if not code or #code < 50 then
+    local apiUrl = string.format("https://api.github.com/repos/%s/%s/releases/latest", OWNER, REPO)
+    local okApi, respApi = pcall(function() return http.get(apiUrl, httpHeaders) end)
+    if okApi and respApi then
+        local apiDataRaw = respApi.readAll()
+        respApi.close()
+        local releaseData = textutils.unserializeJSON(apiDataRaw)
+        if releaseData and releaseData.assets then
+            for _, asset in ipairs(releaseData.assets) do
+                if asset.name == ASSET_NAME and asset.browser_download_url then
+                    local okAsset, respAsset = pcall(function() return http.get(asset.browser_download_url, httpHeaders) end)
+                    if okAsset and respAsset then
+                        code = respAsset.readAll()
+                        respAsset.close()
+                        downloadSource = "Release API (" .. (releaseData.tag_name or "latest") .. ")"
+                        break
+                    end
+                end
             end
         end
     end
 end
 
--- 2. 若 API 受到 Rate Limit 限制或找不到 Asset，自動降級使用 Raw GitHub
-if not downloadUrl then
-    print("Notice: API unlisted or rate-limited. Falling back to Raw GitHub...")
-    downloadUrl = ("https://raw.githubusercontent.com/%s/%s/%s/%s"):format(OWNER, REPO, BRANCH, ASSET_NAME)
-end
-
-print(string.format("Downloading '%s' [%s]...", ASSET_NAME, releaseTag))
-
-local fileResponse = http.get(downloadUrl, {
-    ["User-Agent"] = "ComputerCraft-Client",
-    ["Cache-Control"] = "no-cache"
-})
-
-if not fileResponse then
-    printError("Error: Failed to download asset from " .. downloadUrl)
-    return
-end
-
-local code = fileResponse.readAll()
-fileResponse.close()
-
+-- 嘗試 3: 備援降級 (Raw GitHub)
 if not code or #code < 50 then
-    printError("Error: Downloaded file is empty or corrupted.")
-    return
-end
-
--- 儲存至本機檔案 (若指定 install 或 target 為 turtle)
-if isInstall or targetType == "turtle" then
-    local f = fs.open(SAVE_FILENAME, "w")
-    if f then
-        f.write(code)
-        f.close()
-        print(string.format("Successfully installed to '%s'!", SAVE_FILENAME))
-        if targetType == "turtle" then
-            print("Rebooting turtle in 1 second...")
-            sleep(1)
-            os.reboot()
-            return
-        end
-    else
-        printError("Error: Failed to write to " .. SAVE_FILENAME)
+    print("Notice: Release asset unreachable, falling back to Raw GitHub branch...")
+    local rawUrl = string.format("https://raw.githubusercontent.com/%s/%s/%s/%s", OWNER, REPO, BRANCH, ASSET_NAME)
+    local okRaw, respRaw = pcall(function() return http.get(rawUrl, httpHeaders) end)
+    if okRaw and respRaw then
+        code = respRaw.readAll()
+        respRaw.close()
+        downloadSource = "Raw GitHub (" .. BRANCH .. ")"
     end
 end
 
-print("Executing " .. ASSET_NAME .. "...")
-sleep(0.3)
+if not code or #code < 50 then
+    printError("Error: Failed to download asset '" .. ASSET_NAME .. "'. Check internet connection.")
+    return
+end
 
--- 載入並執行程式碼
+print(string.format("Download completed via [%s] (%d bytes).", downloadSource, #code))
+
+-- 5. 儲存至本機檔案 (若指定 install 或 target 為 turtle)
+if isInstall or targetType == "turtle" then
+    -- 儲存為特定程式檔名
+    if SAVE_FILENAME ~= "startup.lua" then
+        local f = fs.open(SAVE_FILENAME, "w")
+        if f then
+            f.write(code)
+            f.close()
+            print(string.format("[OK] Saved file to '%s'", SAVE_FILENAME))
+        end
+    end
+
+    -- 儲存為開機自啟 startup.lua
+    local fStart = fs.open("startup.lua", "w")
+    if fStart then
+        fStart.write(code)
+        fStart.close()
+        print(string.format("[OK] Successfully installed '%s' as 'startup.lua'!", ASSET_NAME))
+    else
+        printError("Error: Failed to write to startup.lua")
+    end
+
+    if targetType == "turtle" then
+        print("\nRebooting turtle in 1 second...")
+        sleep(1)
+        os.reboot()
+        return
+    end
+
+    print("\nInstallation finished! Launching program now...")
+    sleep(0.5)
+end
+
+-- 6. 載入並執行程式碼
 local loader = load or loadstring
 local unpacker = table.unpack or unpack
 
 local fn, err = loader(code, ASSET_NAME)
 if not fn then
-    printError("Syntax error in downloaded file: " .. tostring(err))
+    printError("Syntax error in downloaded code: " .. tostring(err))
     return
 end
 

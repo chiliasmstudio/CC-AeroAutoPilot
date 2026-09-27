@@ -94,38 +94,66 @@
 ### 步驟 2：連接網路纜線
 * 使用 **CC Networking Cable** 將 4 隻烏龜的 Wired Modem、高度計、陀螺儀與外接螢幕全部拉線連接至駕駛艙的 **Advanced Computer**。
 
-## 🚀 安裝與啟動 (一鍵自動下載最新 Release)
+## 🚀 安裝與啟動 (萬能啟動器 boot.lua)
 
-本專案支援 **「分散式多電腦架構（推薦）」** 與 **「單機一體化架構」**。使用隨附的 `boot.lua` 可直接從 GitHub Release 自動下載最新程式：
-
-### 方案 A：分散式雙電腦航電（推薦，徹底解決 Too long without yielding）
-將飛控大腦與駕駛艙螢幕分開至兩台電腦：
+在 CC 電腦或烏龜上**只需執行 `boot.lua`** 即可完成全部模式的安裝與即時運行：
 
 ```bash
-# 1. 飛控大腦電腦 (FCC - 純計算，接高度計/姿態儀/導航桌/數據機):
-wget run https://raw.githubusercontent.com/chiliasmstudio/CC-AeroAutoPilot/main/boot.lua fcc
-
-# 若想將其安裝為開機自動啟動:
-wget run https://raw.githubusercontent.com/chiliasmstudio/CC-AeroAutoPilot/main/boot.lua install fcc
-
-# 2. 駕駛艙螢幕電腦 (CDS - 接螢幕/GPU/數據機，可安裝多台聯動):
-wget run https://raw.githubusercontent.com/chiliasmstudio/CC-AeroAutoPilot/main/boot.lua display
-
-# 若想將其安裝為開機自動啟動:
-wget run https://raw.githubusercontent.com/chiliasmstudio/CC-AeroAutoPilot/main/boot.lua install display
+# 萬能指令 (直接載入互動選單):
+wget run https://raw.githubusercontent.com/chiliasmstudio/CC-AeroAutoPilot/main/boot.lua
+```
+或下載後自由選擇：
+```bash
+wget https://raw.githubusercontent.com/chiliasmstudio/CC-AeroAutoPilot/main/boot.lua boot
+boot
 ```
 
-### 方案 B：單機一體化航電 (適合小型飛船或單螢幕)
-```bash
-# 在駕駛艙單一電腦直接運行:
-wget run https://raw.githubusercontent.com/chiliasmstudio/CC-AeroAutoPilot/main/boot.lua run
+---
+
+### 📋 互動選單架構
+
+若執行 `boot` 未帶參數，將顯示清晰的階層式選擇介面：
+
+```text
+========================================
+   CC-AeroAutoPilot Universal Booter    
+========================================
+ Select Action:
+  [1] Install to Disk  (寫入磁碟 / 開機自啟 startup.lua)
+  [2] Run Directly     (直接從 GitHub Release 執行)
+========================================
 ```
 
-### 方案 C：動力推進烏龜安裝
+- **選擇 [1] Install to Disk (寫入本機)**：
+  - `[1] FCC Flight Core`：安裝分散式飛控大腦為 `startup.lua` (20Hz 純計算)
+  - `[2] FCC-CLI Console`：安裝獨立命令終端為 `startup.lua` (輸入 `go 100 100` 等)
+  - `[3] Cockpit Display`：安裝駕駛艙螢幕系統為 `startup.lua` (DirectGPU / 觸控儀表)
+  - `[4] All-In-One Run`：安裝單機一體化全功能飛控為 `startup.lua`
+  - `[5] Turtle Node`：安裝動力烏龜韌體為 `startup.lua` 並自動重啟
+
+- **選擇 [2] Run Directly (直接運行最新版)**：
+  - `[1] FCC-CLI Console` (命令終端)
+  - `[2] FCC Flight Core` (飛控大腦)
+  - `[3] Cockpit Display` (駕駛艙螢幕)
+  - `[4] All-In-One Run` (單機一體化飛控)
+
+---
+
+### ⚡ 快捷指令（免進選單直接執行）
+
 ```bash
-# 在動力烏龜 (FL, FR, BL, BR, FWD, BWD, LEFT, RIGHT) 內直接執行安裝:
-label set FL
-wget run https://raw.githubusercontent.com/chiliasmstudio/CC-AeroAutoPilot/main/boot.lua turtle
+# 1. 一鍵安裝為開機自啟程式 (startup.lua):
+boot install fcc      # 安裝 分散式飛控大腦
+boot install cli      # 安裝 獨立命令列終端
+boot install display  # 安裝 駕駛艙螢幕
+boot install run      # 安裝 一體化飛控
+boot install turtle   # 安裝 動力烏龜韌體並自動重啟
+
+# 2. 直接從 GitHub Release 下載最新版運行:
+boot cli              # 啟動 FCC-CLI 終端
+boot fcc              # 啟動 FCC 飛控大腦
+boot display          # 啟動 駕駛艙螢幕
+boot run              # 啟動 一體化飛控
 ```
 
 ---
