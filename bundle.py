@@ -457,6 +457,7 @@ local function broadcastTelemetry()
             LEFT = FlightCore.getQuadHealth("LEFT"),
             RIGHT = FlightCore.getQuadHealth("RIGHT")
         },
+        hw = (FlightCore.getHardwareInventory and FlightCore.getHardwareInventory()) or nil,
         gimbalAvailable = FlightCore.gimbalAvailable,
         timestamp = os.epoch("utc")
     }
@@ -628,6 +629,11 @@ local FlightCore = {{
     }},
     turtles = {{}},
     quadHealth = {{}},
+    hw = {{
+        displays = {{ hasDirectGpu=false, tomsCount=0, monitorsCount=0, totalScreens=0 }},
+        engines = {{ lift={{online=0, total=0}}, cruise={{online=0, total=0}}, steer={{online=0, total=0}}, totalOnline=0, totalCount=0 }},
+        avionics = {{ onBody=false, aic=false, ins=false, navTable=false, alti=false, gimbal=false, modems=0, navSource="NONE" }}
+    }},
     gimbalAvailable = false,
     modems = {{}},
     lastPacketTime = 0,
@@ -799,6 +805,14 @@ function FlightCore.getQuadHealth(role)
     }}
 end
 
+function FlightCore.getHardwareInventory()
+    return FlightCore.hw or {{
+        displays = {{ hasDirectGpu=false, tomsCount=0, monitorsCount=0, totalScreens=0 }},
+        engines = {{ lift={{online=0, total=0}}, cruise={{online=0, total=0}}, steer={{online=0, total=0}}, totalOnline=0, totalCount=0 }},
+        avionics = {{ onBody=false, aic=false, ins=false, navTable=false, alti=false, gimbal=false, modems=0, navSource="NONE" }}
+    }}
+end
+
 function FlightCore.handleModemMessage(side, ch, replyCh, msg, dist)
     if ch == 102 and type(msg) == "table" and msg.type == "FCC_TELEMETRY" then
         FlightCore.lastPacketTime = os.epoch("utc")
@@ -832,6 +846,9 @@ function FlightCore.handleModemMessage(side, ch, replyCh, msg, dist)
         end
         if msg.quadHealth then
             FlightCore.quadHealth = msg.quadHealth
+        end
+        if msg.hw then
+            FlightCore.hw = msg.hw
         end
         FlightCore.gimbalAvailable = msg.gimbalAvailable or false
     end

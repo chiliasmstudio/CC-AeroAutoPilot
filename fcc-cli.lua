@@ -239,8 +239,52 @@ local function executeCommand(args, out)
         out.printError("Usage: update turtles")
         return true
 
+    -- 硬體清單與系統狀態: sys / hw / installed / inventory
+    elseif cmd == "sys" or cmd == "hw" or cmd == "installed" or cmd == "inventory" then
+        if latestTele and latestTele.hw then
+            local hw = latestTele.hw
+            local d = hw.displays or {}
+            local e = hw.engines or {}
+            local a = hw.avionics or {}
+            local el = e.lift or {}
+            local ec = e.cruise or {}
+            local es = e.steer or {}
+
+            out.setTextColor(colors.cyan)
+            out.print("=== INSTALLED HARDWARE & SYSTEMS ===")
+            out.setTextColor(colors.yellow)
+            out.print("[1] DISPLAYS & GPU HARDWARE:")
+            out.setTextColor(colors.white)
+            out.print(string.format("    DirectGPU : %s", d.hasDirectGpu and "YES (CC-DirectGPU HW Fast)" or "NO (Not Found)"))
+            out.print(string.format("    Screens   : Tom's GPU:%d | Native Mon:%d (Total: %d)", d.tomsCount or 0, d.monitorsCount or 0, d.totalScreens or 0))
+
+            out.setTextColor(colors.yellow)
+            out.print("[2] PROPULSION ENGINE NODES:")
+            out.setTextColor(colors.white)
+            out.print(string.format("    Lift (4-Quad): FL:%d FR:%d BL:%d BR:%d (Online: %d/%d)", el.FL or 0, el.FR or 0, el.BL or 0, el.BR or 0, el.online or 0, el.total or 0))
+            out.print(string.format("    Cruise Thrust: FWD:%d | BWD:%d (Online: %d/%d)", ec.FWD or 0, ec.BWD or 0, ec.online or 0, ec.total or 0))
+            out.print(string.format("    Lateral/Steer: LEFT:%d | RIGHT:%d (Online: %d/%d)", es.LEFT or 0, es.RIGHT or 0, es.online or 0, es.total or 0))
+
+            out.setTextColor(colors.yellow)
+            out.print("[3] AVIONICS & SENSORS:")
+            out.setTextColor(colors.white)
+            local aicStatus = a.onBody and "DETECTED (ON BODY PHYSICS)" or (a.aic and "DETECTED" or "STANDBY/SEARCHING")
+            out.print(string.format("    CCPE AIC/FMC : %s", aicStatus))
+            out.print(string.format("    Sensors & Net: Alti:%s | Gyro:%s | NavTab:%s | Modems:%d", a.alti and "ON" or "OFF", a.gimbal and "ON" or "OFF", a.navTable and "ON" or "OFF", a.modems or 0))
+            if latestTele.nav and latestTele.nav.x and latestTele.nav.z then
+                out.print(string.format("    Position Fix : X:%.0f Y:%.0f Z:%.0f (Source: %s)", latestTele.nav.x, latestTele.nav.y or latestTele.currentAlt or 0, latestTele.nav.z, a.navSource or "INS"))
+            else
+                out.print("    Position Fix : [ SEARCHING AIC / GPS / NAV_TABLE ]")
+            end
+        else
+            out.setTextColor(colors.yellow)
+            out.print("[!] Telemetry hardware data not received yet. Requesting rescan from FCC...")
+            sendFccCmd({ cmd = "RESCAN_HW" })
+        end
+        return true
+
     -- 硬體重掃: rescan
-    elseif cmd == "rescan" or cmd == "scan" or cmd == "hw" then
+    elseif cmd == "rescan" or cmd == "scan" then
         sendFccCmd({ cmd = "RESCAN_HW" })
         out.print("[OK] Hardware rescan commanded.")
         return true
@@ -248,6 +292,8 @@ local function executeCommand(args, out)
     -- 說明文件: help
     elseif cmd == "help" or cmd == "?" or cmd == "man" then
         out.print("=== Available Commands ===")
+        out.print(" sys / hw         - Display installed systems & hardware inventory")
+        out.print(" rescan           - Trigger hardware & sensor rescan on FCC")
         out.print(" go <x> <z> [r]   - Navigate to coordinates (radius default 20m)")
         out.print(" cancel           - Cancel waypoint navigation")
         out.print(" alt <alt>        - Set target altitude (e.g. alt 200, alt +50)")

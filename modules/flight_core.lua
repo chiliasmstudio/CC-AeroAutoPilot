@@ -323,6 +323,95 @@ function FlightCore.updateNavigation()
     end
 end
 
+function FlightCore.getHardwareInventory()
+    -- 1. 顯示與 GPU 硬體
+    local dgpu = false
+    local tomCount = 0
+    local monCount = 0
+    for _, name in ipairs(peripheral.getNames()) do
+        local pType = string.lower(tostring(peripheral.getType(name) or ""))
+        if pType == "directgpu" or pType == "direct_gpu" then
+            dgpu = true
+        elseif pType == "tm_gpu" or pType == "tms_gpu" or pType == "tm_monitor" or pType:find("tom") then
+            tomCount = tomCount + 1
+        elseif pType == "monitor" then
+            monCount = monCount + 1
+        end
+    end
+
+    -- 2. 引擎動力
+    local qFL = FlightCore.getQuadHealth("FL")
+    local qFR = FlightCore.getQuadHealth("FR")
+    local qBL = FlightCore.getQuadHealth("BL")
+    local qBR = FlightCore.getQuadHealth("BR")
+    local qFWD = FlightCore.getQuadHealth("FWD")
+    local qBWD = FlightCore.getQuadHealth("BWD")
+    local qLEFT = FlightCore.getQuadHealth("LEFT")
+    local qRIGHT = FlightCore.getQuadHealth("RIGHT")
+
+    local liftOnline = qFL.online + qFR.online + qBL.online + qBR.online
+    local liftTotal  = qFL.total + qFR.total + qBL.total + qBR.total
+    local cruiseOnline = qFWD.online + qBWD.online
+    local cruiseTotal  = qFWD.total + qBWD.total
+    local steerOnline  = qLEFT.online + qRIGHT.online
+    local steerTotal   = qLEFT.total + qRIGHT.total
+
+    -- 3. CCPE 物理實體與感測器探測
+    local onPhysicsBody = false
+    local ccpeSensors = {}
+    local ccpeOk, ss = pcall(require, "ccpe.sensor_system")
+    if ccpeOk and ss and ss.isOnBody then
+        local okOn, onB = pcall(function() return ss.isOnBody() end)
+        if okOn and onB then
+            onPhysicsBody = true
+            local okS, sList = pcall(function() return ss.getSensors() end)
+            if okS and type(sList) == "table" then
+                ccpeSensors = sList
+            end
+        end
+    end
+
+    -- 4. 航電感測器
+    local hasAlti = (FlightCore.altiSensor ~= nil)
+    local hasGimbal = (FlightCore.gimbalSensor ~= nil) or FlightCore.gimbalAvailable
+    local hasNavTable = (FlightCore.navTable ~= nil)
+    local hasAIC = (FlightCore.aicSensor ~= nil) or onPhysicsBody
+    local modemCount = #(FlightCore.modems or {})
+
+    return {
+        displays = {
+            hasDirectGpu = dgpu,
+            tomsCount = tomCount,
+            monitorsCount = monCount,
+            totalScreens = (dgpu and 1 or 0) + tomCount + monCount
+        },
+        engines = {
+            lift = { online = liftOnline, total = liftTotal, FL = qFL.total, FR = qFR.total, BL = qBL.total, BR = qBR.total, FL_on = qFL.online, FR_on = qFR.online, BL_on = qBL.online, BR_on = qBR.online },
+            cruise = { online = cruiseOnline, total = cruiseTotal, FWD = qFWD.total, BWD = qBWD.total, FWD_on = qFWD.online, BWD_on = qBWD.online },
+            steer = { online = steerOnline, total = steerTotal, LEFT = qLEFT.total, RIGHT = qRIGHT.total, LEFT_on = qLEFT.online, RIGHT_on = qRIGHT.online },
+            totalOnline = liftOnline + cruiseOnline + steerOnline,
+            totalCount = liftTotal + cruiseTotal + steerTotal
+        },
+        avionics = {
+            onBody = onPhysicsBody,
+            sensorCount = #ccpeSensors,
+            aic = hasAIC,
+            ins = (FlightCore.nav.source == "INS" or FlightCore.nav.source == "AIC"),
+            navTable = hasNavTable,
+            alti = hasAlti,
+            gimbal = hasGimbal,
+            modems = modemCount,
+            navSource = FlightCore.nav.source or "NONE",
+            hasCoords = (FlightCore.nav.x ~= nil and FlightCore.nav.z ~= nil),
+            x = FlightCore.nav.x,
+            y = FlightCore.nav.y,
+            z = FlightCore.nav.z,
+            yaw = FlightCore.nav.yaw,
+            speed = FlightCore.nav.speed
+        }
+    }
+end
+
 local function resolveRole(lbl)
     if not lbl or lbl == "" then return nil end
     local u = string.upper(tostring(lbl)):gsub("^%s*(.-)%s*$", "%1")

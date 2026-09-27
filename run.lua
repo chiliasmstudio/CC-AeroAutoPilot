@@ -344,6 +344,95 @@ function FlightCore.updateNavigation()
     end
 end
 
+function FlightCore.getHardwareInventory()
+    -- 1. 顯示與 GPU 硬體
+    local dgpu = false
+    local tomCount = 0
+    local monCount = 0
+    for _, name in ipairs(peripheral.getNames()) do
+        local pType = string.lower(tostring(peripheral.getType(name) or ""))
+        if pType == "directgpu" or pType == "direct_gpu" then
+            dgpu = true
+        elseif pType == "tm_gpu" or pType == "tms_gpu" or pType == "tm_monitor" or pType:find("tom") then
+            tomCount = tomCount + 1
+        elseif pType == "monitor" then
+            monCount = monCount + 1
+        end
+    end
+
+    -- 2. 引擎動力
+    local qFL = FlightCore.getQuadHealth("FL")
+    local qFR = FlightCore.getQuadHealth("FR")
+    local qBL = FlightCore.getQuadHealth("BL")
+    local qBR = FlightCore.getQuadHealth("BR")
+    local qFWD = FlightCore.getQuadHealth("FWD")
+    local qBWD = FlightCore.getQuadHealth("BWD")
+    local qLEFT = FlightCore.getQuadHealth("LEFT")
+    local qRIGHT = FlightCore.getQuadHealth("RIGHT")
+
+    local liftOnline = qFL.online + qFR.online + qBL.online + qBR.online
+    local liftTotal  = qFL.total + qFR.total + qBL.total + qBR.total
+    local cruiseOnline = qFWD.online + qBWD.online
+    local cruiseTotal  = qFWD.total + qBWD.total
+    local steerOnline  = qLEFT.online + qRIGHT.online
+    local steerTotal   = qLEFT.total + qRIGHT.total
+
+    -- 3. CCPE 物理實體與感測器探測
+    local onPhysicsBody = false
+    local ccpeSensors = {}
+    local ccpeOk, ss = pcall(require, "ccpe.sensor_system")
+    if ccpeOk and ss and ss.isOnBody then
+        local okOn, onB = pcall(function() return ss.isOnBody() end)
+        if okOn and onB then
+            onPhysicsBody = true
+            local okS, sList = pcall(function() return ss.getSensors() end)
+            if okS and type(sList) == "table" then
+                ccpeSensors = sList
+            end
+        end
+    end
+
+    -- 4. 航電感測器
+    local hasAlti = (FlightCore.altiSensor ~= nil)
+    local hasGimbal = (FlightCore.gimbalSensor ~= nil) or FlightCore.gimbalAvailable
+    local hasNavTable = (FlightCore.navTable ~= nil)
+    local hasAIC = (FlightCore.aicSensor ~= nil) or onPhysicsBody
+    local modemCount = #(FlightCore.modems or {})
+
+    return {
+        displays = {
+            hasDirectGpu = dgpu,
+            tomsCount = tomCount,
+            monitorsCount = monCount,
+            totalScreens = (dgpu and 1 or 0) + tomCount + monCount
+        },
+        engines = {
+            lift = { online = liftOnline, total = liftTotal, FL = qFL.total, FR = qFR.total, BL = qBL.total, BR = qBR.total, FL_on = qFL.online, FR_on = qFR.online, BL_on = qBL.online, BR_on = qBR.online },
+            cruise = { online = cruiseOnline, total = cruiseTotal, FWD = qFWD.total, BWD = qBWD.total, FWD_on = qFWD.online, BWD_on = qBWD.online },
+            steer = { online = steerOnline, total = steerTotal, LEFT = qLEFT.total, RIGHT = qRIGHT.total, LEFT_on = qLEFT.online, RIGHT_on = qRIGHT.online },
+            totalOnline = liftOnline + cruiseOnline + steerOnline,
+            totalCount = liftTotal + cruiseTotal + steerTotal
+        },
+        avionics = {
+            onBody = onPhysicsBody,
+            sensorCount = #ccpeSensors,
+            aic = hasAIC,
+            ins = (FlightCore.nav.source == "INS" or FlightCore.nav.source == "AIC"),
+            navTable = hasNavTable,
+            alti = hasAlti,
+            gimbal = hasGimbal,
+            modems = modemCount,
+            navSource = FlightCore.nav.source or "NONE",
+            hasCoords = (FlightCore.nav.x ~= nil and FlightCore.nav.z ~= nil),
+            x = FlightCore.nav.x,
+            y = FlightCore.nav.y,
+            z = FlightCore.nav.z,
+            yaw = FlightCore.nav.yaw,
+            speed = FlightCore.nav.speed
+        }
+    }
+end
+
 local function resolveRole(lbl)
     if not lbl or lbl == "" then return nil end
     local u = string.upper(tostring(lbl)):gsub("^%s*(.-)%s*$", "%1")
@@ -1695,46 +1784,78 @@ Drivers.direct = {
             addBtn(6 + (bW4+4)*3, r3Y, bW4, rowH, isFull and "[ STOP IDLE ]" or "STOP", stopBg, {255, 255, 255}, function() FlightCore.stopEngines() end)
 
         elseif scr.currentView == "SYS" then
-            local hasTrans = (FlightCore.getQuadHealth("FWD").total > 0) or
-                             (FlightCore.getQuadHealth("BWD").total > 0) or
-                             (FlightCore.getQuadHealth("LEFT").total > 0) or
-                             (FlightCore.getQuadHealth("RIGHT").total > 0)
-
-            local slots = {
-                {slot="FL", col=1, row=1, name="FL Quad"},
-                {slot="FR", col=2, row=1, name="FR Quad"},
-                {slot="BL", col=1, row=2, name="BL Quad"},
-                {slot="BR", col=2, row=2, name="BR Quad"}
+            local hw = (FlightCore.getHardwareInventory and FlightCore.getHardwareInventory()) or FlightCore.hw or {
+                displays = { hasDirectGpu=false, tomsCount=0, monitorsCount=0, totalScreens=0 },
+                engines = { lift={online=0, total=0}, cruise={online=0, total=0}, steer={online=0, total=0}, totalOnline=0, totalCount=0 },
+                avionics = { onBody=false, aic=false, ins=false, navTable=false, alti=false, gimbal=false, modems=0, navSource="NONE" }
             }
-            if hasTrans then
-                table.insert(slots, {slot="FWD", col=1, row=3, name="FWD Thrust"})
-                table.insert(slots, {slot="BWD", col=2, row=3, name="BWD Thrust"})
-                table.insert(slots, {slot="LEFT", col=1, row=4, name="LEFT Turn"})
-                table.insert(slots, {slot="RIGHT", col=2, row=4, name="RIGHT Turn"})
-            end
+            local d = hw.displays or {}
+            local e = hw.engines or {}
+            local a = hw.avionics or {}
 
-            local maxRows = hasTrans and 4 or 2
-            local cardW = math.floor((sw - 18) / 2)
             local btmSysH = btnRowH
             local btmY = sh - btmSysH - 4
-            local cardH = math.max(14, math.floor((btmY - topMargin - 4 - (maxRows - 1) * 3) / maxRows))
-            local startY = topMargin
+            local availH = btmY - topMargin - 4
+            local cardH = math.max(18, math.floor((availH - 8) / 3))
+            local cardW = sw - 12
+            local startX = 6
 
-            for _, s in ipairs(slots) do
-                local cx = 6 + (s.col - 1) * (cardW + 6)
-                local cy = startY + (s.row - 1) * (cardH + 3)
-                local qH = FlightCore.getQuadHealth(s.slot)
-                local online = qH.online > 0
-                local bg = online and {20, 35, 30} or {40, 20, 20}
-                gpu.fillRect(dispId, cx, cy, cardW, cardH, bg[1], bg[2], bg[3])
+            -- 1. DISPLAYS & GPU
+            local c1Y = topMargin
+            gpu.fillRect(dispId, startX, c1Y, cardW, cardH, 20, 30, 43)
+            gpu.drawText(dispId, isFull and "[1] DISPLAYS & GPU HARDWARE" or "[1] DISPLAYS & GPU", startX + 6, c1Y + 3, 80, 230, 255, "Arial", 9, "bold")
+            local dgpuStr = d.hasDirectGpu and "YES (DirectGPU HW Fast)" or "NO (DirectGPU Not Found)"
+            local dgpuCol = d.hasDirectGpu and {80, 255, 120} or {180, 180, 180}
+            local rowSp1 = math.max(10, math.floor((cardH - 12) / 2))
+            gpu.drawText(dispId, "DirectGPU  : " .. dgpuStr, startX + 8, c1Y + 4 + rowSp1, dgpuCol[1], dgpuCol[2], dgpuCol[3], "Arial", 8, "bold")
+            local scrStr = string.format("Screens    : Tom's GPU:%d | Native Mon:%d (Total: %d)", d.tomsCount or 0, d.monitorsCount or 0, d.totalScreens or 0)
+            if cardH >= 26 then
+                gpu.drawText(dispId, scrStr, startX + 8, c1Y + 4 + rowSp1 * 2, 220, 235, 255, "Arial", 8, "plain")
+            end
 
-                local tagCol = online and {80, 255, 120} or {255, 80, 80}
-                gpu.drawText(dispId, string.format("[%s] %d ENG", s.slot, qH.total), cx + 4, cy + 3, 220, 235, 255, "Arial", 9, "bold")
-                local actStr = (cardW < 75) and string.format("ON:%d P:%d", qH.online, FlightCore.engineOutputs[s.slot] or 0) or string.format("ACT:%d/%d | P:%d", qH.online, qH.total, FlightCore.engineOutputs[s.slot] or 0)
-                local textY = (cardH >= 24) and (cy + math.floor(cardH * 0.45)) or (cy + cardH - 9)
-                if cardH >= 16 then
-                    gpu.drawText(dispId, actStr, cx + 4, textY, tagCol[1], tagCol[2], tagCol[3], "Arial", 8, "bold")
-                end
+            -- 2. PROPULSION NODES
+            local c2Y = c1Y + cardH + 4
+            gpu.fillRect(dispId, startX, c2Y, cardW, cardH, 20, 30, 43)
+            gpu.drawText(dispId, isFull and "[2] PROPULSION ENGINE NODES" or "[2] ENGINES", startX + 6, c2Y + 3, 80, 230, 255, "Arial", 9, "bold")
+            local el = e.lift or {}
+            local ec = e.cruise or {}
+            local es = e.steer or {}
+            local rowSp2 = math.max(9, math.floor((cardH - 12) / 3))
+            local liftStr = string.format("Lift (4-Quad): FL:%d FR:%d BL:%d BR:%d (Act: %d/%d)", el.FL or 0, el.FR or 0, el.BL or 0, el.BR or 0, el.online or 0, el.total or 0)
+            local liftCol = (el.online or 0) > 0 and {80, 255, 120} or {255, 80, 80}
+            gpu.drawText(dispId, liftStr, startX + 8, c2Y + 3 + rowSp2, liftCol[1], liftCol[2], liftCol[3], "Arial", 8, "bold")
+            local cruiseStr = string.format("Cruise Thrust: FWD:%d | BWD:%d (Act: %d/%d)", ec.FWD or 0, ec.BWD or 0, ec.online or 0, ec.total or 0)
+            local cruiseCol = (ec.online or 0) > 0 and {80, 255, 120} or {180, 200, 220}
+            if cardH >= 24 then
+                gpu.drawText(dispId, cruiseStr, startX + 8, c2Y + 3 + rowSp2 * 2, cruiseCol[1], cruiseCol[2], cruiseCol[3], "Arial", 8, "plain")
+            end
+            local steerStr = string.format("Lateral/Steer: LEFT:%d | RIGHT:%d (Act: %d/%d)", es.LEFT or 0, es.RIGHT or 0, es.online or 0, es.total or 0)
+            local steerCol = (es.online or 0) > 0 and {80, 255, 120} or {180, 200, 220}
+            if cardH >= 34 then
+                gpu.drawText(dispId, steerStr, startX + 8, c2Y + 3 + rowSp2 * 3, steerCol[1], steerCol[2], steerCol[3], "Arial", 8, "plain")
+            end
+
+            -- 3. AVIONICS & SENSORS
+            local c3Y = c2Y + cardH + 4
+            gpu.fillRect(dispId, startX, c3Y, cardW, cardH, 20, 30, 43)
+            gpu.drawText(dispId, isFull and "[3] AVIONICS & SENSORS" or "[3] SENSORS", startX + 6, c3Y + 3, 80, 230, 255, "Arial", 9, "bold")
+            local aicStatus = a.onBody and "[DETECTED (ON BODY)]" or (a.aic and "[DETECTED]" or "[STANDBY/SEARCHING]")
+            local aicCol = (a.onBody or a.aic) and {80, 255, 120} or {255, 160, 60}
+            local rowSp3 = math.max(9, math.floor((cardH - 12) / 3))
+            gpu.drawText(dispId, "CCPE AIC/FMC : " .. aicStatus, startX + 8, c3Y + 3 + rowSp3, aicCol[1], aicCol[2], aicCol[3], "Arial", 8, "bold")
+            local sensStr = string.format("Sensors & Net: Alti:%s | Gyro:%s | NavTab:%s | Modems:%d", a.alti and "ON" or "OFF", a.gimbal and "ON" or "OFF", a.navTable and "ON" or "OFF", a.modems or 0)
+            if cardH >= 24 then
+                gpu.drawText(dispId, sensStr, startX + 8, c3Y + 3 + rowSp3 * 2, 220, 235, 255, "Arial", 8, "plain")
+            end
+            local navPosStr = ""
+            if FlightCore.nav.x and FlightCore.nav.z then
+                navPosStr = string.format("Position Fix : X:%.0f Y:%.0f Z:%.0f (Source: %s)", FlightCore.nav.x, FlightCore.nav.y or 0, FlightCore.nav.z, a.navSource or "INS")
+            else
+                navPosStr = "Position Fix : [ SEARCHING AIC / GPS / NAV_TABLE ]"
+            end
+            if cardH >= 34 then
+                local posCol = FlightCore.nav.x and {80, 255, 120} or {255, 205, 75}
+                gpu.drawText(dispId, navPosStr, startX + 8, c3Y + 3 + rowSp3 * 3, posCol[1], posCol[2], posCol[3], "Arial", 8, "plain")
             end
 
             local btmW = math.floor((sw - 16) / 2)
@@ -2720,46 +2841,81 @@ Drivers.tom = {
             addBtn(6 + (bW4+4)*3, r3Y, bW4, rowH, isFull and "[ STOP IDLE ]" or "STOP", stopBg, 0xFFFFFF, function() FlightCore.stopEngines() end)
 
         elseif scr.currentView == "SYS" then
-            local hasTrans = (FlightCore.getQuadHealth("FWD").total > 0) or
-                             (FlightCore.getQuadHealth("BWD").total > 0) or
-                             (FlightCore.getQuadHealth("LEFT").total > 0) or
-                             (FlightCore.getQuadHealth("RIGHT").total > 0)
-
-            local slots = {
-                {slot="FL", col=1, row=1, name="FL Quad"},
-                {slot="FR", col=2, row=1, name="FR Quad"},
-                {slot="BL", col=1, row=2, name="BL Quad"},
-                {slot="BR", col=2, row=2, name="BR Quad"}
+            local hw = (FlightCore.getHardwareInventory and FlightCore.getHardwareInventory()) or FlightCore.hw or {
+                displays = { hasDirectGpu=false, tomsCount=0, monitorsCount=0, totalScreens=0 },
+                engines = { lift={online=0, total=0}, cruise={online=0, total=0}, steer={online=0, total=0}, totalOnline=0, totalCount=0 },
+                avionics = { onBody=false, aic=false, ins=false, navTable=false, alti=false, gimbal=false, modems=0, navSource="NONE" }
             }
-            if hasTrans then
-                table.insert(slots, {slot="FWD", col=1, row=3, name="FWD Thrust"})
-                table.insert(slots, {slot="BWD", col=2, row=3, name="BWD Thrust"})
-                table.insert(slots, {slot="LEFT", col=1, row=4, name="LEFT Turn"})
-                table.insert(slots, {slot="RIGHT", col=2, row=4, name="RIGHT Turn"})
-            end
+            local d = hw.displays or {}
+            local e = hw.engines or {}
+            local a = hw.avionics or {}
 
-            local maxRows = hasTrans and 4 or 2
-            local cardW = math.floor((sw - 18) / 2)
             local btmSysH = btnRowH
             local btmY = sh - btmSysH - 4
-            local cardH = math.max(14, math.floor((btmY - topMargin - 4 - (maxRows - 1) * 3) / maxRows))
-            local startY = topMargin
+            local availH = btmY - topMargin - 4
+            local cardH = math.max(18, math.floor((availH - 8) / 3))
+            local cardW = sw - 12
+            local startX = 6
 
-            for _, s in ipairs(slots) do
-                local cx = 6 + (s.col - 1) * (cardW + 6)
-                local cy = startY + (s.row - 1) * (cardH + 3)
-                local qH = FlightCore.getQuadHealth(s.slot)
-                local online = qH.online > 0
-                sFR(cx, cy, cardW, cardH, online and 0x14231E or 0x281414)
-                sR(cx, cy, cardW, cardH, online and 0x28643C or 0x642828)
+            -- 1. DISPLAYS & GPU
+            local c1Y = topMargin
+            sFR(startX, c1Y, cardW, cardH, 0x141E2B)
+            sR(startX, c1Y, cardW, cardH, 0x283C50)
+            sTxt(startX + 4, c1Y + 3, isFull and "[1] DISPLAYS & GPU HARDWARE" or "[1] DISPLAYS & GPU", 0x50E6FF, 1)
+            local dgpuStr = d.hasDirectGpu and "YES (DirectGPU HW Fast)" or "NO (DirectGPU Not Found)"
+            local dgpuCol = d.hasDirectGpu and 0x50FF78 or 0xB4B4B4
+            local rowSp1 = math.max(10, math.floor((cardH - 12) / 2))
+            sTxt(startX + 6, c1Y + 3 + rowSp1, "DirectGPU  : " .. dgpuStr, dgpuCol, 1)
+            local scrStr = string.format("Screens    : Tom's GPU:%d | Native Mon:%d (Total: %d)", d.tomsCount or 0, d.monitorsCount or 0, d.totalScreens or 0)
+            if cardH >= 26 then
+                sTxt(startX + 6, c1Y + 3 + rowSp1 * 2, scrStr, 0xDCEDFF, 1)
+            end
 
-                local tagCol = online and 0x50FF78 or 0xFF5050
-                sTxt(cx + 4, cy + 3, string.format("[%s] %d ENG", s.slot, qH.total), 0xDCEDFF, 1)
-                local actStr = (cardW < 75) and string.format("ON:%d P:%d", qH.online, FlightCore.engineOutputs[s.slot] or 0) or string.format("ACT:%d/%d | P:%d", qH.online, qH.total, FlightCore.engineOutputs[s.slot] or 0)
-                local textY = (cardH >= 24) and (cy + math.floor(cardH * 0.45)) or (cy + cardH - 8)
-                if cardH >= 16 then
-                    sTxt(cx + 4, textY, actStr, tagCol, 1)
-                end
+            -- 2. PROPULSION NODES
+            local c2Y = c1Y + cardH + 4
+            sFR(startX, c2Y, cardW, cardH, 0x141E2B)
+            sR(startX, c2Y, cardW, cardH, 0x283C50)
+            sTxt(startX + 4, c2Y + 3, isFull and "[2] PROPULSION ENGINE NODES" or "[2] ENGINES", 0x50E6FF, 1)
+            local el = e.lift or {}
+            local ec = e.cruise or {}
+            local es = e.steer or {}
+            local rowSp2 = math.max(9, math.floor((cardH - 12) / 3))
+            local liftStr = string.format("Lift (4-Quad): FL:%d FR:%d BL:%d BR:%d (Act: %d/%d)", el.FL or 0, el.FR or 0, el.BL or 0, el.BR or 0, el.online or 0, el.total or 0)
+            local liftCol = (el.online or 0) > 0 and 0x50FF78 or 0xFF5050
+            sTxt(startX + 6, c2Y + 3 + rowSp2, liftStr, liftCol, 1)
+            local cruiseStr = string.format("Cruise Thrust: FWD:%d | BWD:%d (Act: %d/%d)", ec.FWD or 0, ec.BWD or 0, ec.online or 0, ec.total or 0)
+            local cruiseCol = (ec.online or 0) > 0 and 0x50FF78 or 0xB4C8DC
+            if cardH >= 24 then
+                sTxt(startX + 6, c2Y + 3 + rowSp2 * 2, cruiseStr, cruiseCol, 1)
+            end
+            local steerStr = string.format("Lateral/Steer: LEFT:%d | RIGHT:%d (Act: %d/%d)", es.LEFT or 0, es.RIGHT or 0, es.online or 0, es.total or 0)
+            local steerCol = (es.online or 0) > 0 and 0x50FF78 or 0xB4C8DC
+            if cardH >= 34 then
+                sTxt(startX + 6, c2Y + 3 + rowSp2 * 3, steerStr, steerCol, 1)
+            end
+
+            -- 3. AVIONICS & SENSORS
+            local c3Y = c2Y + cardH + 4
+            sFR(startX, c3Y, cardW, cardH, 0x141E2B)
+            sR(startX, c3Y, cardW, cardH, 0x283C50)
+            sTxt(startX + 4, c3Y + 3, isFull and "[3] AVIONICS & SENSORS" or "[3] SENSORS", 0x50E6FF, 1)
+            local aicStatus = a.onBody and "[DETECTED (ON BODY)]" or (a.aic and "[DETECTED]" or "[STANDBY/SEARCHING]")
+            local aicCol = (a.onBody or a.aic) and 0x50FF78 or 0xFFA03C
+            local rowSp3 = math.max(9, math.floor((cardH - 12) / 3))
+            sTxt(startX + 6, c3Y + 3 + rowSp3, "CCPE AIC/FMC : " .. aicStatus, aicCol, 1)
+            local sensStr = string.format("Sensors & Net: Alti:%s | Gyro:%s | NavTab:%s | Modems:%d", a.alti and "ON" or "OFF", a.gimbal and "ON" or "OFF", a.navTable and "ON" or "OFF", a.modems or 0)
+            if cardH >= 24 then
+                sTxt(startX + 6, c3Y + 3 + rowSp3 * 2, sensStr, 0xDCEDFF, 1)
+            end
+            local navPosStr = ""
+            if FlightCore.nav.x and FlightCore.nav.z then
+                navPosStr = string.format("Position Fix : X:%.0f Y:%.0f Z:%.0f (Source: %s)", FlightCore.nav.x, FlightCore.nav.y or 0, FlightCore.nav.z, a.navSource or "INS")
+            else
+                navPosStr = "Position Fix : [ SEARCHING AIC / GPS / NAV_TABLE ]"
+            end
+            if cardH >= 34 then
+                local posCol = FlightCore.nav.x and 0x50FF78 or 0xFFCD4B
+                sTxt(startX + 6, c3Y + 3 + rowSp3 * 3, navPosStr, posCol, 1)
             end
 
             local btmW = math.floor((sw - 16) / 2)
@@ -3296,43 +3452,62 @@ Drivers.normal = {
             addBtn(5 + colW*3, bY3, colW, rowH, isFull and "[ STOP IDLE ]" or "STOP", "0", stopBg, function() FlightCore.stopEngines() end)
 
         elseif scr.currentView == "SYS" then
-            local hasTrans = (FlightCore.getQuadHealth("FWD").total > 0) or
-                             (FlightCore.getQuadHealth("BWD").total > 0) or
-                             (FlightCore.getQuadHealth("LEFT").total > 0) or
-                             (FlightCore.getQuadHealth("RIGHT").total > 0)
-
-            local slots = {
-                {slot="FL", col=1, row=1, name="FL Quad"},
-                {slot="FR", col=2, row=1, name="FR Quad"},
-                {slot="BL", col=1, row=2, name="BL Quad"},
-                {slot="BR", col=2, row=2, name="BR Quad"}
+            local hw = (FlightCore.getHardwareInventory and FlightCore.getHardwareInventory()) or FlightCore.hw or {
+                displays = { hasDirectGpu=false, tomsCount=0, monitorsCount=0, totalScreens=0 },
+                engines = { lift={online=0, total=0}, cruise={online=0, total=0}, steer={online=0, total=0}, totalOnline=0, totalCount=0 },
+                avionics = { onBody=false, aic=false, ins=false, navTable=false, alti=false, gimbal=false, modems=0, navSource="NONE" }
             }
-            if hasTrans then
-                table.insert(slots, {slot="FWD", col=1, row=3, name="FWD Thrust"})
-                table.insert(slots, {slot="BWD", col=2, row=3, name="BWD Thrust"})
-                table.insert(slots, {slot="LEFT", col=1, row=4, name="LEFT Turn"})
-                table.insert(slots, {slot="RIGHT", col=2, row=4, name="RIGHT Turn"})
+            local d = hw.displays or {}
+            local e = hw.engines or {}
+            local a = hw.avionics or {}
+
+            local curY = 4
+            -- 1. DISPLAYS & GPU
+            self:safeBlit(scr, 2, curY, isFull and "[1] DISPLAYS & GPU HARDWARE" or "[1] DISPLAYS & GPU", "9", "f")
+            curY = curY + 1
+            local dgpuStr = d.hasDirectGpu and "YES (DirectGPU HW Fast)" or "NO (DirectGPU Not Found)"
+            local dgpuCol = d.hasDirectGpu and "d" or "7"
+            self:safeBlit(scr, 3, curY, "DirectGPU  : " .. dgpuStr, dgpuCol, "f")
+            curY = curY + 1
+            local scrStr = string.format("Screens    : Tom's GPU:%d | Native Mon:%d (Total: %d)", d.tomsCount or 0, d.monitorsCount or 0, d.totalScreens or 0)
+            self:safeBlit(scr, 3, curY, scrStr, "0", "f")
+            curY = curY + 1
+
+            -- 2. PROPULSION NODES
+            curY = curY + 1
+            self:safeBlit(scr, 2, curY, isFull and "[2] PROPULSION ENGINE NODES" or "[2] ENGINES", "9", "f")
+            curY = curY + 1
+            local el = e.lift or {}
+            local ec = e.cruise or {}
+            local es = e.steer or {}
+            local liftStr = string.format("Lift (4-Quad): FL:%d FR:%d BL:%d BR:%d (Act: %d/%d)", el.FL or 0, el.FR or 0, el.BL or 0, el.BR or 0, el.online or 0, el.total or 0)
+            self:safeBlit(scr, 3, curY, liftStr, (el.online or 0) > 0 and "5" or "e", "f")
+            curY = curY + 1
+            local cruiseStr = string.format("Cruise Thrust: FWD:%d | BWD:%d (Act: %d/%d)", ec.FWD or 0, ec.BWD or 0, ec.online or 0, ec.total or 0)
+            self:safeBlit(scr, 3, curY, cruiseStr, (ec.online or 0) > 0 and "5" or "7", "f")
+            curY = curY + 1
+            local steerStr = string.format("Lateral/Steer: LEFT:%d | RIGHT:%d (Act: %d/%d)", es.LEFT or 0, es.RIGHT or 0, es.online or 0, es.total or 0)
+            self:safeBlit(scr, 3, curY, steerStr, (es.online or 0) > 0 and "5" or "7", "f")
+            curY = curY + 1
+
+            -- 3. AVIONICS & SENSORS
+            curY = curY + 1
+            self:safeBlit(scr, 2, curY, isFull and "[3] AVIONICS & SENSORS" or "[3] SENSORS", "9", "f")
+            curY = curY + 1
+            local aicStatus = a.onBody and "[DETECTED (ON BODY)]" or (a.aic and "[DETECTED]" or "[STANDBY/SEARCHING]")
+            local aicCol = (a.onBody or a.aic) and "d" or "e"
+            self:safeBlit(scr, 3, curY, "CCPE AIC/FMC : " .. aicStatus, aicCol, "f")
+            curY = curY + 1
+            local sensStr = string.format("Sensors & Net: Alti:%s | Gyro:%s | NavTab:%s | Modems:%d", a.alti and "ON" or "OFF", a.gimbal and "ON" or "OFF", a.navTable and "ON" or "OFF", a.modems or 0)
+            self:safeBlit(scr, 3, curY, sensStr, "0", "f")
+            curY = curY + 1
+            local navPosStr = ""
+            if FlightCore.nav.x and FlightCore.nav.z then
+                navPosStr = string.format("Position Fix : X:%.0f Y:%.0f Z:%.0f (Source: %s)", FlightCore.nav.x, FlightCore.nav.y or 0, FlightCore.nav.z, a.navSource or "INS")
+            else
+                navPosStr = "Position Fix : [ SEARCHING AIC / GPS / NAV_TABLE ]"
             end
-
-            local maxRows = hasTrans and 4 or 2
-            local cardW = math.floor((w - 3) / 2)
-            local cardH = math.max(2, math.floor((h - 6 - maxRows) / maxRows))
-            local startY = 4
-
-            for _, s in ipairs(slots) do
-                local cx = 2 + (s.col - 1) * (cardW + 1)
-                local cy = startY + (s.row - 1) * (cardH + 1)
-                local qH = FlightCore.getQuadHealth(s.slot)
-                local bg = (qH.online > 0) and "5" or "e"
-
-                for r = 0, cardH - 1 do
-                    self:safeBlit(scr, cx, cy + r, string.rep(" ", cardW), "0", bg)
-                end
-                self:safeBlit(scr, cx + 1, cy, string.format("[%s] %d ENG", s.slot, qH.total), "0", bg)
-                if cardH >= 2 then
-                    self:safeBlit(scr, cx + 1, cy + 1, string.format("ACT: %d/%d P:%d", qH.online, qH.total, FlightCore.engineOutputs[s.slot] or 0), "0", bg)
-                end
-            end
+            self:safeBlit(scr, 3, curY, navPosStr, FlightCore.nav.x and "d" or "e", "f")
 
             local btmY = h - 2
             local btmW = math.floor((w - 3) / 2)
