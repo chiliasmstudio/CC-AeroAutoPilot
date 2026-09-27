@@ -5,45 +5,54 @@
 
 local FlightCore = {}
 
--- 1.1 內建 PID 控制器 (v3.8.4 原版標準 PID)
-local PID = {}
-PID.__index = PID
+-- 1.1 高響應高度控制器 (PD-V Controller with Vertical Speed Damping & Anti-Windup)
+local AltController = {}
+AltController.__index = AltController
 
-function PID.new(kp, ki, kd, minOutput, maxOutput)
-    local self = setmetatable({}, PID)
-    self.kp = kp or 1.0
-    self.ki = ki or 0.0
-    self.kd = kd or 0.0
-    self.minOutput = minOutput or -1.0
-    self.maxOutput = maxOutput or 1.0
+function AltController.new(kp, ki, kd, maxOutput)
+    local self = setmetatable({}, AltController)
+    self.kp = kp or 0.45
+    self.ki = ki or 0.03
+    self.kd = kd or 0.70
+    self.maxOutput = maxOutput or 6.0
+    self.minOutput = -(maxOutput or 6.0)
     self.integral = 0
     self.prevError = 0
     self.lastTime = os.epoch("utc") / 1000
     return self
 end
 
-function PID:reset()
+function AltController:reset()
     self.integral = 0
     self.prevError = 0
     self.lastTime = os.epoch("utc") / 1000
 end
 
-function PID:update(error)
+function AltController:update(error, vspeed)
     local now = os.epoch("utc") / 1000
     local dt = now - self.lastTime
-    if dt <= 0 then dt = 0.05 end
+    if dt <= 0 or dt > 0.5 then dt = 0.05 end
     self.lastTime = now
 
+    -- P 比例項
     local p = self.kp * error
+
+    -- I 積分項 (防飽和 Anti-Windup Clamp)
     self.integral = self.integral + error * dt
-    local iMax = math.abs(self.maxOutput) * 0.5
+    local iMax = self.maxOutput * 0.4
     if self.integral > iMax then self.integral = iMax end
     if self.integral < -iMax then self.integral = -iMax end
     local i = self.ki * self.integral
 
-    local derivative = (error - self.prevError) / dt
+    -- D 速度阻尼項 (直接採用垂直下墜/爬升速度 vspeed，杜絕超調與震盪)
+    local d = 0
+    if vspeed ~= nil and type(vspeed) == "number" then
+        d = -self.kd * vspeed
+    else
+        local derivative = (error - self.prevError) / dt
+        d = self.kd * derivative
+    end
     self.prevError = error
-    local d = self.kd * derivative
 
     local output = p + i + d
     if output > self.maxOutput then output = self.maxOutput end
@@ -54,16 +63,16 @@ end
 -- 1.2 飛控狀態 (高度維持與垂直控制)
 FlightCore.state = {
     mode = "IDLE",            -- "IDLE", "HOLD_ALT", "CALIBRATING"
-    targetAlt = 200.0,        -- 預設目標高度 200m
+    targetAlt = 200.0,        -- 預設目標高度
     virtualAlt = 100.0,       -- 虛擬平滑軌跡高度
     baseThrottle = 1.0,       -- 浮點基準推力 (0.01 ~ 15.0)
     statusMsg = "System Ready",
     stableTimer = 0,          -- 穩定停留計時器 (秒)
     calibStartAlt = 0,        -- 校正啟動高度
-    calibTargetAlt = 200.0,   -- 校正目標固定 200m
-    calibPhase = "GROUND_SEARCH", -- "GROUND_SEARCH", "CLIMB_TO_200", "STABILIZE_200"
+    calibTargetAlt = 0,       -- 校正目標高度 (微升 +3m)
+    calibPhase = "GROUND_SEARCH", -- "GROUND_SEARCH", "HOVER_3M"
     calibThrottle = 0.0,      -- 校正微調油門
-    rampRate = 0.0001,        -- 適應性加力速率
+    rampRate = 0.015,         -- 線性加力速率
     fwdThrottle = 0.0,        -- 前進/後退油門 (-15.0 ~ 15.0，正為前進，負為後退)
     turnThrottle = 0.0,       -- 轉向推力 (-15.0 ~ 15.0，正為右推/面向右，負為左推/面向左)
     strafeThrottle = 0.0      -- 相容別名
@@ -87,8 +96,8 @@ FlightCore.nav = {
     arrivalRadius = 20.0  -- 目的地到達判定半徑 (可偏差半徑 20 格)
 }
 
--- v3.8.4 高度控制專用 PID (僅控制 FL, FR, BL, BR 垂直升力)
-FlightCore.altPID = PID.new(0.5, 0.02, 0.6, -1.5, 1.5)
+-- 高度控制專用高響應 PD-V 控制器 (僅控制 FL, FR, BL, BR 垂直升力，動態權限 ±6.0)
+FlightCore.altPID = AltController.new(0.45, 0.03, 0.70, 6.0)
 
 -- 支援一側/象限/平移方向配置多個引擎 (陣列結構)
 FlightCore.engines = {
@@ -525,6 +534,9 @@ end
 
 function FlightCore.holdAltitude()
     if FlightCore.state.mode ~= "HOLD_ALT" then
+        if not FlightCore.altiSensor then
+            FlightCore.altiSensor = peripheral.find("altitude_sensor")
+        end
         if FlightCore.altiSensor then
             local currentAlt = FlightCore.altiSensor.getHeight() or 0
             FlightCore.state.targetAlt = currentAlt
@@ -538,17 +550,22 @@ end
 
 function FlightCore.startCalibration()
     if not FlightCore.altiSensor then
+        FlightCore.altiSensor = peripheral.find("altitude_sensor")
+    end
+    if not FlightCore.altiSensor then
         FlightCore.state.statusMsg = "ERR: No Altitude Sensor!"
         return
     end
+    local curAlt = FlightCore.altiSensor.getHeight() or 0
     FlightCore.state.mode = "CALIBRATING"
     FlightCore.state.calibPhase = "GROUND_SEARCH"
-    FlightCore.state.calibStartAlt = FlightCore.altiSensor.getHeight() or 0
-    FlightCore.state.calibTargetAlt = 200.0
-    FlightCore.state.calibThrottle = 0.0
-    FlightCore.state.rampRate = 0.0001
+    FlightCore.state.calibStartAlt = curAlt
+    FlightCore.state.calibTargetAlt = curAlt + 3.0
+    FlightCore.state.calibThrottle = 0.5
+    FlightCore.state.baseThrottle = 0.5
+    FlightCore.state.rampRate = 0.015
     FlightCore.state.stableTimer = 0
-    FlightCore.state.statusMsg = "Calibrating: Ground Search..."
+    FlightCore.state.statusMsg = "Calibrating: Finding Lift (+3m)..."
     FlightCore.altPID:reset()
 end
 
@@ -594,26 +611,39 @@ function FlightCore.updateFlightLogic()
     end
 
     local currentAlt = FlightCore.altiSensor and FlightCore.altiSensor.getHeight() or 0
-    local currentVspeed = FlightCore.altiSensor and FlightCore.altiSensor.getVerticalSpeed() or 0
+    local rawVspeed = FlightCore.altiSensor and FlightCore.altiSensor.getVerticalSpeed and FlightCore.altiSensor.getVerticalSpeed() or nil
+
+    -- 垂直速度計算與平滑估算 (支援感測器直讀或 Alt/Dt 數值微分)
+    local nowEpoch = os.epoch("utc") / 1000
+    FlightCore.lastAlt = FlightCore.lastAlt or currentAlt
+    FlightCore.lastAltTime = FlightCore.lastAltTime or nowEpoch
+    local altDt = nowEpoch - FlightCore.lastAltTime
+    if altDt <= 0 or altDt > 1.0 then altDt = 0.05 end
+
+    local computedVspeed = (currentAlt - FlightCore.lastAlt) / altDt
+    FlightCore.lastAlt = currentAlt
+    FlightCore.lastAltTime = nowEpoch
+
+    local currentVspeed = rawVspeed or computedVspeed
     local currPitch, currRoll = FlightCore.getGimbalData()
 
     -- ============================================================
-    -- [A] 高度維持與垂直升力控制核心 (Altitude & Lift - v3.8.4 原版)
+    -- [A] 高度維持與垂直升力控制核心 (Altitude & Lift Controller)
     -- ============================================================
     if FlightCore.state.mode == "CALIBRATING" then
         if FlightCore.state.calibPhase == "GROUND_SEARCH" then
             FlightCore.state.calibThrottle = FlightCore.state.calibThrottle + FlightCore.state.rampRate
-            FlightCore.state.rampRate = FlightCore.state.rampRate * 1.05
             FlightCore.state.baseThrottle = FlightCore.state.calibThrottle
 
             local altDelta = currentAlt - FlightCore.state.calibStartAlt
-            if altDelta > 1.5 or currentVspeed > 0.5 then
-                FlightCore.state.calibPhase = "CLIMB_TO_200"
-                FlightCore.state.targetAlt = 200.0
+            if altDelta > 0.3 or currentVspeed > 0.15 then
+                FlightCore.state.calibPhase = "HOVER_3M"
+                FlightCore.state.baseThrottle = math.max(0.5, FlightCore.state.calibThrottle - 0.20)
+                FlightCore.state.targetAlt = FlightCore.state.calibTargetAlt
                 FlightCore.state.virtualAlt = currentAlt
-                FlightCore.state.statusMsg = string.format("Lift Found (%.2f)! Climbing to 200m...", FlightCore.state.baseThrottle)
+                FlightCore.state.statusMsg = string.format("Lift Found (%.2f)! Hovering +3m...", FlightCore.state.baseThrottle)
             else
-                FlightCore.state.statusMsg = string.format("Searching Lift: %.3f (Alt: %.1f)", FlightCore.state.baseThrottle, currentAlt)
+                FlightCore.state.statusMsg = string.format("Searching Lift: %.2f (Alt: %.1f)", FlightCore.state.baseThrottle, currentAlt)
             end
 
             FlightCore.virtualOutputs.FL = FlightCore.state.baseThrottle
@@ -621,39 +651,21 @@ function FlightCore.updateFlightLogic()
             FlightCore.virtualOutputs.BL = FlightCore.state.baseThrottle
             FlightCore.virtualOutputs.BR = FlightCore.state.baseThrottle
 
-        elseif FlightCore.state.calibPhase == "CLIMB_TO_200" then
-            local speedLimit = 2.5
-            if currentAlt < FlightCore.state.targetAlt then
-                FlightCore.state.virtualAlt = math.min(FlightCore.state.targetAlt, FlightCore.state.virtualAlt + speedLimit * 0.05)
-            else
-                FlightCore.state.virtualAlt = math.max(FlightCore.state.targetAlt, FlightCore.state.virtualAlt - speedLimit * 0.05)
-            end
+        elseif FlightCore.state.calibPhase == "HOVER_3M" then
+            local altDiff = FlightCore.state.calibTargetAlt - FlightCore.state.virtualAlt
+            local step = math.max(-1.5 * 0.05, math.min(1.5 * 0.05, altDiff))
+            FlightCore.state.virtualAlt = FlightCore.state.virtualAlt + step
 
             local altError = FlightCore.state.virtualAlt - currentAlt
-            local pidAdj = FlightCore.altPID:update(altError)
-            local finalThrust = math.max(0, math.min(15, FlightCore.state.baseThrottle + pidAdj))
+            local pidAdj = FlightCore.altPID:update(altError, currentVspeed)
 
-            FlightCore.virtualOutputs.FL = finalThrust
-            FlightCore.virtualOutputs.FR = finalThrust
-            FlightCore.virtualOutputs.BL = finalThrust
-            FlightCore.virtualOutputs.BR = finalThrust
-
-            if math.abs(currentAlt - 200.0) < 1.0 and math.abs(currentVspeed) < 0.2 then
-                FlightCore.state.calibPhase = "STABILIZE_200"
-                FlightCore.state.stableTimer = 0
-                FlightCore.state.statusMsg = "Stabilizing at 200m..."
-            else
-                FlightCore.state.statusMsg = string.format("Climbing: %.1fm -> 200m (Base: %.2f)", currentAlt, FlightCore.state.baseThrottle)
-            end
-
-        elseif FlightCore.state.calibPhase == "STABILIZE_200" then
-            local altError = 200.0 - currentAlt
-            local pidAdj = FlightCore.altPID:update(altError)
-
-            if currentVspeed > 0.05 then
-                FlightCore.state.baseThrottle = math.max(0.1, FlightCore.state.baseThrottle - 0.001)
-            elseif currentVspeed < -0.05 then
-                FlightCore.state.baseThrottle = math.min(15.0, FlightCore.state.baseThrottle + 0.001)
+            -- 懸停微調平衡 baseThrottle
+            if math.abs(altError) < 0.6 then
+                if currentVspeed > 0.03 then
+                    FlightCore.state.baseThrottle = math.max(0.1, FlightCore.state.baseThrottle - 0.001)
+                elseif currentVspeed < -0.03 then
+                    FlightCore.state.baseThrottle = math.min(15.0, FlightCore.state.baseThrottle + 0.001)
+                end
             end
 
             local finalThrust = math.max(0, math.min(15, FlightCore.state.baseThrottle + pidAdj))
@@ -662,17 +674,18 @@ function FlightCore.updateFlightLogic()
             FlightCore.virtualOutputs.BL = finalThrust
             FlightCore.virtualOutputs.BR = finalThrust
 
-            if math.abs(currentAlt - 200.0) < 0.5 and math.abs(currentVspeed) < 0.08 then
+            if math.abs(currentAlt - FlightCore.state.calibTargetAlt) < 0.4 and math.abs(currentVspeed) < 0.08 then
                 FlightCore.state.stableTimer = FlightCore.state.stableTimer + 0.05
-                FlightCore.state.statusMsg = string.format("Calibrating: Stable %.1fs/5.0s (Base: %.2f)", FlightCore.state.stableTimer, FlightCore.state.baseThrottle)
-                if FlightCore.state.stableTimer >= 5.0 then
+                FlightCore.state.statusMsg = string.format("Hovering +3m: Stable %.1fs/3.0s (Base: %.2f)", FlightCore.state.stableTimer, FlightCore.state.baseThrottle)
+                if FlightCore.state.stableTimer >= 3.0 then
                     FlightCore.state.mode = "HOLD_ALT"
-                    FlightCore.state.targetAlt = 200.0
+                    FlightCore.state.targetAlt = currentAlt
+                    FlightCore.state.virtualAlt = currentAlt
                     FlightCore.state.statusMsg = string.format("Calib Complete! Hover Base: %.2f", FlightCore.state.baseThrottle)
                 end
             else
-                FlightCore.state.stableTimer = 0
-                FlightCore.state.statusMsg = string.format("Stabilizing: %.1fm (V.S: %+.2f)", currentAlt, currentVspeed)
+                FlightCore.state.stableTimer = math.max(0, FlightCore.state.stableTimer - 0.02)
+                FlightCore.state.statusMsg = string.format("Hovering +3m: %.1fm (V.S: %+.2f, Base: %.2f)", currentAlt, currentVspeed, FlightCore.state.baseThrottle)
             end
         end
 
@@ -682,15 +695,26 @@ function FlightCore.updateFlightLogic()
         FlightCore.state.virtualAlt = FlightCore.state.virtualAlt + step
 
         local altError = FlightCore.state.virtualAlt - currentAlt
-        local pidAdj = FlightCore.altPID:update(altError)
+        local pidAdj = FlightCore.altPID:update(altError, currentVspeed)
 
         local pitchCorr = -currPitch * 0.05
         local rollCorr = currRoll * 0.05
 
-        FlightCore.virtualOutputs.FL = math.max(0, math.min(15, FlightCore.state.baseThrottle + pidAdj + pitchCorr - rollCorr))
-        FlightCore.virtualOutputs.FR = math.max(0, math.min(15, FlightCore.state.baseThrottle + pidAdj + pitchCorr + rollCorr))
-        FlightCore.virtualOutputs.BL = math.max(0, math.min(15, FlightCore.state.baseThrottle + pidAdj - pitchCorr - rollCorr))
-        FlightCore.virtualOutputs.BR = math.max(0, math.min(15, FlightCore.state.baseThrottle + pidAdj - pitchCorr + rollCorr))
+        local targetFL = math.max(0, math.min(15, FlightCore.state.baseThrottle + pidAdj + pitchCorr - rollCorr))
+        local targetFR = math.max(0, math.min(15, FlightCore.state.baseThrottle + pidAdj + pitchCorr + rollCorr))
+        local targetBL = math.max(0, math.min(15, FlightCore.state.baseThrottle + pidAdj - pitchCorr - rollCorr))
+        local targetBR = math.max(0, math.min(15, FlightCore.state.baseThrottle + pidAdj - pitchCorr + rollCorr))
+
+        local maxLiftSlew = 0.5
+        local function approach(current, target, maxStep)
+            if current < target then return math.min(target, current + maxStep)
+            else return math.max(target, current - maxStep) end
+        end
+
+        FlightCore.virtualOutputs.FL = approach(FlightCore.virtualOutputs.FL or 0, targetFL, maxLiftSlew)
+        FlightCore.virtualOutputs.FR = approach(FlightCore.virtualOutputs.FR or 0, targetFR, maxLiftSlew)
+        FlightCore.virtualOutputs.BL = approach(FlightCore.virtualOutputs.BL or 0, targetBL, maxLiftSlew)
+        FlightCore.virtualOutputs.BR = approach(FlightCore.virtualOutputs.BR or 0, targetBR, maxLiftSlew)
 
         local diff = FlightCore.state.targetAlt - currentAlt
         if diff > 1.0 then

@@ -604,7 +604,7 @@ local Driver = {
                 local bW3 = math.floor((sw - 12 - 12) / 4)
                 local holdBg = (FlightCore.state.mode == "HOLD_ALT") and {46, 125, 50} or {27, 94, 32}
                 addBtn(6, r3Y, bW3, btnRowH, "[ HOLD ALT ]", holdBg, {255, 255, 255}, function() FlightCore.holdAltitude() end)
-                addBtn(6 + (bW3+4), r3Y, bW3, btnRowH, "[ CALIB 200m ]", {106, 27, 154}, {255, 255, 255}, function() FlightCore.startCalibration() end)
+                addBtn(6 + (bW3+4), r3Y, bW3, btnRowH, "[ CALIB HOVER ]", {106, 27, 154}, {255, 255, 255}, function() FlightCore.startCalibration() end)
                 addBtn(6 + (bW3+4)*2, r3Y, bW3, btnRowH, "[ RE-SCAN HW ]", {21, 101, 192}, {255, 255, 255}, function() FlightCore.scanQuadTurtles(); FlightCore.state.statusMsg="Re-scanned!" end)
                 local stopBg = (FlightCore.state.mode == "IDLE") and {198, 40, 40} or {183, 28, 28}
                 addBtn(6 + (bW3+4)*3, r3Y, bW3, btnRowH, "[ STOP IDLE ]", stopBg, {255, 255, 255}, function() FlightCore.stopEngines() end)
