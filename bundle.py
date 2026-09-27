@@ -24,14 +24,54 @@ DRIVERS_DIR = os.path.join(MODULES_DIR, "drivers")
 OUTPUT_RUN_LUA = os.path.join(PROJECT_DIR, "run.lua")
 OUTPUT_FCC_LUA = os.path.join(PROJECT_DIR, "fcc.lua")
 OUTPUT_DISPLAY_LUA = os.path.join(PROJECT_DIR, "display.lua")
-
-VERSION = "v3.9.4"
+VERSION_FILE = os.path.join(PROJECT_DIR, "version.txt")
 
 def read_file(filepath):
     with open(filepath, "r", encoding="utf-8") as f:
         return f.read()
 
+def get_version():
+    """從 version.txt 讀取版本號，若不存在則預設 v3.9.5"""
+    if os.path.exists(VERSION_FILE):
+        ver = read_file(VERSION_FILE).strip()
+        if ver:
+            return ver if ver.startswith("v") else f"v{ver}"
+    return "v3.9.5"
+
+def set_version(new_ver):
+    """寫入新版本號至 version.txt"""
+    if not new_ver.startswith("v"):
+        new_ver = f"v{new_ver}"
+    with open(VERSION_FILE, "w", encoding="utf-8") as f:
+        f.write(new_ver + "\n")
+    return new_ver
+
+def bump_version(bump_type="patch"):
+    """自動遞增版本號: patch (3.9.4 -> 3.9.5), minor (3.9.4 -> 3.10.0), major (3.9.4 -> 4.0.0)"""
+    current = get_version().lstrip("v")
+    parts = current.split(".")
+    while len(parts) < 3:
+        parts.append("0")
+    try:
+        major, minor, patch = int(parts[0]), int(parts[1]), int(parts[2])
+    except ValueError:
+        major, minor, patch = 3, 9, 5
+
+    if bump_type == "major":
+        major += 1
+        minor = 0
+        patch = 0
+    elif bump_type == "minor":
+        minor += 1
+        patch = 0
+    else:
+        patch += 1
+
+    new_ver = f"v{major}.{minor}.{patch}"
+    return set_version(new_ver)
+
 def bundle():
+    VERSION = get_version()
     print("=" * 60)
     print(f"🚀 VTOL Avionics Bundler [{VERSION}]: Compiling modules...")
     print("=" * 60)
@@ -826,16 +866,25 @@ def validate_syntax(filepath):
     else:
         print(f"✅ Syntax Validation Passed: All blocks in {os.path.basename(filepath)} are perfectly balanced!")
 
-def get_version():
-    if os.path.exists(OUTPUT_RUN_LUA):
-        content = read_file(OUTPUT_RUN_LUA)
-        m = re.search(r'local\s+VERSION\s*=\s*"([^"]+)"', content)
-        if m:
-            return m.group(1)
-    return VERSION
-
 if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] in ("--version", "-v", "version"):
-        print(get_version())
-    else:
-        bundle()
+    if len(sys.argv) > 1:
+        cmd = sys.argv[1].lower()
+        if cmd in ("--version", "-v", "version"):
+            print(get_version())
+            sys.exit(0)
+        elif cmd in ("--bump", "-b", "bump"):
+            b_type = sys.argv[2].lower() if len(sys.argv) > 2 else "patch"
+            new_v = bump_version(b_type)
+            print(f"📦 Version bumped to {new_v}")
+            bundle()
+            sys.exit(0)
+        elif cmd in ("--set", "-s", "set"):
+            if len(sys.argv) > 2:
+                new_v = set_version(sys.argv[2])
+                print(f"📦 Version set to {new_v}")
+                bundle()
+                sys.exit(0)
+            else:
+                print("Error: Missing version argument. Usage: python bundle.py --set vX.Y.Z")
+                sys.exit(1)
+    bundle()
