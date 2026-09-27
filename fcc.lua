@@ -1,7 +1,7 @@
 --[[
     Create: Avionics & CC: Tweaked
     Standalone Flight Control Computer (FCC - 分散式純飛控大腦)
-    Version: v4.0.3
+    Version: v4.0.4
     
     特點:
     - 0% 畫面渲染開銷 (No UI Rendering Overhead)，運算時間 < 0.2ms
@@ -11,7 +11,7 @@
     - 徹底根除 "Too long without yielding"
 --]]
 
-local VERSION = "v4.0.3"
+local VERSION = "v4.0.4"
 
 -- ========================================================
 -- PART 1: 飛控與動力控制核心 (FLIGHT & PROPULSION CORE)

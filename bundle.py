@@ -24,38 +24,86 @@ DRIVERS_DIR = os.path.join(MODULES_DIR, "drivers")
 OUTPUT_RUN_LUA = os.path.join(PROJECT_DIR, "run.lua")
 OUTPUT_FCC_LUA = os.path.join(PROJECT_DIR, "fcc.lua")
 OUTPUT_DISPLAY_LUA = os.path.join(PROJECT_DIR, "display.lua")
-VERSION_FILE = os.path.join(PROJECT_DIR, "version.txt")
+OUTPUT_CLI_LUA = os.path.join(PROJECT_DIR, "fcc-cli.lua")
+OUTPUT_BOOT_LUA = os.path.join(PROJECT_DIR, "boot.lua")
+OUTPUT_TURTLE_LUA = os.path.join(PROJECT_DIR, "turtle_startup.lua")
+VERSION_XML_FILE = os.path.join(PROJECT_DIR, "version.xml")
+
+import xml.etree.ElementTree as ET
+from xml.dom import minidom
 
 def read_file(filepath):
     with open(filepath, "r", encoding="utf-8") as f:
         return f.read()
 
-def get_version():
-    """從 version.txt 讀取版本號，若不存在則預設 v3.9.5"""
-    if os.path.exists(VERSION_FILE):
-        ver = read_file(VERSION_FILE).strip()
-        if ver:
-            return ver if ver.startswith("v") else f"v{ver}"
-    return "v3.9.5"
+def get_versions():
+    """從 version.xml 讀取電腦與烏龜版本號，回傳 dict: {'computer': 'v4.0.4', 'turtle': 'v4.0.4'}"""
+    default_versions = {"computer": "v4.0.4", "turtle": "v4.0.4"}
+    if not os.path.exists(VERSION_XML_FILE):
+        save_versions(default_versions)
+        return default_versions
+    try:
+        tree = ET.parse(VERSION_XML_FILE)
+        root = tree.getroot()
+        comp = root.find("computer")
+        turt = root.find("turtle")
+        comp_ver = comp.text.strip() if comp is not None and comp.text else "v4.0.4"
+        turt_ver = turt.text.strip() if turt is not None and turt.text else "v4.0.4"
+        if not comp_ver.startswith("v"): comp_ver = f"v{comp_ver}"
+        if not turt_ver.startswith("v"): turt_ver = f"v{turt_ver}"
+        return {"computer": comp_ver, "turtle": turt_ver}
+    except Exception as e:
+        print(f"⚠️ Warning: Failed to parse version.xml ({e}), using defaults.")
+        return default_versions
 
-def set_version(new_ver):
-    """寫入新版本號至 version.txt"""
+def save_versions(versions_dict):
+    """寫入版本號至 version.xml，具備格式化縮排"""
+    root = ET.Element("versions")
+    comp_elem = ET.SubElement(root, "computer")
+    comp_ver = versions_dict.get("computer", "v4.0.4")
+    comp_elem.text = comp_ver if comp_ver.startswith("v") else f"v{comp_ver}"
+    
+    turt_elem = ET.SubElement(root, "turtle")
+    turt_ver = versions_dict.get("turtle", "v4.0.4")
+    turt_elem.text = turt_ver if turt_ver.startswith("v") else f"v{turt_ver}"
+    
+    xml_str = ET.tostring(root, encoding="utf-8")
+    parsed = minidom.parseString(xml_str)
+    pretty_xml = parsed.toprettyxml(indent="    ", encoding="utf-8").decode("utf-8")
+    clean_lines = [l for l in pretty_xml.splitlines() if l.strip()]
+    with open(VERSION_XML_FILE, "w", encoding="utf-8") as f:
+        f.write("\n".join(clean_lines) + "\n")
+
+def get_version(target="computer"):
+    """相容性函數：取得指定或預設(電腦)版本號"""
+    vers = get_versions()
+    return vers.get(target, vers.get("computer", "v4.0.4"))
+
+def set_version(new_ver, target="all"):
+    """寫入新版本號至 version.xml"""
     if not new_ver.startswith("v"):
         new_ver = f"v{new_ver}"
-    with open(VERSION_FILE, "w", encoding="utf-8") as f:
-        f.write(new_ver + "\n")
-    return new_ver
+    vers = get_versions()
+    if target in ("all", "both"):
+        vers["computer"] = new_ver
+        vers["turtle"] = new_ver
+    elif target == "computer":
+        vers["computer"] = new_ver
+    elif target == "turtle":
+        vers["turtle"] = new_ver
+    save_versions(vers)
+    return vers
 
-def bump_version(bump_type="patch"):
-    """自動遞增版本號: patch (3.9.4 -> 3.9.5), minor (3.9.4 -> 3.10.0), major (3.9.4 -> 4.0.0)"""
-    current = get_version().lstrip("v")
-    parts = current.split(".")
+def bump_semver(ver_str, bump_type="patch"):
+    """解析語義化版本號並遞增: patch (4.0.4 -> 4.0.5), minor (4.0.4 -> 4.1.0), major (4.0.4 -> 5.0.0)"""
+    ver = ver_str.lstrip("v")
+    parts = ver.split(".")
     while len(parts) < 3:
         parts.append("0")
     try:
         major, minor, patch = int(parts[0]), int(parts[1]), int(parts[2])
     except ValueError:
-        major, minor, patch = 3, 9, 5
+        major, minor, patch = 4, 0, 4
 
     if bump_type == "major":
         major += 1
@@ -67,13 +115,54 @@ def bump_version(bump_type="patch"):
     else:
         patch += 1
 
-    new_ver = f"v{major}.{minor}.{patch}"
-    return set_version(new_ver)
+    return f"v{major}.{minor}.{patch}"
+
+def bump_versions(target="all", bump_type="patch"):
+    """遞增版本號: target='all'|'computer'|'turtle'"""
+    vers = get_versions()
+    if target in ("all", "both"):
+        vers["computer"] = bump_semver(vers["computer"], bump_type)
+        vers["turtle"] = bump_semver(vers["turtle"], bump_type)
+    elif target == "computer":
+        vers["computer"] = bump_semver(vers["computer"], bump_type)
+    elif target == "turtle":
+        vers["turtle"] = bump_semver(vers["turtle"], bump_type)
+    save_versions(vers)
+    return vers
+
+def update_file_version(filepath, version_str, role_type="computer"):
+    """在現有原始碼檔案中替換版本佔位符與版本常數"""
+    if not os.path.exists(filepath):
+        return
+    content = read_file(filepath)
+    
+    # 1. 替換通用與特定佔位符
+    content = re.sub(r"<(?:VERSION|version)>", version_str, content)
+    content = re.sub(r"\{\{(?:VERSION|version)\}\}", version_str, content)
+    
+    if role_type == "computer":
+        content = re.sub(r"<(?:VERSION_COMPUTER|version_computer)>", version_str, content)
+        content = re.sub(r"\{\{(?:VERSION_COMPUTER|version_computer)\}\}", version_str, content)
+    elif role_type == "turtle":
+        content = re.sub(r"<(?:VERSION_TURTLE|version_turtle)>", version_str, content)
+        content = re.sub(r"\{\{(?:VERSION_TURTLE|version_turtle)\}\}", version_str, content)
+
+    # 2. 替換 local VERSION = "..."
+    content = re.sub(r'local\s+VERSION\s*=\s*"[^"]*"', f'local VERSION = "{version_str}"', content)
+
+    # 3. 替換標頭註解中的 Version: vX.Y.Z 或 Version: <...>
+    content = re.sub(r'(Version:\s*)(v\d+\.\d+\.\d+|<[^>]+>|\{\{[^}]+\}\})', rf'\g<1>{version_str}', content)
+
+    with open(filepath, "w", encoding="utf-8") as f:
+        f.write(content)
 
 def bundle():
-    VERSION = get_version()
+    vers = get_versions()
+    COMP_VER = vers["computer"]
+    TURT_VER = vers["turtle"]
+    VERSION = COMP_VER
     print("=" * 60)
-    print(f"🚀 VTOL Avionics Bundler [{VERSION}]: Compiling modules...")
+    print(f"🚀 VTOL Avionics Bundler [Computer: {COMP_VER} | Turtle: {TURT_VER}]: Compiling modules...")
     print("=" * 60)
 
     # 1. 讀取各模組原始碼
@@ -819,15 +908,6 @@ parallel.waitForAny(renderLoop, eventLoop)
 
     bundled_display = (
         display_header + "\n" +
-        display_header_proxy if False else ""
-        + drivers_header + direct_body + "\n" +
-        tom_header + font_table + "\n\nDrivers.tom = " + tom_body + "\n" +
-        normal_header + normal_body + "\n" +
-        display_orchestrator
-    )
-    # Actually let's assemble bundled_display cleanly:
-    bundled_display = (
-        display_header + "\n" +
         drivers_header + direct_body + "\n" +
         tom_header + font_table + "\n\nDrivers.tom = " + tom_body + "\n" +
         normal_header + normal_body + "\n" +
@@ -837,18 +917,35 @@ parallel.waitForAny(renderLoop, eventLoop)
     with open(OUTPUT_DISPLAY_LUA, "w", encoding="utf-8") as f:
         f.write(bundled_display)
     print(f"✅ Compiled {os.path.basename(OUTPUT_DISPLAY_LUA)} ({len(bundled_display.splitlines())} lines)")
-    validate_syntax(OUTPUT_DISPLAY_LUA)
 
-    # 5. 驗證 boot.lua, fcc-cli.lua 與 turtle_startup.lua
-    boot_path = os.path.join(PROJECT_DIR, "boot.lua")
-    if os.path.exists(boot_path):
-        validate_syntax(boot_path)
-    cli_path = os.path.join(PROJECT_DIR, "fcc-cli.lua")
-    if os.path.exists(cli_path):
-        validate_syntax(cli_path)
-    turtle_path = os.path.join(PROJECT_DIR, "turtle_startup.lua")
-    if os.path.exists(turtle_path):
-        validate_syntax(turtle_path)
+    # 4. 同步版本號至 Standalone 程式 (fcc-cli.lua, boot.lua, turtle_startup.lua)
+    update_file_version(OUTPUT_CLI_LUA, COMP_VER, "computer")
+    print(f"🔄 Synchronized {os.path.basename(OUTPUT_CLI_LUA)} -> {COMP_VER}")
+    
+    update_file_version(OUTPUT_BOOT_LUA, COMP_VER, "computer")
+    print(f"🔄 Synchronized {os.path.basename(OUTPUT_BOOT_LUA)} -> {COMP_VER}")
+
+    update_file_version(OUTPUT_TURTLE_LUA, TURT_VER, "turtle")
+    print(f"🔄 Synchronized {os.path.basename(OUTPUT_TURTLE_LUA)} -> {TURT_VER}")
+
+    # 5. 語法檢查所有發布檔案
+    print("\n🔍 Validating syntax across all release assets...")
+    for label, path in [
+        ("run.lua (All-in-One)", OUTPUT_RUN_LUA),
+        ("fcc.lua (FCC Brain)", OUTPUT_FCC_LUA),
+        ("display.lua (CDS Display)", OUTPUT_DISPLAY_LUA),
+        ("fcc-cli.lua (Command Console)", OUTPUT_CLI_LUA),
+        ("turtle_startup.lua (Turtle Node)", OUTPUT_TURTLE_LUA),
+        ("boot.lua (Universal Launcher)", OUTPUT_BOOT_LUA)
+    ]:
+        if os.path.exists(path):
+            validate_syntax(path)
+
+    print("\n" + "=" * 60)
+    print("✨ Build & Version Synchronization Complete!")
+    print(f"   🖥️  Computer Suite : {COMP_VER} (run.lua, fcc.lua, display.lua, fcc-cli.lua, boot.lua)")
+    print(f"   🐢 Turtle Firmware: {TURT_VER} (turtle_startup.lua)")
+    print("=" * 60)
 
 def validate_syntax(filepath):
     with open(filepath, "r", encoding="utf-8") as f:
@@ -890,21 +987,61 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         cmd = sys.argv[1].lower()
         if cmd in ("--version", "-v", "version"):
-            print(get_version())
+            print(get_version("computer"))
+            sys.exit(0)
+        elif cmd in ("--version-computer", "--version-comp"):
+            print(get_version("computer"))
+            sys.exit(0)
+        elif cmd in ("--version-turtle", "--version-turt"):
+            print(get_version("turtle"))
+            sys.exit(0)
+        elif cmd in ("--version-all", "-va"):
+            vers = get_versions()
+            print(f"Computer: {vers['computer']} | Turtle: {vers['turtle']}")
             sys.exit(0)
         elif cmd in ("--bump", "-b", "bump"):
             b_type = sys.argv[2].lower() if len(sys.argv) > 2 else "patch"
-            new_v = bump_version(b_type)
-            print(f"📦 Version bumped to {new_v}")
+            new_vers = bump_versions("all", b_type)
+            print(f"📦 Versions bumped to Computer: {new_vers['computer']} | Turtle: {new_vers['turtle']}")
+            bundle()
+            sys.exit(0)
+        elif cmd in ("--bump-computer", "--bump-comp"):
+            b_type = sys.argv[2].lower() if len(sys.argv) > 2 else "patch"
+            new_vers = bump_versions("computer", b_type)
+            print(f"📦 Computer version bumped to {new_vers['computer']}")
+            bundle()
+            sys.exit(0)
+        elif cmd in ("--bump-turtle", "--bump-turt"):
+            b_type = sys.argv[2].lower() if len(sys.argv) > 2 else "patch"
+            new_vers = bump_versions("turtle", b_type)
+            print(f"📦 Turtle version bumped to {new_vers['turtle']}")
             bundle()
             sys.exit(0)
         elif cmd in ("--set", "-s", "set"):
             if len(sys.argv) > 2:
-                new_v = set_version(sys.argv[2])
-                print(f"📦 Version set to {new_v}")
+                new_vers = set_version(sys.argv[2], "all")
+                print(f"📦 Versions set to Computer: {new_vers['computer']} | Turtle: {new_vers['turtle']}")
                 bundle()
                 sys.exit(0)
             else:
                 print("Error: Missing version argument. Usage: python bundle.py --set vX.Y.Z")
+                sys.exit(1)
+        elif cmd in ("--set-computer", "--set-comp"):
+            if len(sys.argv) > 2:
+                new_vers = set_version(sys.argv[2], "computer")
+                print(f"📦 Computer version set to {new_vers['computer']}")
+                bundle()
+                sys.exit(0)
+            else:
+                print("Error: Missing version argument. Usage: python bundle.py --set-computer vX.Y.Z")
+                sys.exit(1)
+        elif cmd in ("--set-turtle", "--set-turt"):
+            if len(sys.argv) > 2:
+                new_vers = set_version(sys.argv[2], "turtle")
+                print(f"📦 Turtle version set to {new_vers['turtle']}")
+                bundle()
+                sys.exit(0)
+            else:
+                print("Error: Missing version argument. Usage: python bundle.py --set-turtle vX.Y.Z")
                 sys.exit(1)
     bundle()
