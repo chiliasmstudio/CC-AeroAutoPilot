@@ -21,12 +21,12 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@v5
         with:
           python-version: '3.x'
 
@@ -39,7 +39,7 @@ jobs:
         run: |
           COMP_VER=$(python bundle.py --version-computer)
           TURT_VER=$(python bundle.py --version-turtle)
-          DATE_TAG=$(date +'%Y%m%d')
+          DATE_TAG=$(TZ="Asia/Taipei" date +'%Y%m%d')
           if [ "${{ startsWith(github.ref, 'refs/tags/') }}" = "true" ]; then
             TAG_NAME="${{ github.ref_name }}"
           else
