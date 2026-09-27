@@ -154,28 +154,61 @@ function FlightCore.updateNavigation()
         return
     end
 
-    -- 2. 嘗試 Navigation Table (Create: Avionics)
+    -- 2. 嘗試 Navigation Table (Create: Avionics 導航桌)
     if not FlightCore.navTable then
-        FlightCore.navTable = peripheral.find("navigation_table")
+        FlightCore.navTable = peripheral.find("navigation_table") or peripheral.find("avionics_navigation_table")
     end
     if FlightCore.navTable then
-        local ok, hdg = pcall(function() return FlightCore.navTable.getHeading() end)
-        if ok and hdg then
+        local okHdg, hdg = pcall(function()
+            if FlightCore.navTable.getHeading then return FlightCore.navTable.getHeading()
+            elseif FlightCore.navTable.getYaw then return FlightCore.navTable.getYaw()
+            end
+            return nil
+        end)
+        if okHdg and hdg then
             FlightCore.nav.yaw = (hdg % 360 + 360) % 360
+        end
+
+        local okPos, pos = pcall(function()
+            if FlightCore.navTable.getPosition then return FlightCore.navTable.getPosition()
+            elseif FlightCore.navTable.getLocation then return FlightCore.navTable.getLocation()
+            elseif FlightCore.navTable.getCoordinates then return FlightCore.navTable.getCoordinates()
+            end
+            return nil
+        end)
+        if okPos and pos and type(pos) == "table" and pos.x and pos.z then
+            FlightCore.nav.x = pos.x
+            FlightCore.nav.y = pos.y or FlightCore.nav.y
+            FlightCore.nav.z = pos.z
+            FlightCore.nav.source = "NAV_TABLE"
         end
     end
 
-    -- 3. 姿態儀 (Gimbal Sensor)
+    -- 3. 嘗試 GPS 定位 (CC: Tweaked Wireless GPS 週期性探測)
+    FlightCore.gpsTick = (FlightCore.gpsTick or 0) + 1
+    if FlightCore.gpsTick % 20 == 0 and gps and FlightCore.nav.source ~= "INS" and FlightCore.nav.source ~= "NAV_TABLE" then
+        pcall(function()
+            local gx, gy, gz = gps.locate(0.05)
+            if gx and gz then
+                FlightCore.nav.x = gx
+                FlightCore.nav.y = gy
+                FlightCore.nav.z = gz
+                FlightCore.nav.source = "GPS"
+            end
+        end)
+    end
+
+    -- 4. 姿態儀 (Gimbal Sensor)
     local p, r = FlightCore.getGimbalData()
     FlightCore.nav.pitch = p
     FlightCore.nav.roll = r
 
-    -- 4. 高度計 (Altitude Sensor)
+    -- 5. 高度計 (Altitude Sensor)
     if FlightCore.altiSensor then
         local ok, h = pcall(function() return FlightCore.altiSensor.getHeight() end)
         if ok and h then
             FlightCore.nav.y = h
-            if FlightCore.nav.source ~= "GPS" and FlightCore.nav.source ~= "INS" then
+            if not FlightCore.nav.source or FlightCore.nav.source == "NONE" then
                 FlightCore.nav.source = "BARO"
             end
         end
