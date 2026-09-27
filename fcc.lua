@@ -1,7 +1,7 @@
 --[[
     Create: Avionics & CC: Tweaked
     Standalone Flight Control Computer (FCC - 分散式純飛控大腦)
-    Version: v3.9.6
+    Version: v3.9.7
     
     特點:
     - 0% 畫面渲染開銷 (No UI Rendering Overhead)，運算時間 < 0.2ms
@@ -11,7 +11,7 @@
     - 徹底根除 "Too long without yielding"
 --]]
 
-local VERSION = "v3.9.6"
+local VERSION = "v3.9.7"
 
 -- ========================================================
 -- PART 1: 飛控與動力控制核心 (FLIGHT & PROPULSION CORE)
@@ -19,30 +19,30 @@ local VERSION = "v3.9.6"
 
 local FlightCore = {}
 
--- 1.1 航空級非對稱防墜高度控制器 (Asymmetric Anti-Drop Altitude Controller)
-local AltController = {}
-AltController.__index = AltController
+-- 1.1 標準 PID 控制器 (基於 v3.8.4 經典架構)
+local PID = {}
+PID.__index = PID
 
-function AltController.new(kp, ki, kd, maxUp, maxDown)
-    local self = setmetatable({}, AltController)
-    self.kp = kp or 1.00
-    self.ki = ki or 0.05
-    self.kd = kd or 0.80
-    self.maxUp = maxUp or 6.0       -- 向上補償最大權限 (煞車/爬升)
-    self.maxDown = maxDown or -1.80 -- 向下減額最大權限 (杜絕空中大幅斷電墜落)
+function PID.new(kp, ki, kd, minOutput, maxOutput)
+    local self = setmetatable({}, PID)
+    self.kp = kp or 0.50
+    self.ki = ki or 0.02
+    self.kd = kd or 0.60
+    self.minOutput = minOutput or -1.50
+    self.maxOutput = maxOutput or 1.80
     self.integral = 0
     self.prevError = 0
     self.lastTime = os.epoch("utc") / 1000
     return self
 end
 
-function AltController:reset()
+function PID:reset()
     self.integral = 0
     self.prevError = 0
     self.lastTime = os.epoch("utc") / 1000
 end
 
-function AltController:update(error, vspeed)
+function PID:update(error)
     local now = os.epoch("utc") / 1000
     local dt = now - self.lastTime
     if dt <= 0 or dt > 0.5 then dt = 0.05 end
@@ -53,25 +53,19 @@ function AltController:update(error, vspeed)
 
     -- I 積分項 (防飽和 Anti-Windup)
     self.integral = self.integral + error * dt
-    local iMax = 2.5
+    local iMax = math.abs(self.maxOutput) * 0.5
     if self.integral > iMax then self.integral = iMax end
     if self.integral < -iMax then self.integral = -iMax end
     local i = self.ki * self.integral
 
-    -- D 速度阻尼項 (直接採用 EMA 垂直速度 vspeed，防超調與防下墜)
-    local d = 0
-    if vspeed ~= nil and type(vspeed) == "number" then
-        d = -self.kd * vspeed
-    else
-        local derivative = (error - self.prevError) / dt
-        d = self.kd * derivative
-    end
+    -- D 微分阻尼項 (v3.8.4 標準誤差微分)
+    local derivative = (error - self.prevError) / dt
     self.prevError = error
+    local d = self.kd * derivative
 
     local output = p + i + d
-    -- 非對稱防墜落限制: 向上可大推力托舉，向下絕不劇烈減額
-    if output > self.maxUp then output = self.maxUp end
-    if output < self.maxDown then output = self.maxDown end
+    if output > self.maxOutput then output = self.maxOutput end
+    if output < self.minOutput then output = self.minOutput end
     return output
 end
 
@@ -111,8 +105,8 @@ FlightCore.nav = {
     arrivalRadius = 20.0  -- 目的地到達判定半徑 (可偏差半徑 20 格)
 }
 
--- 高度控制專用非對稱防墜控制器 (僅控制 FL, FR, BL, BR 垂直升力)
-FlightCore.altPID = AltController.new(1.00, 0.05, 0.80, 6.0, -1.8)
+-- 高度控制專用 PID 控制器 (v3.8.4 經典基準: Kp=0.5, Ki=0.02, Kd=0.6, 嚴格輸出限幅 [-1.5, +1.8])
+FlightCore.altPID = PID.new(0.50, 0.02, 0.60, -1.50, 1.80)
 
 -- 支援一側/象限/平移方向配置多個引擎 (陣列結構)
 FlightCore.engines = {
@@ -124,6 +118,12 @@ FlightCore.engineOutputs  = {
     FWD = 0, BWD = 0, LEFT = 0, RIGHT = 0
 }
 FlightCore.virtualOutputs = {
+    FL = 0.0, FR = 0.0, BL = 0.0, BR = 0.0,
+    FWD = 0.0, BWD = 0.0, LEFT = 0.0, RIGHT = 0.0
+}
+
+-- 高頻 Sigma-Delta 誤差擴散累加器 (消除 0.5s 週期性脈衝，實現 20Hz 逐 Tick 平滑交錯)
+FlightCore.pwmAccumulator = {
     FL = 0.0, FR = 0.0, BL = 0.0, BR = 0.0,
     FWD = 0.0, BWD = 0.0, LEFT = 0.0, RIGHT = 0.0
 }
@@ -575,9 +575,9 @@ function FlightCore.startCalibration()
     FlightCore.state.mode = "CALIBRATING"
     FlightCore.state.calibPhase = "GROUND_SEARCH"
     FlightCore.state.calibStartAlt = curAlt
-    FlightCore.state.calibThrottle = 1.0
-    FlightCore.state.baseThrottle = 1.0
-    FlightCore.state.rampRate = 0.04
+    FlightCore.state.calibThrottle = 0.5
+    FlightCore.state.baseThrottle = 0.5
+    FlightCore.state.rampRate = 0.02
     FlightCore.state.stableTimer = 0
     FlightCore.state.statusMsg = "Calibrating: Searching Liftoff..."
     FlightCore.altPID:reset()
@@ -627,7 +627,7 @@ function FlightCore.updateFlightLogic()
     local currentAlt = FlightCore.altiSensor and FlightCore.altiSensor.getHeight() or 0
     local rawVspeed = FlightCore.altiSensor and FlightCore.altiSensor.getVerticalSpeed and FlightCore.altiSensor.getVerticalSpeed() or nil
 
-    -- 垂直速度計算與 EMA 低通平滑濾波 (杜絕離散取樣引起的劇烈震盪與微分踢擊)
+    -- 垂直速度計算與 EMA 低通平滑濾波
     local nowEpoch = os.epoch("utc") / 1000
     FlightCore.lastAlt = FlightCore.lastAlt or currentAlt
     FlightCore.lastAltTime = FlightCore.lastAltTime or nowEpoch
@@ -647,7 +647,7 @@ function FlightCore.updateFlightLogic()
     local currPitch, currRoll = FlightCore.getGimbalData()
 
     -- ============================================================
-    -- [A] 高度維持與垂直升力控制核心 (Altitude & Lift Controller)
+    -- [A] 高度維持與垂直升力控制核心 (基於 v3.8.4 經典架構)
     -- ============================================================
     if FlightCore.state.mode == "CALIBRATING" then
         if FlightCore.state.calibPhase == "GROUND_SEARCH" then
@@ -655,17 +655,16 @@ function FlightCore.updateFlightLogic()
             FlightCore.state.baseThrottle = FlightCore.state.calibThrottle
 
             local altDelta = currentAlt - FlightCore.state.calibStartAlt
-            -- 嚴格判定真實離地起飛 (高度上升 >= 0.5m 或 垂直速度 >= 0.18m/s)，杜絕地面微小碰撞誤判
-            if (altDelta >= 0.50) or (altDelta >= 0.25 and currentVspeed >= 0.18) then
+            if (altDelta >= 0.35) or (altDelta >= 0.15 and currentVspeed >= 0.12) then
                 local hoverBase = math.max(1.0, FlightCore.state.calibThrottle)
                 FlightCore.state.baseThrottle = hoverBase
-                FlightCore.state.targetAlt = math.ceil(currentAlt + 1.0)
+                FlightCore.state.targetAlt = math.ceil(currentAlt)
                 FlightCore.state.virtualAlt = currentAlt
                 FlightCore.state.mode = "HOLD_ALT"
                 FlightCore.state.statusMsg = string.format("Hover Locked: %.2f (Alt: %.1fm)", hoverBase, currentAlt)
                 FlightCore.altPID:reset()
             else
-                FlightCore.state.statusMsg = string.format("Ramping: %.2f (Alt: %.1f)", FlightCore.state.baseThrottle, currentAlt)
+                FlightCore.state.statusMsg = string.format("Ramping Lift: %.2f (Alt: %.1f)", FlightCore.state.baseThrottle, currentAlt)
             end
 
             FlightCore.virtualOutputs.FL = FlightCore.state.baseThrottle
@@ -676,32 +675,21 @@ function FlightCore.updateFlightLogic()
 
     elseif FlightCore.state.mode == "HOLD_ALT" then
         local altDiff = FlightCore.state.targetAlt - FlightCore.state.virtualAlt
-        local step = math.max(-2.0 * 0.05, math.min(2.0 * 0.05, altDiff))
+        local step = math.max(-2.5 * 0.05, math.min(2.5 * 0.05, altDiff))
         FlightCore.state.virtualAlt = FlightCore.state.virtualAlt + step
 
         local altError = FlightCore.state.virtualAlt - currentAlt
-        local pidAdj = FlightCore.altPID:update(altError, currentVspeed)
+        local pidAdj = FlightCore.altPID:update(altError)
 
-        local pitchCorr = -currPitch * 0.03
-        local rollCorr = currRoll * 0.03
+        local pitchCorr = -currPitch * 0.04
+        local rollCorr = currRoll * 0.04
 
-        -- 安全防墜保護底線: 最低輸出絕不低於 baseThrottle - 2.0 (杜絕空中斷電墜落)
-        local minFloor = math.max(0.0, FlightCore.state.baseThrottle - 2.0)
-        local targetFL = math.max(minFloor, math.min(15.0, FlightCore.state.baseThrottle + pidAdj + pitchCorr - rollCorr))
-        local targetFR = math.max(minFloor, math.min(15.0, FlightCore.state.baseThrottle + pidAdj + pitchCorr + rollCorr))
-        local targetBL = math.max(minFloor, math.min(15.0, FlightCore.state.baseThrottle + pidAdj - pitchCorr - rollCorr))
-        local targetBR = math.max(minFloor, math.min(15.0, FlightCore.state.baseThrottle + pidAdj - pitchCorr + rollCorr))
-
-        local maxLiftSlew = 0.40
-        local function approach(current, target, maxStep)
-            if current < target then return math.min(target, current + maxStep)
-            else return math.max(target, current - maxStep) end
-        end
-
-        FlightCore.virtualOutputs.FL = approach(FlightCore.virtualOutputs.FL or 0, targetFL, maxLiftSlew)
-        FlightCore.virtualOutputs.FR = approach(FlightCore.virtualOutputs.FR or 0, targetFR, maxLiftSlew)
-        FlightCore.virtualOutputs.BL = approach(FlightCore.virtualOutputs.BL or 0, targetBL, maxLiftSlew)
-        FlightCore.virtualOutputs.BR = approach(FlightCore.virtualOutputs.BR or 0, targetBR, maxLiftSlew)
+        -- 安全防墜保護底線: 最低輸出絕不低於 baseThrottle - 1.5 (杜絕空中斷電墜落)
+        local minFloor = math.max(0.0, FlightCore.state.baseThrottle - 1.5)
+        FlightCore.virtualOutputs.FL = math.max(minFloor, math.min(15.0, FlightCore.state.baseThrottle + pidAdj + pitchCorr - rollCorr))
+        FlightCore.virtualOutputs.FR = math.max(minFloor, math.min(15.0, FlightCore.state.baseThrottle + pidAdj + pitchCorr + rollCorr))
+        FlightCore.virtualOutputs.BL = math.max(minFloor, math.min(15.0, FlightCore.state.baseThrottle + pidAdj - pitchCorr - rollCorr))
+        FlightCore.virtualOutputs.BR = math.max(minFloor, math.min(15.0, FlightCore.state.baseThrottle + pidAdj - pitchCorr + rollCorr))
 
         local diff = FlightCore.state.targetAlt - currentAlt
         if diff > 1.0 then
@@ -715,7 +703,7 @@ function FlightCore.updateFlightLogic()
                 local d = math.sqrt(dx*dx + dz*dz)
                 FlightCore.state.statusMsg = string.format("NAV -> (%d,%d) D:%.0fm HDG:%03d*", math.floor(FlightCore.nav.targetX), math.floor(FlightCore.nav.targetZ), d, math.floor(FlightCore.nav.targetHeading))
             elseif FlightCore.nav.headingHold then
-                FlightCore.state.statusMsg = string.format("Hold: %.1fm | HDG: %03d* (Tgt: %03d*)", currentAlt, math.floor(FlightCore.nav.yaw), FlightCore.nav.targetHeading)
+                FlightCore.state.statusMsg = string.format("Hold: %.1fm | HDG: %03d* (Tgt: %03d*)", currentAlt, math.floor(FlightCore.nav.yaw or 0), FlightCore.nav.targetHeading)
             else
                 FlightCore.state.statusMsg = string.format("Holding Alt: %.1fm (Base: %.2f)", currentAlt, FlightCore.state.baseThrottle)
             end
@@ -795,27 +783,31 @@ function FlightCore.updateFlightLogic()
     FlightCore.virtualOutputs.RIGHT = approach(FlightCore.virtualOutputs.RIGHT or 0, targetRIGHT, maxTransSlew)
 
     -- ============================================================
-    -- [C] PWM 調變與底層輸出 (PWM Generation & Hardware Output)
+    -- [C] 高頻 Sigma-Delta 誤差擴散 PWM 調變與底層輸出
     -- ============================================================
-    local function calcPWM(val)
-        local intPart = math.floor(val or 0)
-        local fracPart = (val or 0) - intPart
-        local threshold = math.floor(fracPart * 10 + 0.5)
-        if FlightCore.pwmTick < threshold then
+    local function calcDitheredPWM(role, val)
+        val = math.max(0, math.min(15, val or 0))
+        local intPart = math.floor(val)
+        local fracPart = val - intPart
+
+        local acc = (FlightCore.pwmAccumulator[role] or 0.0) + fracPart
+        if acc >= 0.5 then
+            FlightCore.pwmAccumulator[role] = acc - 1.0
             return math.min(15, intPart + 1)
         else
+            FlightCore.pwmAccumulator[role] = acc
             return intPart
         end
     end
 
-    FlightCore.engineOutputs.FL = calcPWM(FlightCore.virtualOutputs.FL)
-    FlightCore.engineOutputs.FR = calcPWM(FlightCore.virtualOutputs.FR)
-    FlightCore.engineOutputs.BL = calcPWM(FlightCore.virtualOutputs.BL)
-    FlightCore.engineOutputs.BR = calcPWM(FlightCore.virtualOutputs.BR)
-    FlightCore.engineOutputs.FWD = calcPWM(FlightCore.virtualOutputs.FWD)
-    FlightCore.engineOutputs.BWD = calcPWM(FlightCore.virtualOutputs.BWD)
-    FlightCore.engineOutputs.LEFT = calcPWM(FlightCore.virtualOutputs.LEFT)
-    FlightCore.engineOutputs.RIGHT = calcPWM(FlightCore.virtualOutputs.RIGHT)
+    FlightCore.engineOutputs.FL = calcDitheredPWM("FL", FlightCore.virtualOutputs.FL)
+    FlightCore.engineOutputs.FR = calcDitheredPWM("FR", FlightCore.virtualOutputs.FR)
+    FlightCore.engineOutputs.BL = calcDitheredPWM("BL", FlightCore.virtualOutputs.BL)
+    FlightCore.engineOutputs.BR = calcDitheredPWM("BR", FlightCore.virtualOutputs.BR)
+    FlightCore.engineOutputs.FWD = calcDitheredPWM("FWD", FlightCore.virtualOutputs.FWD)
+    FlightCore.engineOutputs.BWD = calcDitheredPWM("BWD", FlightCore.virtualOutputs.BWD)
+    FlightCore.engineOutputs.LEFT = calcDitheredPWM("LEFT", FlightCore.virtualOutputs.LEFT)
+    FlightCore.engineOutputs.RIGHT = calcDitheredPWM("RIGHT", FlightCore.virtualOutputs.RIGHT)
 
     FlightCore.outputToEngines(
         FlightCore.engineOutputs.FL,
