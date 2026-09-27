@@ -1,7 +1,7 @@
 --[[
     Create: Avionics & CC: Tweaked
     Unified Multi-Engine Avionics Flight Computer (多軸模組化統一飛控大腦)
-    Version: v3.9.8 Modular Bundle
+    Version: v3.9.9 Modular Bundle
     
     螢幕尺寸自適應分類 (Dual Screen Size Mode):
     - 完整顯示螢幕 (>= 5x5): 啟動超大 A350 儀表、細緻多引擎遙測與 3 排完整控制面板。
@@ -16,7 +16,7 @@
       run.lua normal       (強制使用 CC 原生螢幕/終端機驅動)
 --]]
 
-local VERSION = "v3.9.8"
+local VERSION = "v3.9.9"
 local args = {...}
 local requestedDriver = args[1] and string.lower(args[1]) or "auto"
 
