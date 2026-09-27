@@ -1,6 +1,6 @@
 --[[
     fcc-cli.lua — Standalone Command Line Interface & Console for VTOL Avionics
-    Version: v4.0.9
+    Version: v4.0.10
     
     特點:
     - 完全獨立於 FCC 飛控電腦，可在任何終端機 / Pocket Computer 上運行
@@ -21,7 +21,7 @@
       fcc-cli reboot turtles    -- 遠端重啟所有動力烏龜
 --]]
 
-local VERSION = "v4.0.9"
+local VERSION = "v4.0.10"
 local rawArgs = { ... }
 
 -- 1. 初始化數據機
@@ -422,8 +422,8 @@ local function renderTelemetryDashboard()
         topWin.setTextColor(colors.white)
         topWin.write(string.format("X:%-5.0f Y:%-4.0f Z:%-5.0f (%s)", nav.x, nav.y or tele.currentAlt or 0, nav.z, nav.source or "INS"))
     else
-        topWin.setTextColor(colors.gray)
-        topWin.write("No Position Sensor (INS/GPS/NavTable)")
+        topWin.setTextColor(colors.orange)
+        topWin.write((nav.diag or "Searching INS/GPS/CCPE..."):sub(1, termW - 7))
     end
 
     -- 6. 航點自駕狀態 (Waypoint)

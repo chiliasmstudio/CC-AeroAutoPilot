@@ -1,7 +1,7 @@
 --[[
     Create: Avionics & CC: Tweaked
     Unified Multi-Engine Avionics Flight Computer (多軸模組化統一飛控大腦)
-    Version: v4.0.9 Modular Bundle
+    Version: v4.0.10 Modular Bundle
     
     螢幕尺寸自適應分類 (Dual Screen Size Mode):
     - 完整顯示螢幕 (>= 5x5): 啟動超大 A350 儀表、細緻多引擎遙測與 3 排完整控制面板。
@@ -16,7 +16,7 @@
       run.lua normal       (強制使用 CC 原生螢幕/終端機驅動)
 --]]
 
-local VERSION = "v4.0.9"
+local VERSION = "v4.0.10"
 local args = {...}
 local requestedDriver = args[1] and string.lower(args[1]) or "auto"
 
@@ -157,6 +157,34 @@ local function getCCPESensorSystem()
         return _G.ccpe.sensor_system
     end
     return nil
+end
+
+function FlightCore.getNavDiagnostic()
+    if FlightCore.nav.x and FlightCore.nav.z then
+        return string.format("Fix: X:%.0f Y:%.0f Z:%.0f (%s)", FlightCore.nav.x, FlightCore.nav.y or 0, FlightCore.nav.z, FlightCore.nav.source or "AIC")
+    end
+    local okRequire, ss = pcall(require, "ccpe.sensor_system")
+    if not okRequire then
+        return "CCPE Require Err: " .. tostring(ss):sub(1, 20)
+    end
+    if not ss then
+        return "CCPE Sensor System is Nil"
+    end
+    local okOn, onB = pcall(function() return ss.isOnBody and ss.isOnBody() end)
+    if not okOn then
+        return "isOnBody Err: " .. tostring(onB):sub(1, 15)
+    end
+    if onB == false then
+        return "CCPE: Not on Physics Body (Assemble Ship)"
+    end
+    local okPos, pos = pcall(function() return ss.getBodyPosition and ss.getBodyPosition() end)
+    if not okPos then
+        return "getBodyPos Err: " .. tostring(pos):sub(1, 15)
+    end
+    if not pos then
+        return "getBodyPos returned nil"
+    end
+    return "Pos Type: " .. type(pos)
 end
 
 function FlightCore.updateNavigation()

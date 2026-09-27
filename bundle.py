@@ -442,7 +442,8 @@ local function broadcastTelemetry()
             targetX = FlightCore.nav.targetX,
             targetZ = FlightCore.nav.targetZ,
             wpActive = FlightCore.nav.wpActive,
-            arrivalRadius = FlightCore.nav.arrivalRadius
+            arrivalRadius = FlightCore.nav.arrivalRadius,
+            diag = (FlightCore.getNavDiagnostic and FlightCore.getNavDiagnostic()) or "Searching..."
         },
         outputs = FlightCore.virtualOutputs,
         engineOutputs = FlightCore.engineOutputs,
@@ -537,7 +538,8 @@ local function uiLoop()
         if FlightCore.nav.x then
             print(string.format(" Nav Pos: X:%.0f Y:%.0f Z:%.0f (Spd:%.1f)", FlightCore.nav.x, FlightCore.nav.y or currentAlt, FlightCore.nav.z, FlightCore.nav.speed or 0))
         else
-            print(" Nav Pos: Searching INS / GPS / Table...")
+            local diag = (FlightCore.getNavDiagnostic and FlightCore.getNavDiagnostic()) or "Searching..."
+            print(" Nav Pos: " .. diag)
         end
         print(string.format(" Lift   : FL:%.1f FR:%.1f BL:%.1f BR:%.1f", FlightCore.virtualOutputs.FL or 0, FlightCore.virtualOutputs.FR or 0, FlightCore.virtualOutputs.BL or 0, FlightCore.virtualOutputs.BR or 0))
         print(string.format(" Cruis  : FWD:%.1f BWD:%.1f L:%.1f R:%.1f", FlightCore.virtualOutputs.FWD or 0, FlightCore.virtualOutputs.BWD or 0, FlightCore.virtualOutputs.LEFT or 0, FlightCore.virtualOutputs.RIGHT or 0))

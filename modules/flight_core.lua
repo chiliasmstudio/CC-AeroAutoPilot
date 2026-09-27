@@ -138,6 +138,34 @@ local function getCCPESensorSystem()
     return nil
 end
 
+function FlightCore.getNavDiagnostic()
+    if FlightCore.nav.x and FlightCore.nav.z then
+        return string.format("Fix: X:%.0f Y:%.0f Z:%.0f (%s)", FlightCore.nav.x, FlightCore.nav.y or 0, FlightCore.nav.z, FlightCore.nav.source or "AIC")
+    end
+    local okRequire, ss = pcall(require, "ccpe.sensor_system")
+    if not okRequire then
+        return "CCPE Require Err: " .. tostring(ss):sub(1, 20)
+    end
+    if not ss then
+        return "CCPE Sensor System is Nil"
+    end
+    local okOn, onB = pcall(function() return ss.isOnBody and ss.isOnBody() end)
+    if not okOn then
+        return "isOnBody Err: " .. tostring(onB):sub(1, 15)
+    end
+    if onB == false then
+        return "CCPE: Not on Physics Body (Assemble Ship)"
+    end
+    local okPos, pos = pcall(function() return ss.getBodyPosition and ss.getBodyPosition() end)
+    if not okPos then
+        return "getBodyPos Err: " .. tostring(pos):sub(1, 15)
+    end
+    if not pos then
+        return "getBodyPos returned nil"
+    end
+    return "Pos Type: " .. type(pos)
+end
+
 function FlightCore.updateNavigation()
     -- 1. 優先嘗試 CCPE 物理實體感測系統 (ccpe.sensor_system)
     local ss = getCCPESensorSystem()

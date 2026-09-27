@@ -1,7 +1,7 @@
 --[[
     Create: Avionics & CC: Tweaked
     Standalone Cockpit Display System (CDS / Glass Cockpit)
-    Version: v4.0.9
+    Version: v4.0.10
     
     特點:
     - 專門負責駕駛艙螢幕繪圖渲染與觸控按鈕交互
@@ -11,7 +11,7 @@
     - 即使渲染再繁重，也 100% 不會拖慢飛船飛控運算
 --]]
 
-local VERSION = "v4.0.9"
+local VERSION = "v4.0.10"
 local args = {...}
 local requestedDriver = args[1] and string.lower(args[1]) or "auto"
 

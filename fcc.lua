@@ -1,7 +1,7 @@
 --[[
     Create: Avionics & CC: Tweaked
     Standalone Flight Control Computer (FCC - 分散式純飛控大腦)
-    Version: v4.0.9
+    Version: v4.0.10
     
     特點:
     - 0% 畫面渲染開銷 (No UI Rendering Overhead)，運算時間 < 0.2ms
@@ -11,7 +11,7 @@
     - 徹底根除 "Too long without yielding"
 --]]
 
-local VERSION = "v4.0.9"
+local VERSION = "v4.0.10"
 
 -- ========================================================
 -- PART 1: 飛控與動力控制核心 (FLIGHT & PROPULSION CORE)
@@ -150,6 +150,34 @@ local function getCCPESensorSystem()
         return _G.ccpe.sensor_system
     end
     return nil
+end
+
+function FlightCore.getNavDiagnostic()
+    if FlightCore.nav.x and FlightCore.nav.z then
+        return string.format("Fix: X:%.0f Y:%.0f Z:%.0f (%s)", FlightCore.nav.x, FlightCore.nav.y or 0, FlightCore.nav.z, FlightCore.nav.source or "AIC")
+    end
+    local okRequire, ss = pcall(require, "ccpe.sensor_system")
+    if not okRequire then
+        return "CCPE Require Err: " .. tostring(ss):sub(1, 20)
+    end
+    if not ss then
+        return "CCPE Sensor System is Nil"
+    end
+    local okOn, onB = pcall(function() return ss.isOnBody and ss.isOnBody() end)
+    if not okOn then
+        return "isOnBody Err: " .. tostring(onB):sub(1, 15)
+    end
+    if onB == false then
+        return "CCPE: Not on Physics Body (Assemble Ship)"
+    end
+    local okPos, pos = pcall(function() return ss.getBodyPosition and ss.getBodyPosition() end)
+    if not okPos then
+        return "getBodyPos Err: " .. tostring(pos):sub(1, 15)
+    end
+    if not pos then
+        return "getBodyPos returned nil"
+    end
+    return "Pos Type: " .. type(pos)
 end
 
 function FlightCore.updateNavigation()
@@ -1173,7 +1201,8 @@ local function broadcastTelemetry()
             targetX = FlightCore.nav.targetX,
             targetZ = FlightCore.nav.targetZ,
             wpActive = FlightCore.nav.wpActive,
-            arrivalRadius = FlightCore.nav.arrivalRadius
+            arrivalRadius = FlightCore.nav.arrivalRadius,
+            diag = (FlightCore.getNavDiagnostic and FlightCore.getNavDiagnostic()) or "Searching..."
         },
         outputs = FlightCore.virtualOutputs,
         engineOutputs = FlightCore.engineOutputs,
@@ -1268,7 +1297,8 @@ local function uiLoop()
         if FlightCore.nav.x then
             print(string.format(" Nav Pos: X:%.0f Y:%.0f Z:%.0f (Spd:%.1f)", FlightCore.nav.x, FlightCore.nav.y or currentAlt, FlightCore.nav.z, FlightCore.nav.speed or 0))
         else
-            print(" Nav Pos: Searching INS / GPS / Table...")
+            local diag = (FlightCore.getNavDiagnostic and FlightCore.getNavDiagnostic()) or "Searching..."
+            print(" Nav Pos: " .. diag)
         end
         print(string.format(" Lift   : FL:%.1f FR:%.1f BL:%.1f BR:%.1f", FlightCore.virtualOutputs.FL or 0, FlightCore.virtualOutputs.FR or 0, FlightCore.virtualOutputs.BL or 0, FlightCore.virtualOutputs.BR or 0))
         print(string.format(" Cruis  : FWD:%.1f BWD:%.1f L:%.1f R:%.1f", FlightCore.virtualOutputs.FWD or 0, FlightCore.virtualOutputs.BWD or 0, FlightCore.virtualOutputs.LEFT or 0, FlightCore.virtualOutputs.RIGHT or 0))
