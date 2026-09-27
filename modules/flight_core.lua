@@ -665,17 +665,35 @@ function FlightCore.updateFlightLogic()
         FlightCore.state.virtualAlt = FlightCore.state.virtualAlt + step
 
         local altError = FlightCore.state.virtualAlt - currentAlt
+
+        -- 自動配平 (Auto-Trim): 當落後目標高度且未建立有效爬升速度時，自動平滑遞增基準油門
+        if altError > 0.8 and currentVspeed < 0.20 then
+            local trimRate = 0.025 -- 逐步推升基準油門 (每秒約 +0.5)
+            FlightCore.state.baseThrottle = math.min(15.0, FlightCore.state.baseThrottle + trimRate)
+        elseif altError < -0.8 and currentVspeed > -0.20 then
+            local trimRate = 0.010
+            FlightCore.state.baseThrottle = math.max(0.1, FlightCore.state.baseThrottle - trimRate)
+        end
+
         local pidAdj = FlightCore.altPID:update(altError)
+
+        -- 爬升推力權限 (Climb Boost Authority): 當目標高度顯著高於當前高度時，給予充足爬升力
+        local climbBoost = 0.0
+        if altError > 1.5 then
+            climbBoost = math.min(5.0, (altError - 1.5) * 0.35)
+        end
 
         local pitchCorr = -currPitch * 0.04
         local rollCorr = currRoll * 0.04
 
         -- 安全防墜保護底線: 最低輸出絕不低於 baseThrottle - 1.5 (杜絕空中斷電墜落)
         local minFloor = math.max(0.0, FlightCore.state.baseThrottle - 1.5)
-        FlightCore.virtualOutputs.FL = math.max(minFloor, math.min(15.0, FlightCore.state.baseThrottle + pidAdj + pitchCorr - rollCorr))
-        FlightCore.virtualOutputs.FR = math.max(minFloor, math.min(15.0, FlightCore.state.baseThrottle + pidAdj + pitchCorr + rollCorr))
-        FlightCore.virtualOutputs.BL = math.max(minFloor, math.min(15.0, FlightCore.state.baseThrottle + pidAdj - pitchCorr - rollCorr))
-        FlightCore.virtualOutputs.BR = math.max(minFloor, math.min(15.0, FlightCore.state.baseThrottle + pidAdj - pitchCorr + rollCorr))
+        local baseThrust = FlightCore.state.baseThrottle + pidAdj + climbBoost
+
+        FlightCore.virtualOutputs.FL = math.max(minFloor, math.min(15.0, baseThrust + pitchCorr - rollCorr))
+        FlightCore.virtualOutputs.FR = math.max(minFloor, math.min(15.0, baseThrust + pitchCorr + rollCorr))
+        FlightCore.virtualOutputs.BL = math.max(minFloor, math.min(15.0, baseThrust - pitchCorr - rollCorr))
+        FlightCore.virtualOutputs.BR = math.max(minFloor, math.min(15.0, baseThrust - pitchCorr + rollCorr))
 
         local diff = FlightCore.state.targetAlt - currentAlt
         if diff > 1.0 then
