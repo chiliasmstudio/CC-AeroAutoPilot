@@ -11,6 +11,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build-and-release:
     runs-on: ubuntu-latest
@@ -46,65 +50,73 @@ jobs:
           echo "turt_ver=${TURT_VER}" >> $GITHUB_OUTPUT
           echo "release_title=Release ${TAG_NAME} (Computer: ${COMP_VER} | Turtle: ${TURT_VER})" >> $GITHUB_OUTPUT
 
-      - name: Create or Update GitHub Release
-        uses: softprops/action-gh-release@v3
-        with:
-          tag_name: ${{ steps.vars.outputs.tag_name }}
-          name: ${{ steps.vars.outputs.release_title }}
-          body: |
-            ## 🚀 CC-AeroAutoPilot 自動化構建發布 (${{ steps.vars.outputs.tag_name }})
+      - name: Generate Release Notes
+        run: |
+          cat << 'EOF' > release_notes.md
+          ## 🚀 CC-AeroAutoPilot 自動化構建發布 (${{ steps.vars.outputs.tag_name }})
 
-            本 Release 由 GitHub Actions 自動編譯模組並完成語法校驗後產出。
+          本 Release 由 GitHub Actions 自動編譯模組並完成語法校驗後產出。
 
-            ### 🏷️ 韌體與軟體版本 (從 version.xml 自動同步)
-            - 🖥️ **飛控電腦軟體版本 (Computer Suite)**: `${{ steps.vars.outputs.comp_ver }}`
-            - 🐢 **動力烏龜韌體版本 (Turtle Firmware)**: `${{ steps.vars.outputs.turt_ver }}`
+          ### 🏷️ 韌體與軟體版本 (從 version.xml 自動同步)
+          - 🖥️ **飛控電腦軟體版本 (Computer Suite)**: `${{ steps.vars.outputs.comp_ver }}`
+          - 🐢 **動力烏龜韌體版本 (Turtle Firmware)**: `${{ steps.vars.outputs.turt_ver }}`
 
-            ### ⚡ 玩家使用指南（只需下載 boot.lua 即可安裝與執行全部功能）
-            在 CC 電腦或烏龜上執行以下單行指令啟動萬能啟動 / 安裝選單：
-            ```bash
-            wget run https://raw.githubusercontent.com/chiliasmstudio/CC-AeroAutoPilot/main/boot.lua
-            ```
-            或下載後自由選擇：
-            ```bash
-            wget https://raw.githubusercontent.com/chiliasmstudio/CC-AeroAutoPilot/main/boot.lua boot
-            boot
-            ```
+          ### ⚡ 玩家使用指南（只需下載 boot.lua 即可安裝與執行全部功能）
+          在 CC 電腦或烏龜上執行以下單行指令啟動萬能啟動 / 安裝選單：
+          ```bash
+          wget run https://raw.githubusercontent.com/chiliasmstudio/CC-AeroAutoPilot/main/boot.lua
+          ```
+          或下載後自由選擇：
+          ```bash
+          wget https://raw.githubusercontent.com/chiliasmstudio/CC-AeroAutoPilot/main/boot.lua boot
+          boot
+          ```
 
-            快捷指令（免進入選單直接執行或安裝）：
-            ```bash
-            # 安裝至本機開機自啟 (startup.lua):
-            boot install fcc      # 安裝 分散式飛控大腦
-            boot install cli      # 安裝 獨立命令列終端
-            boot install display  # 安裝 駕駛艙螢幕系統
-            boot install turtle   # 安裝 動力烏龜韌體並重啟
+          快捷指令（免進入選單直接執行或安裝）：
+          ```bash
+          # 安裝至本機開機自啟 (startup.lua):
+          boot install fcc      # 安裝 分散式飛控大腦
+          boot install cli      # 安裝 獨立命令列終端
+          boot install display  # 安裝 駕駛艙螢幕系統
+          boot install turtle   # 安裝 動力烏龜韌體並重啟
 
-            # 直接從 GitHub Release 下載最新版運行:
-            boot cli              # 啟動 FCC-CLI 命令終端
-            boot fcc              # 啟動 FCC 飛控大腦
-            boot display          # 啟動 駕駛艙螢幕
-            ```
+          # 直接從 GitHub Release 下載最新版運行:
+          boot cli              # 啟動 FCC-CLI 命令終端
+          boot fcc              # 啟動 FCC 飛控大腦
+          boot display          # 啟動 駕駛艙螢幕
+          ```
 
-            ### 📦 本次發布包含附件 (Release Assets)
-            - **`boot.lua`**：萬能下載、安裝與開機自啟啟動器（自動由 GitHub Release 獲取資產）。
-            - **`fcc.lua`**：分散式獨立飛控大腦 (Flight Control Computer) — 0% 畫面開銷，20Hz 極速 PD-V 飛控。
-            - **`fcc-cli.lua`**：飛控命令列與即時儀表終端 (FCC-CLI) — 支援 `go x z` 導航、高度/航向控制、遠端 OTA 更新與重啟烏龜。
-            - **`display.lua`**：分散式駕駛艙螢幕系統 (Cockpit Display System) — 專職 DirectGPU / Tom's / Normal 儀表渲染。
-            - **`run.lua`**：單機一體化飛控大腦程式 (整合 FCC + 螢幕顯示)。
-            - **`turtle_startup.lua`**：動力推進烏龜韌體程式 (放置於 FL/FR/BL/BR/FWD 烏龜中)。
+          ### 📦 本次發布包含附件 (Release Assets)
+          - **`boot.lua`**：萬能下載、安裝與開機自啟啟動器（自動由 GitHub Release 獲取資產）。
+          - **`fcc.lua`**：分散式獨立飛控大腦 (Flight Control Computer) — 0% 畫面開銷，20Hz 極速 PD-V 飛控。
+          - **`fcc-cli.lua`**：飛控命令列與即時儀表終端 (FCC-CLI) — 支援 `go x z` 導航、高度/航向控制、遠端 OTA 更新與重啟烏龜。
+          - **`display.lua`**：分散式駕駛艙螢幕系統 (Cockpit Display System) — 專職 DirectGPU / Tom's / Normal 儀表渲染。
+          - **`run.lua`**：單機一體化飛控大腦程式 (整合 FCC + 螢幕顯示)。
+          - **`turtle_startup.lua`**：動力推進烏龜韌體程式 (放置於 FL/FR/BL/BR/FWD 烏龜中)。
 
-            ### 📝 構建資訊
-            - **Commit SHA**: `${{ github.sha }}`
-            - **Branch / Ref**: `${{ github.ref_name }}`
-          files: |
-            run.lua
-            fcc.lua
-            display.lua
-            fcc-cli.lua
-            turtle_startup.lua
-            boot.lua
-          draft: false
-          prerelease: false
-          make_latest: true
+          ### 📝 構建資訊
+          - **Commit SHA**: `${{ github.sha }}`
+          - **Branch / Ref**: `${{ github.ref_name }}`
+          EOF
+
+      - name: Publish GitHub Release (via GitHub CLI)
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.vars.outputs.tag_name }}"
+          TITLE="${{ steps.vars.outputs.release_title }}"
+          FILES="run.lua fcc.lua display.lua fcc-cli.lua turtle_startup.lua boot.lua"
+
+          echo "Publishing release: $TAG with title: $TITLE"
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            echo "Release $TAG already exists. Editing notes and uploading assets..."
+            gh release edit "$TAG" --title "$TITLE" --notes-file release_notes.md --latest
+            gh release upload "$TAG" $FILES --clobber
+          else
+            echo "Creating new release $TAG..."
+            gh release create "$TAG" $FILES \
+              --title "$TITLE" \
+              --notes-file release_notes.md \
+              --latest \
+              --clobber
+          fi
