@@ -1,7 +1,7 @@
 --[[
     Create: Avionics & CC: Tweaked
     Standalone Flight Control Computer (FCC - 分散式純飛控大腦)
-    Version: v3.9.5
+    Version: v3.9.6
     
     特點:
     - 0% 畫面渲染開銷 (No UI Rendering Overhead)，運算時間 < 0.2ms
@@ -11,7 +11,7 @@
     - 徹底根除 "Too long without yielding"
 --]]
 
-local VERSION = "v3.9.5"
+local VERSION = "v3.9.6"
 
 -- ========================================================
 -- PART 1: 飛控與動力控制核心 (FLIGHT & PROPULSION CORE)
@@ -19,17 +19,17 @@ local VERSION = "v3.9.5"
 
 local FlightCore = {}
 
--- 1.1 高響應高度控制器 (PD-V Controller with Vertical Speed Damping & Anti-Windup)
+-- 1.1 航空級非對稱防墜高度控制器 (Asymmetric Anti-Drop Altitude Controller)
 local AltController = {}
 AltController.__index = AltController
 
-function AltController.new(kp, ki, kd, maxOutput)
+function AltController.new(kp, ki, kd, maxUp, maxDown)
     local self = setmetatable({}, AltController)
-    self.kp = kp or 0.45
-    self.ki = ki or 0.03
-    self.kd = kd or 0.70
-    self.maxOutput = maxOutput or 6.0
-    self.minOutput = -(maxOutput or 6.0)
+    self.kp = kp or 1.00
+    self.ki = ki or 0.05
+    self.kd = kd or 0.80
+    self.maxUp = maxUp or 6.0       -- 向上補償最大權限 (煞車/爬升)
+    self.maxDown = maxDown or -1.80 -- 向下減額最大權限 (杜絕空中大幅斷電墜落)
     self.integral = 0
     self.prevError = 0
     self.lastTime = os.epoch("utc") / 1000
@@ -51,14 +51,14 @@ function AltController:update(error, vspeed)
     -- P 比例項
     local p = self.kp * error
 
-    -- I 積分項 (防飽和 Anti-Windup Clamp)
+    -- I 積分項 (防飽和 Anti-Windup)
     self.integral = self.integral + error * dt
-    local iMax = self.maxOutput * 0.4
+    local iMax = 2.5
     if self.integral > iMax then self.integral = iMax end
     if self.integral < -iMax then self.integral = -iMax end
     local i = self.ki * self.integral
 
-    -- D 速度阻尼項 (直接採用垂直下墜/爬升速度 vspeed，杜絕超調與震盪)
+    -- D 速度阻尼項 (直接採用 EMA 垂直速度 vspeed，防超調與防下墜)
     local d = 0
     if vspeed ~= nil and type(vspeed) == "number" then
         d = -self.kd * vspeed
@@ -69,8 +69,9 @@ function AltController:update(error, vspeed)
     self.prevError = error
 
     local output = p + i + d
-    if output > self.maxOutput then output = self.maxOutput end
-    if output < self.minOutput then output = self.minOutput end
+    -- 非對稱防墜落限制: 向上可大推力托舉，向下絕不劇烈減額
+    if output > self.maxUp then output = self.maxUp end
+    if output < self.maxDown then output = self.maxDown end
     return output
 end
 
@@ -110,8 +111,8 @@ FlightCore.nav = {
     arrivalRadius = 20.0  -- 目的地到達判定半徑 (可偏差半徑 20 格)
 }
 
--- 高度控制專用高響應 PD-V 控制器 (僅控制 FL, FR, BL, BR 垂直升力，臨界阻尼無超調: Kp=1.6, Ki=0.08, Kd=1.8, 權限±8.0)
-FlightCore.altPID = AltController.new(1.60, 0.08, 1.80, 8.0)
+-- 高度控制專用非對稱防墜控制器 (僅控制 FL, FR, BL, BR 垂直升力)
+FlightCore.altPID = AltController.new(1.00, 0.05, 0.80, 6.0, -1.8)
 
 -- 支援一側/象限/平移方向配置多個引擎 (陣列結構)
 FlightCore.engines = {
@@ -576,9 +577,9 @@ function FlightCore.startCalibration()
     FlightCore.state.calibStartAlt = curAlt
     FlightCore.state.calibThrottle = 1.0
     FlightCore.state.baseThrottle = 1.0
-    FlightCore.state.rampRate = 0.05
+    FlightCore.state.rampRate = 0.04
     FlightCore.state.stableTimer = 0
-    FlightCore.state.statusMsg = "Calibrating: Finding Lift Point..."
+    FlightCore.state.statusMsg = "Calibrating: Searching Liftoff..."
     FlightCore.altPID:reset()
 end
 
@@ -654,17 +655,17 @@ function FlightCore.updateFlightLogic()
             FlightCore.state.baseThrottle = FlightCore.state.calibThrottle
 
             local altDelta = currentAlt - FlightCore.state.calibStartAlt
-            if altDelta >= 0.18 or currentVspeed > 0.10 then
-                -- 檢測到離地升力！立刻鎖定為懸停平衡基準並直接進入高度鎖定
-                local hoverBase = math.max(0.5, FlightCore.state.calibThrottle)
+            -- 嚴格判定真實離地起飛 (高度上升 >= 0.5m 或 垂直速度 >= 0.18m/s)，杜絕地面微小碰撞誤判
+            if (altDelta >= 0.50) or (altDelta >= 0.25 and currentVspeed >= 0.18) then
+                local hoverBase = math.max(1.0, FlightCore.state.calibThrottle)
                 FlightCore.state.baseThrottle = hoverBase
-                FlightCore.state.targetAlt = currentAlt + 1.0
+                FlightCore.state.targetAlt = math.ceil(currentAlt + 1.0)
                 FlightCore.state.virtualAlt = currentAlt
                 FlightCore.state.mode = "HOLD_ALT"
-                FlightCore.state.statusMsg = string.format("Calib Complete! Hover Base: %.2f", hoverBase)
+                FlightCore.state.statusMsg = string.format("Hover Locked: %.2f (Alt: %.1fm)", hoverBase, currentAlt)
                 FlightCore.altPID:reset()
             else
-                FlightCore.state.statusMsg = string.format("Finding Lift: %.2f (Alt: %.1f)", FlightCore.state.baseThrottle, currentAlt)
+                FlightCore.state.statusMsg = string.format("Ramping: %.2f (Alt: %.1f)", FlightCore.state.baseThrottle, currentAlt)
             end
 
             FlightCore.virtualOutputs.FL = FlightCore.state.baseThrottle
@@ -675,30 +676,23 @@ function FlightCore.updateFlightLogic()
 
     elseif FlightCore.state.mode == "HOLD_ALT" then
         local altDiff = FlightCore.state.targetAlt - FlightCore.state.virtualAlt
-        local step = math.max(-2.5 * 0.05, math.min(2.5 * 0.05, altDiff))
+        local step = math.max(-2.0 * 0.05, math.min(2.0 * 0.05, altDiff))
         FlightCore.state.virtualAlt = FlightCore.state.virtualAlt + step
 
         local altError = FlightCore.state.virtualAlt - currentAlt
         local pidAdj = FlightCore.altPID:update(altError, currentVspeed)
 
-        -- 自動自適應懸停微調 (Auto Hover Trim)
-        if math.abs(altError) < 0.6 and math.abs(currentVspeed) < 0.25 then
-            if currentAlt < FlightCore.state.targetAlt - 0.08 then
-                FlightCore.state.baseThrottle = math.min(15.0, FlightCore.state.baseThrottle + 0.002)
-            elseif currentAlt > FlightCore.state.targetAlt + 0.08 then
-                FlightCore.state.baseThrottle = math.max(0.5, FlightCore.state.baseThrottle - 0.002)
-            end
-        end
+        local pitchCorr = -currPitch * 0.03
+        local rollCorr = currRoll * 0.03
 
-        local pitchCorr = -currPitch * 0.04
-        local rollCorr = currRoll * 0.04
+        -- 安全防墜保護底線: 最低輸出絕不低於 baseThrottle - 2.0 (杜絕空中斷電墜落)
+        local minFloor = math.max(0.0, FlightCore.state.baseThrottle - 2.0)
+        local targetFL = math.max(minFloor, math.min(15.0, FlightCore.state.baseThrottle + pidAdj + pitchCorr - rollCorr))
+        local targetFR = math.max(minFloor, math.min(15.0, FlightCore.state.baseThrottle + pidAdj + pitchCorr + rollCorr))
+        local targetBL = math.max(minFloor, math.min(15.0, FlightCore.state.baseThrottle + pidAdj - pitchCorr - rollCorr))
+        local targetBR = math.max(minFloor, math.min(15.0, FlightCore.state.baseThrottle + pidAdj - pitchCorr + rollCorr))
 
-        local targetFL = math.max(0, math.min(15, FlightCore.state.baseThrottle + pidAdj + pitchCorr - rollCorr))
-        local targetFR = math.max(0, math.min(15, FlightCore.state.baseThrottle + pidAdj + pitchCorr + rollCorr))
-        local targetBL = math.max(0, math.min(15, FlightCore.state.baseThrottle + pidAdj - pitchCorr - rollCorr))
-        local targetBR = math.max(0, math.min(15, FlightCore.state.baseThrottle + pidAdj - pitchCorr + rollCorr))
-
-        local maxLiftSlew = 0.60
+        local maxLiftSlew = 0.40
         local function approach(current, target, maxStep)
             if current < target then return math.min(target, current + maxStep)
             else return math.max(target, current - maxStep) end
