@@ -96,8 +96,8 @@ FlightCore.nav = {
     arrivalRadius = 20.0  -- 目的地到達判定半徑 (可偏差半徑 20 格)
 }
 
--- 高度控制專用高響應 PD-V 控制器 (僅控制 FL, FR, BL, BR 垂直升力，EMA 平滑速度阻尼)
-FlightCore.altPID = AltController.new(0.30, 0.015, 0.50, 5.0)
+-- 高度控制專用高響應 PD-V 控制器 (僅控制 FL, FR, BL, BR 垂直升力，臨界阻尼無超調: Kp=1.6, Ki=0.08, Kd=1.8, 權限±8.0)
+FlightCore.altPID = AltController.new(1.60, 0.08, 1.80, 8.0)
 
 -- 支援一側/象限/平移方向配置多個引擎 (陣列結構)
 FlightCore.engines = {
@@ -640,11 +640,11 @@ function FlightCore.updateFlightLogic()
             FlightCore.state.baseThrottle = FlightCore.state.calibThrottle
 
             local altDelta = currentAlt - FlightCore.state.calibStartAlt
-            if altDelta >= 0.20 or currentVspeed > 0.10 then
+            if altDelta >= 0.18 or currentVspeed > 0.10 then
                 -- 檢測到離地升力！立刻鎖定為懸停平衡基準並直接進入高度鎖定
-                local hoverBase = math.max(0.5, FlightCore.state.calibThrottle - 0.15)
+                local hoverBase = math.max(0.5, FlightCore.state.calibThrottle)
                 FlightCore.state.baseThrottle = hoverBase
-                FlightCore.state.targetAlt = currentAlt + 0.5
+                FlightCore.state.targetAlt = currentAlt + 1.0
                 FlightCore.state.virtualAlt = currentAlt
                 FlightCore.state.mode = "HOLD_ALT"
                 FlightCore.state.statusMsg = string.format("Calib Complete! Hover Base: %.2f", hoverBase)
@@ -661,15 +661,20 @@ function FlightCore.updateFlightLogic()
 
     elseif FlightCore.state.mode == "HOLD_ALT" then
         local altDiff = FlightCore.state.targetAlt - FlightCore.state.virtualAlt
-        local step = math.max(-2.0 * 0.05, math.min(2.0 * 0.05, altDiff))
+        local step = math.max(-2.5 * 0.05, math.min(2.5 * 0.05, altDiff))
         FlightCore.state.virtualAlt = FlightCore.state.virtualAlt + step
 
         local altError = FlightCore.state.virtualAlt - currentAlt
-        if math.abs(altError) < 0.08 then
-            altError = 0
-        end
-
         local pidAdj = FlightCore.altPID:update(altError, currentVspeed)
+
+        -- 自動自適應懸停微調 (Auto Hover Trim)
+        if math.abs(altError) < 0.6 and math.abs(currentVspeed) < 0.25 then
+            if currentAlt < FlightCore.state.targetAlt - 0.08 then
+                FlightCore.state.baseThrottle = math.min(15.0, FlightCore.state.baseThrottle + 0.002)
+            elseif currentAlt > FlightCore.state.targetAlt + 0.08 then
+                FlightCore.state.baseThrottle = math.max(0.5, FlightCore.state.baseThrottle - 0.002)
+            end
+        end
 
         local pitchCorr = -currPitch * 0.04
         local rollCorr = currRoll * 0.04
@@ -679,7 +684,7 @@ function FlightCore.updateFlightLogic()
         local targetBL = math.max(0, math.min(15, FlightCore.state.baseThrottle + pidAdj - pitchCorr - rollCorr))
         local targetBR = math.max(0, math.min(15, FlightCore.state.baseThrottle + pidAdj - pitchCorr + rollCorr))
 
-        local maxLiftSlew = 0.35
+        local maxLiftSlew = 0.60
         local function approach(current, target, maxStep)
             if current < target then return math.min(target, current + maxStep)
             else return math.max(target, current - maxStep) end
