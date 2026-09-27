@@ -59,6 +59,7 @@ local FlightCore = {
         FWD = {}, BWD = {}, LEFT = {}, RIGHT = {}
     },
     turtles = {},
+    quadHealth = {},
     gimbalAvailable = false,
     modems = {},
     lastPacketTime = 0,
@@ -202,6 +203,9 @@ function FlightCore.getGimbalData()
 end
 
 function FlightCore.getQuadHealth(role)
+    if FlightCore.quadHealth and FlightCore.quadHealth[role] then
+        return FlightCore.quadHealth[role]
+    end
     local now = os.epoch("utc")
     local quadTurtles = {}
     local onlineCount = 0
@@ -257,6 +261,9 @@ function FlightCore.handleModemMessage(side, ch, replyCh, msg, dist)
         end
         if msg.turtles then
             FlightCore.turtles = msg.turtles
+        end
+        if msg.quadHealth then
+            FlightCore.quadHealth = msg.quadHealth
         end
         FlightCore.gimbalAvailable = msg.gimbalAvailable or false
     end

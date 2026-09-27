@@ -891,6 +891,16 @@ local function broadcastTelemetry()
         outputs = FlightCore.virtualOutputs,
         engineOutputs = FlightCore.engineOutputs,
         turtles = FlightCore.turtles,
+        quadHealth = {
+            FL = FlightCore.getQuadHealth("FL"),
+            FR = FlightCore.getQuadHealth("FR"),
+            BL = FlightCore.getQuadHealth("BL"),
+            BR = FlightCore.getQuadHealth("BR"),
+            FWD = FlightCore.getQuadHealth("FWD"),
+            BWD = FlightCore.getQuadHealth("BWD"),
+            LEFT = FlightCore.getQuadHealth("LEFT"),
+            RIGHT = FlightCore.getQuadHealth("RIGHT")
+        },
         gimbalAvailable = FlightCore.gimbalAvailable,
         timestamp = os.epoch("utc")
     }

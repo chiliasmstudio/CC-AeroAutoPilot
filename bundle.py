@@ -358,6 +358,16 @@ local function broadcastTelemetry()
         outputs = FlightCore.virtualOutputs,
         engineOutputs = FlightCore.engineOutputs,
         turtles = FlightCore.turtles,
+        quadHealth = {
+            FL = FlightCore.getQuadHealth("FL"),
+            FR = FlightCore.getQuadHealth("FR"),
+            BL = FlightCore.getQuadHealth("BL"),
+            BR = FlightCore.getQuadHealth("BR"),
+            FWD = FlightCore.getQuadHealth("FWD"),
+            BWD = FlightCore.getQuadHealth("BWD"),
+            LEFT = FlightCore.getQuadHealth("LEFT"),
+            RIGHT = FlightCore.getQuadHealth("RIGHT")
+        },
         gimbalAvailable = FlightCore.gimbalAvailable,
         timestamp = os.epoch("utc")
     }
@@ -528,6 +538,7 @@ local FlightCore = {{
         FWD = {{}}, BWD = {{}}, LEFT = {{}}, RIGHT = {{}}
     }},
     turtles = {{}},
+    quadHealth = {{}},
     gimbalAvailable = false,
     modems = {{}},
     lastPacketTime = 0,
@@ -671,6 +682,9 @@ function FlightCore.getGimbalData()
 end
 
 function FlightCore.getQuadHealth(role)
+    if FlightCore.quadHealth and FlightCore.quadHealth[role] then
+        return FlightCore.quadHealth[role]
+    end
     local now = os.epoch("utc")
     local quadTurtles = {{}}
     local onlineCount = 0
@@ -726,6 +740,9 @@ function FlightCore.handleModemMessage(side, ch, replyCh, msg, dist)
         end
         if msg.turtles then
             FlightCore.turtles = msg.turtles
+        end
+        if msg.quadHealth then
+            FlightCore.quadHealth = msg.quadHealth
         end
         FlightCore.gimbalAvailable = msg.gimbalAvailable or false
     end
