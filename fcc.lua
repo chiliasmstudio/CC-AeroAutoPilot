@@ -1,7 +1,7 @@
 --[[
     Create: Avionics & CC: Tweaked
     Standalone Flight Control Computer (FCC - 分散式純飛控大腦)
-    Version: v4.0.11
+    Version: v4.0.12
     
     特點:
     - 0% 畫面渲染開銷 (No UI Rendering Overhead)，運算時間 < 0.2ms
@@ -11,7 +11,7 @@
     - 徹底根除 "Too long without yielding"
 --]]
 
-local VERSION = "v4.0.11"
+local VERSION = "v4.0.12"
 
 -- ========================================================
 -- PART 1: 飛控與動力控制核心 (FLIGHT & PROPULSION CORE)
@@ -141,20 +141,55 @@ FlightCore.outputSides = {"bottom", "top", "left", "right", "back"}
 FlightCore.pwmTick = 0
 FlightCore.gpsTick = 0
 
-local function getCCPESensorSystem()
-    local req = require or (_ENV and _ENV.require) or (_G and _G.require)
-    if not req and type(getfenv) == "function" then
-        local env = getfenv()
-        req = env and env.require
+local function getRequire()
+    if type(require) == "function" then return require end
+    if _ENV and type(_ENV.require) == "function" then return _ENV.require end
+    if _G and type(_G.require) == "function" then return _G.require end
+    if type(getfenv) == "function" and getfenv().require then return getfenv().require end
+
+    -- CC:Tweaked 內建 /rom/modules require 載入器動態初始化
+    if fs and fs.exists and fs.exists("/rom/modules/main/cc/require.lua") then
+        local ok, reqMaker = pcall(dofile, "/rom/modules/main/cc/require.lua")
+        if ok and type(reqMaker) == "table" and type(reqMaker.make) == "function" then
+            local okMade, customReq = pcall(reqMaker.make, _ENV or _G or {}, "/")
+            if okMade and type(customReq) == "function" then
+                return customReq
+            end
+        end
     end
-    if type(req) == "function" then
+    if fs and fs.exists and fs.exists("/rom/modules/main/require.lua") then
+        local ok, customReq = pcall(dofile, "/rom/modules/main/require.lua")
+        if ok and type(customReq) == "function" then
+            return customReq
+        end
+    end
+    return nil
+end
+
+local function getCCPESensorSystem()
+    -- 1. 嘗試既有 package.loaded
+    if package and type(package.loaded) == "table" and package.loaded["ccpe.sensor_system"] then
+        return package.loaded["ccpe.sensor_system"]
+    end
+    -- 2. 嘗試 package.preload
+    if package and type(package.preload) == "table" and type(package.preload["ccpe.sensor_system"]) == "function" then
+        local okPre, ssPre = pcall(package.preload["ccpe.sensor_system"])
+        if okPre and ssPre then return ssPre end
+    end
+    -- 3. 嘗試全域 _G
+    if _G and _G.ccpe and _G.ccpe.sensor_system then
+        return _G.ccpe.sensor_system
+    end
+    if _G and _G.sensor_system then
+        return _G.sensor_system
+    end
+    -- 4. 嘗試 require 函式 (包含從 /rom 自動載入 require)
+    local req = getRequire()
+    if req then
         local ok, ss = pcall(req, "ccpe.sensor_system")
         if ok and ss then return ss end
         local ok2, ss2 = pcall(req, "ccpe/sensor_system")
         if ok2 and ss2 then return ss2 end
-    end
-    if _G and _G.ccpe and _G.ccpe.sensor_system then
-        return _G.ccpe.sensor_system
     end
     return nil
 end
@@ -163,21 +198,16 @@ function FlightCore.getNavDiagnostic()
     if FlightCore.nav.x and FlightCore.nav.z then
         return string.format("Fix: X:%.0f Y:%.0f Z:%.0f (%s)", FlightCore.nav.x, FlightCore.nav.y or 0, FlightCore.nav.z, FlightCore.nav.source or "AIC")
     end
-    local req = require or (_ENV and _ENV.require) or (_G and _G.require)
-    if not req and type(getfenv) == "function" then
-        local env = getfenv()
-        req = env and env.require
-    end
-    if not req then
-        return "No 'require' in _ENV"
-    end
-    local okRequire, ss = pcall(req, "ccpe.sensor_system")
-    if not okRequire then
-        local errClean = tostring(ss):gsub("^.-:%d+:%s*", "")
-        return "Req Err: " .. errClean:sub(1, 25)
-    end
+    local ss = getCCPESensorSystem()
     if not ss then
-        return "CCPE System is Nil"
+        local req = getRequire()
+        if not req then
+            return "No 'require' in ROM"
+        else
+            local ok, err = pcall(req, "ccpe.sensor_system")
+            local errClean = tostring(err):gsub("^.-:%d+:%s*", "")
+            return "Req Err: " .. errClean:sub(1, 25)
+        end
     end
     local okOn, onB = pcall(function() return ss.isOnBody and ss.isOnBody() end)
     if not okOn then
