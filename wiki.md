@@ -1,159 +1,129 @@
-# 📖 VTOL Avionics Flight Computer 核心架構與技術手冊 (`wiki.md`)
+# 📖 VTOL Avionics Flight Computer 核心架構與技術規格手冊 (`wiki.md`)
 
-本文檔專為開發者、工程師與架構維護者提供深入的技術指南。詳細解構專案中各模組如何分工、前後端分離架構、點陣字體渲染原理、API 介面規格，以及 `bundle.py` 如何將模組化程式碼自動編譯打包為單一獨立執行的 `run.lua`。
+本文檔專為開發者、工程師與架構維護者提供深入的技術指南。詳細解構專案中各模組如何分工、分散式節點架構、CCPE 物理實體感知整合、全向發動機叢集控制、點陣字體渲染原理、API 介面規格，以及 `bundle.py` 如何將模組化程式碼自動編譯打包為分散式發布資產。
 
 ---
 
 ## 📑 目錄
-1. [系統總覽與檔案職責](#1-系統總覽與檔案職責)
-2. [前後端分離架構與呼叫流程](#2-前後端分離架構與呼叫流程)
-3. [核心模組深入剖析](#3-核心模組深入剖析)
-   - [3.1 點陣字體庫模組 (`bitmap_font.lua`)](#31-點陣字體庫模組-bitmap_fontlua)
-   - [3.2 飛控核心大腦 (`flight_core.lua`)](#32-飛控核心大腦-flight_corelua)
-   - [3.3 顯示驅動層 (`modules/drivers/*`)](#33-顯示驅動層-modulesdrivers)
-4. [核心 API 規格與硬體通訊協議](#4-核心-api-規格與硬體通訊協議)
-5. [自動化打包與語法校驗原理 (`bundle.py`)](#5-自動化打包與語法校驗原理-bundlepy)
+1. [系統總覽與模組職責矩陣](#1-系統總覽與模組職責矩陣)
+2. [分散式節點架構與通訊協議](#2-分散式節點架構與通訊協議)
+3. [飛控與動力分配演算法 (`flight_core.lua`)](#3-飛控與動力分配演算法-flight_corelua)
+   - [3.1 四象限升降動力與姿態平衡數學模型](#31-四象限升降動力與姿態平衡數學模型)
+   - [3.2 水平巡航與側推轉向動力分配](#32-水平巡航與側推轉向動力分配)
+   - [3.3 PD-V 垂直速度阻尼與高度雙閉環控制](#33-pd-v-垂直速度阻尼與高度雙閉環控制)
+   - [3.4 自動起飛懸停基準校準狀態機](#34-自動起飛懸停基準校準狀態機)
+   - [3.5 航點自駕與航向引導演算法](#35-航點自駕與航向引導演算法)
+4. [CCPE 物理實體感知與多源導航融合](#4-ccpe-物理實體感知與多源導航融合)
+   - [4.1 `ccpe.sensor_system` API 深度整合](#41-ccpesensor_system-api-深度整合)
+   - [4.2 CC:Tweaked 獨立執行環境動態載入機制](#42-cctweaked-獨立執行環境動態載入機制)
+   - [4.3 多源導航融合與容錯降級機制](#43-多源導航融合與容錯降級機制)
+5. [顯示驅動層與字型渲染技術](#5-顯示驅動層與字型渲染技術)
+   - [5.1 5x7 ASCII 嵌入式點陣字型編碼與縮放](#51-5x7-ascii-嵌入式點陣字型編碼與縮放)
+   - [5.2 DirectGPU 24-bit True RGB 向量加速驅動](#52-directgpu-24-bit-true-rgb-向量加速驅動)
+   - [5.3 Tom's Peripherals GPU 32-bit ARGB 點陣/向量驅動](#53-toms-peripherals-gpu-32-bit-argb-點陣向量驅動)
+   - [5.4 CC Advanced Monitor 16 色終端與多螢幕鏡像](#54-cc-advanced-monitor-16-色終端與多螢幕鏡像)
+   - [5.5 雙尺寸自適應佈局模型 (Compact vs Full)](#55-雙尺寸自適應佈局模型-compact-vs-full)
+6. [硬體設備清單檢測與遙測廣播](#6-硬體設備清單檢測與遙測廣播)
+7. [無線 OTA 韌體遠端維護協議](#7-無線-ota-韌體遠端維護協議)
+8. [自動化構建與語法校驗系統 (`bundle.py`)](#8-自動化構建與語法校驗系統-bundlepy)
+9. [完整對外 API 規格清單](#9-完整對外-api-規格清單)
 
 ---
 
-## 1. 系統總覽與檔案職責
+## 1. 系統總覽與模組職責矩陣
 
-專案遵循高內聚、低耦合的模組化架構，將純數學物理運算、硬體 I/O 與各類螢幕的圖形渲染徹底解耦：
+專案遵循高內聚、低耦合的模組化與微核心 (Microkernel) 架構，將純數學物理運算、硬體 I/O、遙測廣播與各類螢幕的圖形渲染徹底解耦：
 
 ```text
 CC-AeroAutoPilot/
-├── run.lua                      # 🚀 統一主執行檔 (單檔直接執行，可由 bundle.py 編譯產出)
-├── bundle.py                    # 🛠️ 模組編譯打包與語法驗證工具 (Compile & Validate)
-├── wiki.md                      # 📖 深度技術規格、模組架構、API 與合併原理 (本手冊)
-├── agent.md                     # 📖 開發規範、官方參考文獻與歷史規格彙整
+├── boot.lua                     # 🚀 通用萬能啟動器 (Release 下載 / 安裝至 startup.lua)
+├── fcc.lua                      # 🧠 分散式純計算飛控大腦 (20Hz 後台運算，0% 畫面開銷)
+├── display.lua                  # 🖥️ 分散式駕駛艙螢幕系統 (專職 DirectGPU / Tom's / Monitor 渲染)
+├── fcc-cli.lua                  # 💻 獨立命令列終端與儀表 (雙視窗 REPL，Pocket Computer 適用)
+├── run.lua                      # 📦 單機一體化主程式 (整合飛控與多螢幕渲染)
+├── turtle_startup.lua           # 🐢 發動機烏龜韌體 (FL, FR, BL, BR, FWD, BWD, LEFT, RIGHT)
+├── bundle.py                    # 🛠️ 模組編譯打包、版本同步與語法驗證工具
+├── version.xml                  # 🏷️ 集中版本控制元數據
 ├── README.md                    # 📖 快速上手、硬體佈線與使用者操作指南
-├── turtle_startup.lua           # 🐢 動力烏龜專用啟動程式 (FL, FR, BL, BR)
-├── info\                        # 📚 外部開源參考儲存庫與規格文件
-└── modules\                     # 📦 模組化原始碼層
+├── wiki.md                      # 📖 深度技術規格、模組架構、API 與物理演算法 (本手冊)
+└── modules/                     # 📦 模組化原始碼層
     ├── init.lua                 # 總模組載入器 (Unified Package Loader)
-    ├── bitmap_font.lua          # 點陣字體庫 (ASCII 32~127 5x7 像素點陣矩陣)
-    ├── flight_core.lua          # 飛控核心大腦 (PID、感測器、烏龜掃描、狀態機)
-    └── drivers\                 # 前端多螢幕顯示驅動層
+    ├── bitmap_font.lua          # 點陣字體庫 (ASCII 32~127 5x7 像素矩陣)
+    ├── flight_core.lua          # 飛控核心大腦 (PID、CCPE、航點、狀態機、發動機調度)
+    └── drivers/                 # 前端多螢幕顯示驅動層
         ├── directgpu.lua        # CC-DirectGPU-Mod 24-bit RGB 向量圖形驅動
         ├── tom.lua              # Tom's Peripherals GPU 32-bit ARGB 點陣/向量驅動
         └── normal.lua           # CC: Tweaked 原生 Advanced Monitor & Terminal 驅動
 ```
 
-### 各檔案職責矩陣
+### 各模組職責矩陣
 
-| 檔案路徑 | 職責定義 | 依賴項 | 核心輸出 |
+| 檔案 / 模組路徑 | 職責定義 | 通訊 / 依賴 | 核心輸出 |
 | :--- | :--- | :--- | :--- |
-| **`modules/bitmap_font.lua`** | 嵌入式點陣字型庫（Bitmap Font Library）。提供全套 ASCII 字符之微小點陣資料（5 像素寬 × 7 像素高），供任意尺寸之 GPU 螢幕渲染清晰文字。 | 無 | `FONT_5X7` 點陣資料表 |
-| **`modules/flight_core.lua`** | 後端純邏輯與硬體控制核心。掌管高度 PID、陀螺儀平衡、烏龜通訊與物理狀態機。 | `peripheral`, `redstone` | `FlightCore` 單例物件與全域飛控狀態 |
-| **`modules/drivers/directgpu.lua`** | DirectGPU 專屬前端驅動。支援 164×164/方塊 高解析向量繪圖與原生觸控。 | `FlightCore` | `DirectGPUDriver` |
-| **`modules/drivers/tom.lua`** | Tom's GPU 專屬前端驅動。支援 ARGB 點陣文字、`lineS` 平滑刻度盤與自適應佈局。 | `FlightCore`, `bitmap_font` | `TomGPUDriver` |
-| **`modules/drivers/normal.lua`** | CC 原生高級螢幕與主電腦終端機驅動。支援 16 色 `blit` 與多螢幕鏡像。 | `FlightCore` | `NormalDriver` |
-| **`modules/init.lua`** | 模組化環境總入口。負責在開發階段引導載入核心與所有驅動。 | 所有子模組 | `VTOLAvionics` 主物件 |
-| **`bundle.py`** | 自動化構建系統。靜態提取模組並拼裝為零依賴的單檔 `run.lua`。 | Python 3 | `run.lua` 與語法平衡報告 |
+| **`fcc.lua` / `flight_core.lua`** | 後端純計算大腦。以 20Hz 執行高頻閉環 PD-V 垂直升力、CCPE 實體感知、四軸差動平衡、航點自駕計算，並透過 Ch 102 廣播 10Hz 遙測。 | `peripheral`, `redstone`, `ccpe.sensor_system` | 廣播 Telemetry、發送發動機 PWM |
+| **`fcc-cli.lua`** | 獨立終端控制台。上半部即時渲染飛控儀表 (ALT, THR, HDG, POS, NAV, ENG)，下半部提供非阻塞命令列 (REPL)。 | Ch 102 (接收遙測), Ch 103 (發送指令) | 飛控指令與 OTA 廣播 |
+| **`display.lua` / `drivers/*`** | 前端視覺渲染系統。接收 Ch 102 遙測封包，驅動 DirectGPU / Tom's GPU / CC Monitor 進行 6 大分頁渲染與觸控處理。 | Ch 102 (接收遙測), Ch 103 (發送指令) | 多螢幕儀表畫面與觸控事件 |
+| **`turtle_startup.lua`** | 發動機節點韌體。接收 Ch 100 動力推力指令輸出紅石類比訊號，接收 Ch 101 OTA 韌體更新。 | Ch 100 (推力接收), Ch 101 (OTA 接收) | 類比紅石輸出 ($0 \sim 15$) |
+| **`boot.lua`** | 萬能發布管理與開機自啟器。支援直接運行或安裝至本機 `startup.lua`。 | GitHub Releases API / Raw | 自動更新與版本維護 |
 
 ---
 
-## 2. 前後端分離架構與呼叫流程
-
-本專案採用 **Model-View-Controller (MVC) 變形之微核心 (Microkernel) 架構**：
+## 2. 分散式節點架構與通訊協議
 
 ```mermaid
 flowchart TD
-    subgraph Backend ["後端邏輯層 (FlightCore)"]
-        Sensors["高度計 (Altitude) & 陀螺儀 (Gimbal)"] -->|感知數據| FlightBrain["FlightCore 狀態機 & PID 演算法"]
-        FlightBrain -->|0~15 推力計算| Turtles["4 隻動力烏龜 (FL, FR, BL, BR)"]
-        FlightBrain -->|廣播狀態 Snapshot| StateStore["飛控狀態 (State / Telemetry)"]
+    subgraph CoreBrain ["FCC 飛控大腦 (fcc.lua)"]
+        Sensors["CCPE 實體感知 / 高度計 / 陀螺儀"] -->|20Hz 採樣| FC["FlightCore 狀態機 & 閉環 PID"]
+        FC -->|10Hz 廣播 Telemetry| Ch102["Channel 102 (Telemetry Broadcast)"]
+        Ch103["Channel 103 (Command Receiver)"] -->|接收駕駛指令| FC
+        FC -->|20Hz 動力計算| Ch100["Channel 100 (Engine PWM Broadcast)"]
     end
 
-    subgraph MultiScreenEngine ["前端多螢幕調度器 (Screen Manager)"]
-        StateStore -->|純資料讀取| Dispatcher["多螢幕渲染迴圈 (50ms Tick)"]
-        Dispatcher --> D1["DirectGPU 螢幕實例 (Driver A)"]
-        Dispatcher --> D2["Tom's GPU 螢幕實例 (Driver B)"]
-        Dispatcher --> D3["CC Advanced Monitor (Driver C)"]
+    subgraph Displays ["視覺與終端系統"]
+        Ch102 -->|訂閱遙測| CDS["駕駛艙螢幕系統 (display.lua)"]
+        CDS -->|點擊按鈕發送指令| Ch103
+        Ch102 -->|訂閱遙測| CLI["命令列終端 (fcc-cli.lua)"]
+        CLI -->|輸入指令發送指令| Ch103
     end
 
-    subgraph EventPipeline ["使用者事件輸入 (Event Pipeline)"]
-        Touch1["DirectGPU Touch 事件"] -->|座標映射| Dispatcher
-        Touch2["Tom's Monitor Click 事件"] -->|縮放反算| Dispatcher
-        Touch3["CC Monitor Touch 事件"] -->|字元格反算| Dispatcher
-        Dispatcher -->|觸發操作指令| FlightBrain
+    subgraph Engines ["發動機烏龜叢集 (turtle_startup.lua)"]
+        Ch100 -->|推力分配| T_Lift["升降烏龜 (FL, FR, BL, BR)"]
+        Ch100 -->|巡航推力| T_Cruise["巡航烏龜 (FWD, BWD)"]
+        Ch100 -->|側推推力| T_Steer["側推烏龜 (LEFT, RIGHT)"]
+        Ch101["Channel 101 (OTA Firmware Update)"] -.->|無線遠端刷新韌體| Engines
     end
 ```
 
-### 前後端分離的關鍵設計原則
-1. **單一資料來源 (Single Source of Truth)**：
-   - 所有的推力計算、感測器採樣、狀態切換與烏龜通訊**僅在 `FlightCore` 內執行**。
-   - 驅動層**完全不直接操作紅石或控制硬體**，僅讀取 `FlightCore.state`、`FlightCore.virtualOutputs` 與 `FlightCore.getQuadHealth()`。
-2. **驅動插拔化 (Pluggable Drivers)**：
-   - 每個驅動皆實作標準生命週期：
-     - `init(scr, dev)`：探測螢幕解析度與初始化硬體緩衝區。
-     - `render(scr)`：依據螢幕尺寸自適應渲染當前分頁（OVERVIEW, ECAM, CTRL, NAV, SYS）。
-     - `handleClick(scr, x, y)`：處理點擊/觸控事件並呼叫 `FlightCore` 的控制方法。
-3. **異質多螢幕並行 (Heterogeneous Multi-Display)**：
-   - 主電腦可同時外接 1 個 DirectGPU、2 個 Tom's GPU 螢幕以及 3 個 Advanced Monitor，每個螢幕獨立切換分頁與互動，互不干擾。
+### 通訊頻道 (Modem Channels) 規範
+
+1. **Channel 100 (Engine Dynamic Sync, 20Hz)**：
+   - 由 FCC 向所有動力烏龜廣播。
+   - 封包格式：`{ FL = 8.5, FR = 8.5, BL = 8.5, BR = 8.5, FWD = 4.0, BWD = 0.0, LEFT = 0.0, RIGHT = 0.0 }`
+2. **Channel 101 (OTA Firmware & Maintenance Broadcast)**：
+   - 由 FCC / FCC-CLI 向全艦烏龜廣播維護指令。
+   - 指令型態：
+     - `UPDATE_STARTUP`：攜帶最新 `turtle_startup.lua` 代碼字串，烏龜自動覆寫本機 `startup.lua`。
+     - `REBOOT_TURTLES`：所有烏龜立即執行 `os.reboot()`。
+3. **Channel 102 (Avionics Telemetry Broadcast, 10Hz)**：
+   - 由 FCC 向駕駛艙螢幕 (CDS) 與終端 (FCC-CLI) 廣播完整的飛控快照。
+   - 包含高度、垂直速度、航向、三軸角度、CCPE 座標、發動機健康度、航點自駕進度與設備庫存表。
+4. **Channel 103 (Flight Command Uplink)**：
+   - 由 CDS 觸控按鈕或 FCC-CLI 終端發送至 FCC。
+   - 包含航向設定、高度調整、模式切換、航點設定 (`NAV_TO`)、硬體重掃 (`RESCAN_HW`) 等指令。
 
 ---
 
-## 3. 核心模組深入剖析
+## 3. 飛控與動力分配演算法 (`flight_core.lua`)
 
-### 3.1 點陣字體庫模組 (`bitmap_font.lua`)
+### 3.1 四象限升降動力與姿態平衡數學模型
 
-Tom's GPU 雖然具備像素繪圖能力，但原生並無中文或高品質點陣字體支援。本模組內建完整的 5x7 像素點陣字型矩陣（ASCII 32~127，代表每個英文字母寬 5 像素、高 7 像素），可應用於任意解析度之螢幕，並支援 1x 與 2x 縮放。
-
-#### 點陣編碼原理
-每個字符以 **5 個位元組（5 Bytes）** 表示 5 條縱向行（Columns），每個 Byte 的低 7 位元代表由上至下的 7 個像素點（Rows）：
-
-```lua
--- 以字母 'A' 為例：
-['A'] = {0x7C, 0x12, 0x11, 0x12, 0x7C}
-
--- 二進位展開：
--- Col 1: 0x7C = 01111100 (■■■■■  )
--- Col 2: 0x12 = 00010010 (  ■  ■ )
--- Col 3: 0x11 = 00010001 (  ■   ■)
--- Col 4: 0x12 = 00010010 (  ■  ■ )
--- Col 5: 0x7C = 01111100 (■■■■■  )
-```
-
-#### 解碼與繪圖演算法 (`sTxt`)
-```lua
-local function sTxt(x, y, text, color, scale)
-    scale = scale or 1
-    local curX = x
-    for i = 1, #text do
-        local ch = text:sub(i, i)
-        local glyph = FONT_5X7[ch] or FONT_5X7['?']
-        for col = 1, 5 do
-            local bits = glyph[col]
-            for row = 0, 6 do
-                if bit32.band(bit32.rshift(bits, row), 1) == 1 then
-                    if scale == 1 then
-                        sP(curX + col - 1, y + row, color)
-                    else
-                        sFR(curX + (col - 1) * scale, y + row * scale, scale, scale, color)
-                    end
-                end
-            end
-        end
-        curX = curX + (6 * scale) -- 字符間距 (5px 字符 + 1px 空隙)
-    end
-end
-```
-
----
-
-### 3.2 飛控核心大腦 (`flight_core.lua`)
-
-`FlightCore` 封裝了完整的航空級控制邏輯：
-
-#### 1. 四象限動力分配物理模型
-飛艇設有 4 組垂直升降動力機構：
+飛艇四個象限的升降推力配置如下：
 - `FL` (Front-Left, 左前)
 - `FR` (Front-Right, 右前)
 - `BL` (Back-Left, 左後)
 - `BR` (Back-Right, 右後)
 
-在姿態平衡計算中，引入俯仰（Pitch, $P$）與滾轉（Roll, $R$）修正量：
+姿態平衡透過俯仰（Pitch, $P$）與滾轉（Roll, $R$）引入閉環比例微分補償：
 $$\begin{cases}
 T_{FL} = T_{base} + \Delta T_{alt} + P_{pitch} + P_{roll} \\
 T_{FR} = T_{base} + \Delta T_{alt} + P_{pitch} - P_{roll} \\
@@ -161,149 +131,266 @@ T_{BL} = T_{base} + \Delta T_{alt} - P_{pitch} + P_{roll} \\
 T_{BR} = T_{base} + \Delta T_{alt} - P_{pitch} - P_{roll}
 \end{cases}$$
 
-#### 2. PID 高度與垂直速度雙閉環鎖定
-- **外環**：高度誤差 $e_{alt} = Alt_{target} - Alt_{current}$ 計算出目標垂直速度 $V_{target}$。
-- **內環**：速度誤差 $e_{v} = V_{target} - V_{current}$ 經由比例-積分-微分計算推力補償 $\Delta T_{alt}$。
-- **輸出限制**：計算出的虛擬油門限制在 $0.0 \sim 15.0$，並映射至有線烏龜的 16 階紅石類比輸出（$0 \sim 15$）。
+### 3.2 水平巡航與側推轉向動力分配
 
-#### 3. 自動起飛基準懸停校準 (`AUTO CALIBRATE`)
-當使用者觸發校準時：
-1. 模式切換為 `CALIBRATING`，飛艇初始推力自 `baseThrottle = 1` 開始。
-2. 系統每 0.5 秒採樣一次垂直速度 $V_{speed}$。
-3. 若 $V_{speed} < 0.1 \text{ m/s}$，以 $+0.5$ 步長遞增基準推力，直到飛艇產生向上浮力。
-4. 當垂直速度達到微升狀態時，精確收斂推力基準並自動切入 `HOLD_ALT` 高度鎖定模式。
+系統支援將動力解耦為航向（Yaw, 偏航）、巡航（Cruise, 前後）與平移（Lateral, 左右）：
+- **前進巡航 ($T_{FWD}$)**：自駕航點或手動前進時啟動，輸出至所有 `FWD` 標籤烏龜。
+- **後退反推 ($T_{BWD}$)**：自駕減速或手動後退時啟動，輸出至所有 `BWD` 標籤烏龜。
+- **側向推力 ($T_{LEFT}, T_{RIGHT}$)**：橫向平移時啟動，輸出至 `LEFT` / `RIGHT` 標籤烏龜。
+- **偏航差動轉向 ($P_{yaw}$)**：在無側推發動機時，透過左右側垂直或推進發動機差動實現原處轉向。
+
+### 3.3 PD-V 垂直速度阻尼與高度雙閉環控制
+
+為徹底消除 Create: Aeronautics 物理實體的上下震盪與過衝，採用雙閉環架構：
+1. **外環（高度位置環）**：
+   $$V_{target} = \text{clamp}\left( K_{p,pos} \cdot (Alt_{target} - Alt_{current}), -V_{max}, +V_{max} \right)$$
+2. **內環（垂直速度阻尼環）**：
+   $$e_{v} = V_{target} - V_{current}$$
+   $$\Delta T_{alt} = K_{p,vel} \cdot e_{v} + K_{i,vel} \int e_{v} dt + K_{d,vel} \frac{d e_v}{dt}$$
+3. **最終油門飽和限制**：
+   $$T_{final} = \text{clamp}(T_{base} + \Delta T_{alt}, 0.0, 15.0)$$
+
+### 3.4 自動起飛懸停基準校準狀態機
+
+```mermaid
+stateDiagram-v2
+    [*] --> IDLE
+    IDLE --> CALIBRATING : 觸發 CALIB 指令
+    CALIBRATING --> RAMP_UP : baseThrottle 從 1.0 開始
+    RAMP_UP --> RAMP_UP : 每 0.5s 檢測 V.S < 0.1m/s (推力 +0.5)
+    RAMP_UP --> FINE_TUNE : 檢測到垂直微升速度 (V.S >= 0.1m/s)
+    FINE_TUNE --> HOLD_ALT : 鎖定懸停基準油門，設定目標高度為當前高度 + 3m
+    HOLD_ALT --> IDLE : 觸發 STOP 指令
+```
+
+### 3.5 航點自駕與航向引導演算法
+
+當接收到 `go <X> <Z>` 指令時，飛控大腦啟動航點引導狀態機：
+1. **目標方位角計算**：
+   $$\theta_{target} = \text{atan2}(Z_{wp} - Z_{curr}, X_{wp} - X_{curr}) \cdot \frac{180}{\pi}$$
+2. **航向對準優先級**：
+   - 若角度差 $|\Delta \theta| > 30^\circ$，飛艇優先偏航對準，限制前進推力為怠速。
+   - 若角度差 $|\Delta \theta| \le 30^\circ$，逐步開啟前進推進推力 $T_{FWD} = \min(15.0, 5.0 + 0.1 \cdot \text{Dist})$。
+3. **進場平滑減速**：
+   - 當距離 $\text{Dist} < 3 \times \text{Radius}$ 時，前進推力線性遞減，必要時啟動 $T_{BWD}$ 反推制動。
+   - 當距離 $\text{Dist} \le \text{Radius}$ 時，自駕宣告到達，航點自動清除並切回原地懸停。
 
 ---
 
-### 3.3 顯示驅動層 (`modules/drivers/*`)
+## 4. CCPE 物理實體感知與多源導航融合
 
-專案支援三大顯示技術，所有驅動均支援**雙尺寸自適應佈局模型 (Dual-Size Adaptive Layout)**：
+### 4.1 `ccpe.sensor_system` API 深度整合
 
-| 模式名稱 | 適用解析度 / 尺寸 | 佈局策略 |
-| :--- | :--- | :--- |
-| **精簡模式 (Compact Mode)** | `< 5x5` 方塊 (如 3x3 螢幕, $\le 384\times 384$) | 緊湊 2 欄佈局、單排大按鈕、縮寫狀態標籤（如 `TGT:200m`、`[FL] 1/1`）。 |
-| **專業全景模式 (Full Mode)** | $\ge 5x5$ 方塊 (如 5x5, 6x4, $\ge 480\times 360$) | 雙儀表盤（高度剖面卡 + 姿態動力卡）、3 排完整操作控制台、長標題與完整資訊。 |
+CC Peripheral Extender (CCPE) 是專為 Create: Aeronautics 設計的航空周邊擴展模組。在飛艇裝配（Assemble）為物理實體（Contraption / Physics Body）後，CCPE 模組會將周邊感知介面掛載至 Lua 環境中。
 
-#### 驅動技術對比
+`FlightCore` 直接提取並封裝以下原生方法：
+```lua
+local ss = require("ccpe.sensor_system")
 
+-- 1. 檢測飛艇物理裝配狀態
+local isContraption = ss.isOnBody() -- 返回 boolean
+
+-- 2. 獲取世界絕對物理座標
+local pos = ss.getBodyPosition() -- 返回 { x = 120.5, y = 95.2, z = -450.8 }
+
+-- 3. 獲取三維向量速度
+local vel = ss.getBodyVelocity() -- 返回 { x = 0.0, y = 1.2, z = 15.4 }
+
+-- 4. 獲取三軸歐拉角姿態
+local angles = ss.getAngles()    -- 返回 { pitch = 1.2, yaw = 89.5, roll = -0.3 }
+```
+
+### 4.2 CC:Tweaked 獨立執行環境動態載入機制
+
+在 CC:Tweaked 中，當程式由 `load()` 或自訂 bootloader 執行時，環境變數 `_ENV` 可能不包含全域 `require` 函式。
+
+為確保 100% 穩定相容，`FlightCore` 採用 **4 階動態解析器**：
+1. **直接檢查快取**：檢查 `package.loaded["ccpe.sensor_system"]`。
+2. **預載載入器調用**：檢查 `package.preload["ccpe.sensor_system"]()`。
+3. **全域命名空間檢索**：檢索 `_G.ccpe.sensor_system` 與 `_G.sensor_system`。
+4. **ROM 動態載入器注入**：
+   若環境中無 `require`，自動透過 `dofile("/rom/modules/main/cc/require.lua").make(_ENV or _G, "/")` 動態建立標準 require 環境並載入模組。
+
+### 4.3 多源導航融合與容錯降級機制
+
+導航系統採用多層備援架構：
 ```mermaid
-classDiagram
-    class FlightCore {
-        +state: table
-        +virtualOutputs: table
-        +getQuadHealth(slot)
-        +adjustTargetAlt(delta)
-        +adjustBaseThrottle(delta)
-        +holdAltitude()
-        +stopEngines()
-    }
-
-    class DirectGPUDriver {
-        +gpuPeripheral
-        +renderOverview()
-        +renderEcam()
-        +renderCtrl()
-        +drawA350Dial()
-    }
-
-    class TomGPUDriver {
-        +gpuPeripheral
-        +sTxt()
-        +sArc()
-        +sLS()
-        +renderAdaptiveLayout()
-    }
-
-    class NormalDriver {
-        +monitors: table
-        +blitColorMapping()
-        +renderTextConsole()
-    }
-
-    FlightCore <-- DirectGPUDriver : Reads Telemetry & Calls Actions
-    FlightCore <-- TomGPUDriver : Reads Telemetry & Calls Actions
-    FlightCore <-- NormalDriver : Reads Telemetry & Calls Actions
+graph TD
+    A["導航採樣請求"] --> B{"CCPE AIC (Physical Body)"}
+    B -->|有效數據| B1["定位源: AIC (精確度最高)"]
+    B -->|未裝配或無模組| C{"Navigation Table"}
+    C -->|有效數據| C1["定位源: NAV_TABLE"]
+    C -->|無周邊| D{"GPS Modem 定位"}
+    D -->|接收到 GPS 信號| D1["定位源: GPS"]
+    D -->|無 GPS 信號| E["定位源: INS 航位推算 (死推計算法)"]
 ```
 
 ---
 
-## 4. 核心 API 規格與硬體通訊協議
+## 5. 顯示驅動層與字型渲染技術
 
-### 4.1 烏龜有線通訊協議 (`turtle_startup.lua`)
-- **網路傳輸媒介**：CC: Tweaked Wired Modem + Networking Cable。
-- **烏龜命名標籤**：`FL`, `FR`, `BL`, `BR`（支援小寫與後綴，例如 `turtle_fl`）。
-- **遠端程序呼叫 (RPC)**：主電腦透過 CC 原生周邊包裝器直接呼叫烏龜 API：
-  ```lua
-  local turtlePeripheral = peripheral.wrap("turtle_0")
-  -- 輸出 0~15 類比紅石至底部動力機構
-  turtlePeripheral.setAnalogOutput("bottom", math.floor(pwmValue))
-  ```
+### 5.1 5x7 ASCII 嵌入式點陣字型編碼與縮放
 
-### 4.2 飛控核心對外呼叫 API (`FlightCore`)
+`modules/bitmap_font.lua` 提供高密度嵌入式點陣字型，每個字符寬 5 像素、高 7 像素，以 5 個位元組緊湊儲存：
 
 ```lua
--- 1. 烏龜硬體重新尋標
-FlightCore.scanQuadTurtles()
+-- 解碼演算法：以 5 條垂直縱列 bitwise 繪製
+for col = 1, 5 do
+    local bits = glyph[col]
+    for row = 0, 6 do
+        if bit32.band(bit32.rshift(bits, row), 1) == 1 then
+            drawPixel(startX + col, startY + row, color)
+        end
+    end
+end
+```
 
--- 2. 調整目標高度 (公尺)
-FlightCore.adjustTargetAlt(deltaMeters) -- e.g. +50, +10, -1, -10
+### 5.2 DirectGPU 24-bit True RGB 向量加速驅動
 
--- 3. 設定指定飛行高度
-FlightCore.setTargetAlt(targetMeters)  -- e.g. 0 (降落), 80, 150, 200, 300
+`modules/drivers/directgpu.lua` 對接 CC-DirectGPU-Mod：
+- 支援 $164 \times 164$ 像素/方塊之極致超高解析度。
+- 硬體加速 24-bit True RGB 向量繪圖指令（`drawRect`, `drawCircle`, `drawLine`, `drawTriangle`）。
+- 原生支援螢幕精確像素觸控事件 (`gpu_touch`)。
 
--- 4. 鎖定當前高度
-FlightCore.lockCurrentAlt()
+### 5.3 Tom's Peripherals GPU 32-bit ARGB 點陣/向量驅動
 
--- 5. 微調基礎油門檔位
-FlightCore.adjustBaseThrottle(deltaThrottle) -- e.g. +1.0, -1.0, +0.1, -0.1
+`modules/drivers/tom.lua` 對接 Tom's GPU 模組：
+- 支援 32-bit ARGB 顏色空間。
+- 專屬平滑儀表刻度盤演算法（`lineS` 抗鋸齒線條與圓弧刻度）。
+- 整合 5x7 點陣字型進行向量文字排版。
 
--- 6. 啟動高度鎖定模式
-FlightCore.holdAltitude()
+### 5.4 CC Advanced Monitor 16 色終端與多螢幕鏡像
 
--- 7. 啟動起飛自動校準模式
-FlightCore.startCalibration()
+`modules/drivers/normal.lua` 對接原生 CC: Tweaked 高級螢幕：
+- 使用高效 `blit` 批量字元繪圖。
+- 支援多螢幕自動鏡像與獨立觸控座標反算。
 
--- 8. 緊急煞車 / 全部動力歸零
-FlightCore.stopEngines()
+### 5.5 雙尺寸自適應佈局模型 (Compact vs Full)
+
+所有驅動均自動判定螢幕尺寸並動態切換佈局：
+- **精簡模式 (Compact Mode, $<5\times 5$)**：大字體、高對比、單排大按鈕、縮寫標籤。
+- **全景模式 (Full Mode, $\ge 5\times 5$)**：雙即時儀表卡片（高度剖面 + 姿態動力）、3 排完整飛行管理台。
+
+---
+
+## 6. 硬體設備清單檢測與遙測廣播
+
+### 6.1 設備自動探測 (`[SYS]` / `sys` / `hw`)
+
+系統即時維護一份完整的硬體裝備庫存清單，並動態計算在線健康度：
+
+```text
+=== INSTALLED HARDWARE & SYSTEMS ===
+[1] DISPLAYS & GPU HARDWARE:
+    DirectGPU : YES (CC-DirectGPU HW Fast) / NO
+    Screens   : Tom's GPU:1 | Native Mon:2 (Total: 3)
+[2] PROPULSION ENGINE NODES:
+    Lift (4-Quad): FL:1 FR:1 BL:1 BR:1 (Online: 4/4)
+    Cruise Thrust: FWD:2 | BWD:1 (Online: 3/3)
+    Lateral/Steer: LEFT:1 | RIGHT:1 (Online: 2/2)
+[3] AVIONICS & SENSORS:
+    CCPE AIC/FMC : DETECTED (ON BODY PHYSICS)
+    Sensors & Net: Alti:ON | Gyro:ON | NavTab:OFF | Modems:2
+    Position Fix : X:124 Y:95 Z:450 (Source: AIC)
+```
+
+### 6.2 遙測封包資料結構 (Telemetry Schema - Ch 102)
+
+```lua
+telemetry = {
+    mode = "HOLD_ALT",          -- 飛控模式: IDLE / CALIBRATING / HOLD_ALT
+    currentAlt = 95.2,          -- 當前高度 (m)
+    targetAlt = 100.0,          -- 目標高度 (m)
+    vspeed = 0.45,              -- 垂直升降速度 (m/s)
+    baseThrottle = 8.5,         -- 基礎懸停油門 (0~15)
+    pitch = 0.5,                -- 俯仰角 (度)
+    roll = -0.2,                -- 滾轉角 (度)
+    gimbalAvailable = true,     -- 陀螺儀是否在線
+    quadHealth = {              -- 動力烏龜健康度
+        FL = { online = 1, total = 1 },
+        FR = { online = 1, total = 1 },
+        BL = { online = 1, total = 1 },
+        BR = { online = 1, total = 1 },
+        FWD = { online = 2, total = 2 },
+        BWD = { online = 1, total = 1 },
+        LEFT = { online = 1, total = 1 },
+        RIGHT = { online = 1, total = 1 }
+    },
+    nav = {                     -- 導航與自駕狀態
+        x = 124.5, y = 95.2, z = 450.1,
+        yaw = 89.2, speed = 12.4,
+        source = "AIC",
+        headingHold = true,
+        targetHeading = 90.0,
+        wpActive = true,
+        targetX = 500.0, targetZ = 500.0, arrivalRadius = 20.0,
+        diag = "Fix: X:125 Y:95 Z:450 (AIC)"
+    },
+    hw = {                      -- 設備庫存表
+        displays = { hasDirectGpu = true, tomsCount = 1, monitorsCount = 2, totalScreens = 3 },
+        engines = { ... },
+        avionics = { aic = true, onBody = true, alti = true, gimbal = true, navTable = false, modems = 2 }
+    }
+}
 ```
 
 ---
 
-## 5. 自動化打包與語法校驗原理 (`bundle.py`)
+## 7. 無線 OTA 韌體遠端維護協議
 
-在 Minecraft CC: Tweaked 環境中，玩家最希望直接下載或貼上**單一 `.lua` 檔案**即可執行；然而在開發階段，多模組檔案更有利於維護。
-
-本專案使用 `bundle.py` 解決此衝突：
-
-### 5.1 代碼合併流程
+為免除逐一拆卸或手動更新每一隻動力烏龜的繁瑣工作，系統內建無線 OTA (Over-The-Air) 遠端刷新協議：
 
 ```mermaid
-flowchart LR
-    A["modules/bitmap_font.lua"] -->|提取 FONT_5X7 點陣| B["bundle.py 打包核心"]
-    C["modules/flight_core.lua"] -->|提取 FlightCore 模組| B
-    D["modules/drivers/directgpu.lua"] -->|提取 DirectGPU 驅動| B
-    E["modules/drivers/tom.lua"] -->|提取 Tom's GPU 驅動| B
-    F["modules/drivers/normal.lua"] -->|提取 Normal 驅動| B
-    G["主程序框架 (Main Engine)"] --> B
-    B -->|組裝並校驗語法| H["run.lua (2600+ 行單檔全功能主程式)"]
+sequenceDiagram
+    participant CLI as FCC-CLI 終端機 / 主電腦
+    participant Air as 無線/有線數據機 (Ch 101)
+    participant Turtles as 全艦動力烏龜叢集
+
+    CLI->>Air: 廣播 { cmd = "UPDATE_STARTUP", code = "<最新 turtle_startup.lua>" }
+    Air->>Turtles: 接收韌體更新封包
+    Note over Turtles: 寫入本機 startup.lua 並執行 os.reboot()
+    Turtles-->>CLI: 重新開機，向 Ch 102 回報新版本就緒
 ```
 
-1. **模組解包 (Strip Wrappers)**：
-   - 自動移除模組頂部的 `local function safeRequire`、`package.loaded` 等檔案載入包裝。
-   - 提取純淨的 Table 結構與業務函數。
-2. **依賴注入與組裝**：
-   - 依照依賴順序依序注入：`FONT_5X7` $\to$ `FlightCore` $\to$ `DirectGPUDriver` $\to$ `TomGPUDriver` $\to$ `NormalDriver` $\to$ `Multi-Screen Engine` $\to$ `Event Loop`。
-3. **語法平衡自動校驗 (Block Balancing Validator)**：
-   - 掃描產出的 `run.lua`，統計所有 Lua 區塊關鍵字：
-     - 開啟關鍵字：`function`, `then`, `do`, `repeat`
-     - 關閉關鍵字：`end`, `until`
-   - 若區塊計數器 $\ne 0$，打包腳本將報警並指出失衡位置，確保輸出的 `run.lua` 100% 具備可執行性。
+- **執行指令**：
+  - `update turtles`：一鍵推送最新韌體。
+  - `reboot turtles`：一鍵遠端重啟所有發動機節點。
+
+---
+
+## 8. 自動化構建與語法校驗系統 (`bundle.py`)
+
+`bundle.py` 是專案的核心構建工具，具備以下自動化管線：
+1. **多目標模組編譯 (Multi-Target Compilation)**：
+   - 提取 `modules/` 原始碼，分別編譯產出 `run.lua` (一體化)、`fcc.lua` (純飛控大腦)、`display.lua` (螢幕系統)。
+2. **版本元數據同步 (Version Synchronization)**：
+   - 讀取 `version.xml`，將版本號全自動同步寫入 `fcc-cli.lua`、`boot.lua`、`turtle_startup.lua` 與所有編譯產物。
+3. **區塊語法平衡驗證器 (Block Balancing Validator)**：
+   - 自動掃描所有 Lua 區塊關鍵字 (`function`, `then`, `do`, `repeat`, `end`, `until`)，確保發布資產 100% 無語法缺失。
+
+---
+
+## 9. 完整對外 API 規格清單
+
+### 9.1 `FlightCore` 主要方法
+
+```lua
+FlightCore.scanQuadTurtles()                   -- 掃描全艦發動機烏龜與感測器
+FlightCore.setTargetAlt(meters)                 -- 設定目標高度 (m)
+FlightCore.adjustTargetAlt(deltaMeters)         -- 增減目標高度 (+10, -10, +50 等)
+FlightCore.lockCurrentAlt()                     -- 鎖定當前高度
+FlightCore.adjustBaseThrottle(delta)            -- 調整基礎油門 (+0.1, -0.1, +1.0)
+FlightCore.holdAltitude()                       -- 啟動高度鎖定模式
+FlightCore.startCalibration()                   -- 啟動起飛自動校準模式
+FlightCore.stopEngines()                        -- 緊急停機 (推力歸零)
+FlightCore.setTargetHeading(hdg)                -- 設定目標航向角 (0~359)
+FlightCore.toggleHeadingHold()                  -- 切換航向自動鎖定
+FlightCore.setWaypoint(x, z, radius)            -- 設定航點自駕
+FlightCore.clearWaypoint()                      -- 取消航點自駕
+FlightCore.rescanHardware()                     -- 重新探測全艦硬體設備
+```
 
 ---
 
 > [!TIP]
-> 當您修改了 `modules/` 內的任何代碼，只需在終端機執行：
-> ```bash
-> python bundle.py
-> ```
-> 即可完成自動編譯、語法校驗與 `run.lua` 更新，隨後請執行 `git commit` 保存變更。
+> 任何原始碼修改後，請務必執行 `python bundle.py` 完成編譯與語法校驗，並使用 `git commit` 提交版本。
