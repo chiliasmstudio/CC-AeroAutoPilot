@@ -1,6 +1,6 @@
 --[[
     boot.lua — CC-AeroAutoPilot Universal Release Launcher & Auto-Updater
-    Version: v4.0.10
+    Version: v4.0.11
     ====================================================================
     自動從 GitHub Releases 下載最新版本並執行或安裝至本機磁碟。
 
@@ -219,10 +219,16 @@ if isInstall or targetType == "turtle" then
 end
 
 -- 6. 載入並執行程式碼
-local loader = load or loadstring
 local unpacker = table.unpack or unpack
 
-local fn, err = loader(code, ASSET_NAME)
+local fn, err
+if setfenv then
+    fn, err = (loadstring or load)(code, ASSET_NAME)
+    if fn then setfenv(fn, _ENV or getfenv()) end
+else
+    fn, err = load(code, ASSET_NAME, "t", _ENV or _G)
+end
+
 if not fn then
     printError("Syntax error in downloaded code: " .. tostring(err))
     return

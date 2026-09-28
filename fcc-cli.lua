@@ -1,6 +1,6 @@
 --[[
     fcc-cli.lua — Standalone Command Line Interface & Console for VTOL Avionics
-    Version: v4.0.10
+    Version: v4.0.11
     
     特點:
     - 完全獨立於 FCC 飛控電腦，可在任何終端機 / Pocket Computer 上運行
@@ -21,7 +21,7 @@
       fcc-cli reboot turtles    -- 遠端重啟所有動力烏龜
 --]]
 
-local VERSION = "v4.0.10"
+local VERSION = "v4.0.11"
 local rawArgs = { ... }
 
 -- 1. 初始化數據機
