@@ -1,7 +1,7 @@
 --[[
     Create: Avionics & CC: Tweaked
     Standalone Flight Control Computer (FCC - 分散式純飛控大腦)
-    Version: v4.2.0
+    Version: v4.3.0
     NAV PROFILE: hover controls remain independent; waypoint control is speed-limited and requires fresh position/heading fixes.
     
     特點:
@@ -12,7 +12,7 @@
     - 徹底根除 "Too long without yielding"
 --]]
 
-local VERSION = "v4.2.0"
+local VERSION = "v4.3.0"
 
 -- ========================================================
 -- PART 1: 飛控與動力控制核心 (FLIGHT & PROPULSION CORE)
@@ -1038,6 +1038,8 @@ function FlightCore.setTargetHeading(hdg)
     FlightCore.nav.wpActive = false
     FlightCore.nav.braking = false
     FlightCore.state.fwdThrottle = 0
+    FlightCore.state.turnThrottle = 0
+    FlightCore.state.strafeThrottle = 0
     FlightCore.nav.targetHeading = (math.floor(hdg) % 360 + 360) % 360
     FlightCore.nav.headingHold = true
     FlightCore.state.statusMsg = string.format("Target Heading: %03d*", FlightCore.nav.targetHeading)

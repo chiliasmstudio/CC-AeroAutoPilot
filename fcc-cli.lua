@@ -1,6 +1,6 @@
 --[[
     fcc-cli.lua — Standalone Command Line Interface & Console for VTOL Avionics
-    Version: v4.2.0
+    Version: v4.3.0
     
     特點:
     - 完全獨立於 FCC 飛控電腦，可在任何終端機 / Pocket Computer 上運行
@@ -19,7 +19,7 @@
       fcc-cli reboot turtles    -- 遠端重啟所有動力烏龜
 --]]
 
-local VERSION = "v4.2.0"
+local VERSION = "v4.3.0"
 local rawArgs = { ... }
 
 -- 1. 初始化數據機
@@ -82,6 +82,20 @@ local function executeCommand(args, out)
 
     -- 三維航點: go <x> <y> <z>; 二維航點: go2 <x> <z> [radius]
     if cmd == "go" or cmd == "wp" or cmd == "waypoint" or cmd == "goto" or cmd == "go2" or cmd == "wp2" then
+        local direction = string.lower(args[2] or "")
+        local cardinalHeadings = {
+            n = 0, north = 0,
+            e = 90, east = 90,
+            s = 180, south = 180,
+            w = 270, west = 270
+        }
+        if cmd ~= "go2" and cmd ~= "wp2" and cardinalHeadings[direction] then
+            local heading = cardinalHeadings[direction]
+            sendFccCmd({ cmd = "SET_HEADING", hdg = heading })
+            out.print(string.format("[OK] Pointing in place to %s (%03d degrees); forward thrust cleared.", string.upper(direction), heading))
+            return true
+        end
+
         local x = tonumber(args[2])
         local second = tonumber(args[3])
         local is3d = cmd ~= "go2" and cmd ~= "wp2" and args[4] ~= nil
@@ -89,8 +103,8 @@ local function executeCommand(args, out)
         local z = is3d and tonumber(args[4]) or second
         local r = is3d and (tonumber(args[5]) or 12.0) or (tonumber(args[4]) or 12.0)
         if not x or not second or (is3d and not z) then
-            out.printError("Usage: go <x> <y> <z> | go2 <x> <z> [radius]")
-            out.print("Examples: go 1000 100 1000 | go2 1000 100 (default radius 12m)")
+            out.printError("Usage: go <x> <y> <z> | go <n|e|s|w> | go2 <x> <z> [radius]")
+            out.print("Examples: go 1000 100 1000 | go w | go2 1000 100 (default radius 12m)")
             return true
         end
         sendFccCmd({ cmd = "SET_WAYPOINT", x = x, y = y, z = z, radius = r })
@@ -302,6 +316,7 @@ local function executeCommand(args, out)
         out.print(" sys / hw         - Display installed systems & hardware inventory")
         out.print(" rescan           - Trigger hardware & sensor rescan on FCC")
         out.print(" go <x> <y> <z> / go2 <x> <z> [radius] - Navigate to waypoint")
+        out.print(" go n|e|s|w      - Point in place to a cardinal heading (HOLD_ALT required)")
         out.print(" cancel           - Cancel waypoint navigation")
         out.print(" alt <alt>        - Set target altitude (e.g. alt 200, alt +50)")
         out.print(" hold / calib     - Hold altitude / Liftoff auto calibration")

@@ -1023,6 +1023,8 @@ function FlightCore.setTargetHeading(hdg)
     FlightCore.nav.wpActive = false
     FlightCore.nav.braking = false
     FlightCore.state.fwdThrottle = 0
+    FlightCore.state.turnThrottle = 0
+    FlightCore.state.strafeThrottle = 0
     FlightCore.nav.targetHeading = (math.floor(hdg) % 360 + 360) % 360
     FlightCore.nav.headingHold = true
     FlightCore.state.statusMsg = string.format("Target Heading: %03d*", FlightCore.nav.targetHeading)

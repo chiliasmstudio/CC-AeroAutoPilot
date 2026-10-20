@@ -3,7 +3,7 @@
 > **目前電腦端韌體保留懸停並重新啟用受限導航**：航點導航需要有效位置與航向資料，並要求先啟用高度保持；感測器失效或資料過期時，水平推力歸零。垂直升力控制與水平導航分離。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Computer Suite: v4.2.0](https://img.shields.io/badge/Computer_Suite-v4.2.0-blue.svg)](https://github.com/chiliasmstudio/CC-AeroAutoPilot/releases/latest)
+[![Computer Suite: v4.3.0](https://img.shields.io/badge/Computer_Suite-v4.3.0-blue.svg)](https://github.com/chiliasmstudio/CC-AeroAutoPilot/releases/latest)
 [![Turtle Firmware: v4.0.12](https://img.shields.io/badge/Turtle_Firmware-v4.0.12-green.svg)](https://github.com/chiliasmstudio/CC-AeroAutoPilot/releases/latest)
 
 > [!NOTE]
@@ -167,6 +167,7 @@ boot run              # 啟動 一體化飛控
 === 核心飛控指令表 ===
 go <x> <y> <z>      - 導航至三維座標；Y 設為目標高度
 go2 <x> <z> [r]     - 導航至水平座標；預設到點半徑 12 格
+go <n|e|s|w>        - 原地鎖定北/東/南/西方位；需先進入 hold
 cancel              - 取消航點並停止水平推力
 alt <alt>            - 設定目標高度 (例如: alt 200 或相對高度 alt +50, alt -20)
 hold                 - 鎖定當前高度 (啟動 PD-V 高度維持模式)
@@ -183,7 +184,7 @@ clear                - 清空下方命令列視窗
 exit                 - 退出終端
 ```
 
-先執行 `hold` 穩定飛行再使用 `go2`；`go x y z` 會保留目標並設定高度，仍須先執行 `hold` 或 `calib` 才會啟動水平導航。FCC 必須讀到有效位置與航向；未取得定位時會停推並顯示等待狀態。
+先執行 `hold` 穩定飛行再使用 `go2`；`go x y z` 會保留目標並設定高度，仍須先執行 `hold` 或 `calib` 才會啟動水平導航。輸入 `go n`、`go e`、`go s` 或 `go w` 會取消目前航點並鎖定對應方位，不給前進推力；需處於 `HOLD_ALT` 才會輸出轉向。FCC 必須讀到有效位置與航向；未取得定位時會停推並顯示等待狀態。
 
 ---
 
