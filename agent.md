@@ -13,6 +13,15 @@
 > 3. Commit 訊息應清楚說明變更的組件（如 `feat(avionics)`, `fix(renderer)`, `docs(agent)`）與修復重點。
 > 4. 若編輯了 `modules/` 內的原始碼，必須執行 `python bundle.py` 重新生成並校驗 `run.lua`，確認語法平衡後一併提交。
 
+### 韌體版本遞增規範 (Mandatory Firmware Version Bump)
+
+任何會改變可執行韌體行為的修改，都必須在同一個提交中遞增對應的版本號，不能只更新程式或只依賴發布時再升版：
+
+1. 修改電腦端程式（`modules/`、`bundle.py`、`run.lua`、`fcc.lua`、`display.lua`、`fcc-cli.lua` 或 `boot.lua`）時，執行 `python bundle.py --bump-computer patch`；若屬於功能或不相容變更，依 SemVer 慣例改用 `minor` 或 `major`。
+2. 修改烏龜韌體 `turtle_startup.lua` 時，執行 `python bundle.py --bump-turtle patch`。兩端都修改時執行 `python bundle.py --bump patch`。
+3. 以上命令會更新 `version.xml` 並重新打包；檢查 `version.xml`、產生檔版本標頭與差異後，將版本檔和所有產物一併提交。純文件修改不需遞增韌體版本。
+4. `.github/workflows/version-check.yml` 會在 Pull Request 和推送至 `main` 時檢查：若對應韌體程式有變更，`version.xml` 的該端版本必須高於基底提交，否則 CI 失敗。此檢查是防止漏升版的強制閘門。
+
 ---
 
 ## 📚 官方參考資料與文件庫 (Official Documentation & References)

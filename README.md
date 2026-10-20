@@ -1,7 +1,7 @@
 # 🚀 CC-AeroAutoPilot: 四軸航空自動導航與分散式多螢幕飛控系統
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Computer Suite: v4.0.12](https://img.shields.io/badge/Computer_Suite-v4.0.12-blue.svg)](https://github.com/chiliasmstudio/CC-AeroAutoPilot/releases/latest)
+[![Computer Suite: v4.0.13](https://img.shields.io/badge/Computer_Suite-v4.0.13-blue.svg)](https://github.com/chiliasmstudio/CC-AeroAutoPilot/releases/latest)
 [![Turtle Firmware: v4.0.12](https://img.shields.io/badge/Turtle_Firmware-v4.0.12-green.svg)](https://github.com/chiliasmstudio/CC-AeroAutoPilot/releases/latest)
 
 > [!NOTE]
