@@ -82,18 +82,25 @@ local function executeCommand(args, out)
     if #args == 0 then return true end
     local cmd = string.lower(args[1])
 
-    -- 航點導航: go <x> <z> [radius]
-    if cmd == "go" or cmd == "wp" or cmd == "waypoint" or cmd == "goto" then
+    -- 三維航點: go <x> <y> <z>; 二維航點: go2 <x> <z> [radius]
+    if cmd == "go" or cmd == "wp" or cmd == "waypoint" or cmd == "goto" or cmd == "go2" or cmd == "wp2" then
         local x = tonumber(args[2])
-        local z = tonumber(args[3])
-        local r = tonumber(args[4]) or 20.0
-        if not x or not z then
-            out.printError("Usage: go <x> <z> [radius]")
-            out.print("Example: go 100 200 (default radius 20m)")
+        local second = tonumber(args[3])
+        local is3d = cmd ~= "go2" and cmd ~= "wp2" and args[4] ~= nil
+        local y = is3d and second or nil
+        local z = is3d and tonumber(args[4]) or second
+        local r = is3d and (tonumber(args[5]) or 20.0) or (tonumber(args[4]) or 20.0)
+        if not x or not second or (is3d and not z) then
+            out.printError("Usage: go <x> <y> <z> | go2 <x> <z> [radius]")
+            out.print("Examples: go 1000 100 1000 | go2 1000 100 (default radius 20m)")
             return true
         end
-        sendFccCmd({ cmd = "SET_WAYPOINT", x = x, z = z, radius = r })
-        out.print(string.format("[OK] Waypoint set to (%d, %d) with arrival radius %.0fm", x, z, r))
+        sendFccCmd({ cmd = "SET_WAYPOINT", x = x, y = y, z = z, radius = r })
+        if y then
+            out.print(string.format("[OK] 3D waypoint set to (%.0f, %.0f, %.0f), horizontal arrival radius %.0fm", x, y, z, r))
+        else
+            out.print(string.format("[OK] XZ waypoint set to (%.0f, %.0f) with arrival radius %.0fm", x, z, r))
+        end
         return true
 
     -- 取消航點: cancel
@@ -294,7 +301,8 @@ local function executeCommand(args, out)
         out.print("=== Available Commands ===")
         out.print(" sys / hw         - Display installed systems & hardware inventory")
         out.print(" rescan           - Trigger hardware & sensor rescan on FCC")
-        out.print(" go <x> <z> [r]   - Navigate to coordinates (radius default 20m)")
+        out.print(" go <x> <y> <z>   - Navigate to XYZ; Y is target altitude")
+        out.print(" go2 <x> <z> [r]  - Navigate horizontally (radius default 20m)")
         out.print(" cancel           - Cancel waypoint navigation")
         out.print(" alt <alt>        - Set target altitude (e.g. alt 200, alt +50)")
         out.print(" hold / calib     - Hold altitude / Liftoff auto calibration")
@@ -435,13 +443,17 @@ local function renderTelemetryDashboard()
         local dz = nav.targetZ - nav.z
         local dist = math.sqrt(dx*dx + dz*dz)
         topWin.setTextColor(colors.lime)
-        topWin.write(string.format("-> (%d,%d) Dist:%.0fm (R:%.0fm)", math.floor(nav.targetX), math.floor(nav.targetZ), dist, nav.arrivalRadius or 20))
+        if nav.targetY then
+            topWin.write(string.format("-> (%d,%d,%d) Dist:%.0fm (R:%.0fm)", math.floor(nav.targetX), math.floor(nav.targetY), math.floor(nav.targetZ), dist, nav.arrivalRadius or 20))
+        else
+            topWin.write(string.format("-> (%d,%d) Dist:%.0fm (R:%.0fm)", math.floor(nav.targetX), math.floor(nav.targetZ), dist, nav.arrivalRadius or 20))
+        end
     elseif nav.wpActive and nav.targetX and nav.targetZ then
         topWin.setTextColor(colors.lime)
         topWin.write(string.format("-> (%d,%d) [Searching GPS/INS...]", math.floor(nav.targetX), math.floor(nav.targetZ)))
     else
         topWin.setTextColor(colors.gray)
-        topWin.write("No Waypoint Active (Type 'go x z')")
+        topWin.write("No Waypoint Active (Type 'go x y z' or 'go2 x z')")
     end
 
     -- 7. 發動機烏龜節點健康度 (Engines)
@@ -526,7 +538,7 @@ local function commandConsoleLoop()
     cmdWin.clear()
     cmdWin.setCursorPos(1, 1)
     cmdWin.setTextColor(colors.lightGray)
-    cmdWin.write("Type 'help' for commands, 'go x z', 'update turtles', 'exit'\n")
+    cmdWin.write("Type 'help' for commands, 'go x y z', 'update turtles', 'exit'\n")
 
     local history = {}
     while true do

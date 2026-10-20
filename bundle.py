@@ -399,7 +399,7 @@ local function handleFccCommand(side, ch, replyCh, msg, dist)
         elseif cmd == "ADJ_HEADING" then FlightCore.adjustTargetHeading(msg.delta or 0)
         elseif cmd == "TOGGLE_HEADING" then FlightCore.toggleHeadingHold()
         elseif cmd == "SYNC_HEADING" then FlightCore.syncHeading()
-        elseif cmd == "SET_WAYPOINT" then FlightCore.setWaypoint(msg.x, msg.z, msg.radius)
+        elseif cmd == "SET_WAYPOINT" then FlightCore.setWaypoint(msg.x, msg.z, msg.radius, msg.y)
         elseif cmd == "CANCEL_WAYPOINT" then FlightCore.cancelWaypoint()
         elseif cmd == "RESCAN_HW" then FlightCore.scanQuadTurtles()
         end
@@ -440,6 +440,7 @@ local function broadcastTelemetry()
             targetHeading = FlightCore.nav.targetHeading,
             headingHold = FlightCore.nav.headingHold,
             targetX = FlightCore.nav.targetX,
+            targetY = FlightCore.nav.targetY,
             targetZ = FlightCore.nav.targetZ,
             wpActive = FlightCore.nav.wpActive,
             arrivalRadius = FlightCore.nav.arrivalRadius,

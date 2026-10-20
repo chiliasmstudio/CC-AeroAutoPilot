@@ -165,9 +165,9 @@ stateDiagram-v2
 
 ### 3.5 航點自駕與航向引導演算法
 
-當接收到 `go <X> <Z>` 指令時，飛控大腦啟動航點引導狀態機：
+當接收到 `go <X> <Y> <Z>` 指令時，飛控大腦啟動三維航點引導，並把 `Y` 設為目標高度；若只需要水平導航，使用 `go2 <X> <Z> [radius]`：
 1. **目標方位角計算**：
-   $$\theta_{target} = \text{atan2}(Z_{wp} - Z_{curr}, X_{wp} - X_{curr}) \cdot \frac{180}{\pi}$$
+   $$\theta_{target} = \left(\text{atan2}(X_{wp} - X_{curr}, -(Z_{wp} - Z_{curr})) \cdot \frac{180}{\pi} + 360\right) \bmod 360$$
 2. **航向對準優先級**：
    - 若角度差 $|\Delta \theta| > 30^\circ$，飛艇優先偏航對準，限制前進推力為怠速。
    - 若角度差 $|\Delta \theta| \le 30^\circ$，逐步開啟前進推進推力 $T_{FWD} = \min(15.0, 5.0 + 0.1 \cdot \text{Dist})$。
@@ -385,7 +385,7 @@ FlightCore.startCalibration()                   -- 啟動起飛自動校準模�
 FlightCore.stopEngines()                        -- 緊急停機 (推力歸零)
 FlightCore.setTargetHeading(hdg)                -- 設定目標航向角 (0~359)
 FlightCore.toggleHeadingHold()                  -- 切換航向自動鎖定
-FlightCore.setWaypoint(x, z, radius)            -- 設定航點自駕
+FlightCore.setWaypoint(x, z, radius, targetY)   -- 設定 XZ 航點；targetY 可選並會設定目標高度
 FlightCore.clearWaypoint()                      -- 取消航點自駕
 FlightCore.rescanHardware()                     -- 重新探測全艦硬體設備
 ```

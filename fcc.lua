@@ -18,6 +18,8 @@ local VERSION = "v4.0.12"
 -- ========================================================
 
 local FlightCore = {}
+-- Lua 5.2+ uses math.atan(y, x); older Lua versions expose math.atan2(y, x).
+local atan2 = math.atan2 or math.atan
 
 -- 1.1 標準 PID 控制器 (基於 v3.8.4 經典架構)
 local PID = {}
@@ -100,6 +102,7 @@ FlightCore.nav = {
     targetHeading = 0.0,  -- 目標航向 (0~359°)
     headingHold = false,  -- 航向鎖定開關
     targetX = nil,        -- 航點目標 X
+    targetY = nil,        -- 可選的航點目標高度 Y
     targetZ = nil,        -- 航點目標 Z
     wpActive = false,     -- 航點自動巡航自駕儀
     arrivalRadius = 20.0  -- 目的地到達判定半徑 (可偏差半徑 20 格)
@@ -803,12 +806,20 @@ function FlightCore.stopHorizontalThrust()
     FlightCore.state.statusMsg = "Directional Thrust: STOPPED"
 end
 
-function FlightCore.setWaypoint(x, z, radius)
+function FlightCore.setWaypoint(x, z, radius, targetY)
     FlightCore.nav.targetX = tonumber(x)
     FlightCore.nav.targetZ = tonumber(z)
+    FlightCore.nav.targetY = tonumber(targetY)
     FlightCore.nav.arrivalRadius = tonumber(radius) or 20.0
     FlightCore.nav.wpActive = true
-    FlightCore.state.statusMsg = string.format("Waypoint: (%d,%d) R:%.0fm", x, z, FlightCore.nav.arrivalRadius)
+    if FlightCore.nav.targetY then
+        FlightCore.setTargetAlt(FlightCore.nav.targetY)
+    end
+    if FlightCore.nav.targetY then
+        FlightCore.state.statusMsg = string.format("Waypoint: (%.0f,%.0f,%.0f) R:%.0fm", x, FlightCore.nav.targetY, z, FlightCore.nav.arrivalRadius)
+    else
+        FlightCore.state.statusMsg = string.format("Waypoint: (%d,%d) R:%.0fm", x, z, FlightCore.nav.arrivalRadius)
+    end
 end
 
 function FlightCore.cancelWaypoint()
@@ -1089,7 +1100,7 @@ function FlightCore.updateFlightLogic()
                 FlightCore.state.statusMsg = string.format("ARRIVED DEST! (Dist: %.1fm <= %dm)", dist, math.floor(acceptRadius))
             else
                 -- 計算指向目標航點方位角 (0=北, 90=東, 180=南, 270=西)
-                local targetHeading = (math.deg(math.atan2(dx, -dz)) + 360) % 360
+                local targetHeading = (math.deg(atan2(dx, -dz)) + 360) % 360
                 FlightCore.nav.targetHeading = targetHeading
                 FlightCore.nav.headingHold = true
 
@@ -1204,7 +1215,7 @@ local function handleFccCommand(side, ch, replyCh, msg, dist)
         elseif cmd == "ADJ_HEADING" then FlightCore.adjustTargetHeading(msg.delta or 0)
         elseif cmd == "TOGGLE_HEADING" then FlightCore.toggleHeadingHold()
         elseif cmd == "SYNC_HEADING" then FlightCore.syncHeading()
-        elseif cmd == "SET_WAYPOINT" then FlightCore.setWaypoint(msg.x, msg.z, msg.radius)
+        elseif cmd == "SET_WAYPOINT" then FlightCore.setWaypoint(msg.x, msg.z, msg.radius, msg.y)
         elseif cmd == "CANCEL_WAYPOINT" then FlightCore.cancelWaypoint()
         elseif cmd == "RESCAN_HW" then FlightCore.scanQuadTurtles()
         end
@@ -1245,6 +1256,7 @@ local function broadcastTelemetry()
             targetHeading = FlightCore.nav.targetHeading,
             headingHold = FlightCore.nav.headingHold,
             targetX = FlightCore.nav.targetX,
+            targetY = FlightCore.nav.targetY,
             targetZ = FlightCore.nav.targetZ,
             wpActive = FlightCore.nav.wpActive,
             arrivalRadius = FlightCore.nav.arrivalRadius,

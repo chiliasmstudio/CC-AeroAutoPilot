@@ -23,7 +23,7 @@
    - **All-In-One (單機一體化)**：亦可使用單台主電腦兼任飛控運算與螢幕渲染。
 2. 🧭 **CCPE 物理實體感知與全自動導航 (CCPE / FMC / AIC Integration)**：
    - 完美相容 **CC Peripheral Extender (`ccpe.sensor_system`)**，實時讀取飛艇實體的絕對世界物理座標 $(X, Y, Z)$、三軸向量速度與歐拉角姿態（Pitch, Yaw, Roll）。
-   - 支援 `go <x> <z>` 全自動航向對準、巡航推力控制、自適應進場減速與到達判定。
+   - 支援 `go <x> <y> <z>` 三維航點導航（Y 同時設定目標高度），以及 `go2 <x> <z> [radius]` 水平導航。
    - 具備多源導航融合與自動降級機制：優先 AIC/CCPE $\to$ 導航桌 (Navigation Table) $\to$ GPS $\to$ 航位推算 (INS)。
 3. 🚢 **全向推進發動機叢集 (Full-Axis Propulsion & Cluster Redundancy)**：
    - **升降動力 (4-Quad Lift)**：`FL` (左前), `FR` (右前), `BL` (左後), `BR` (右後) 差動升力與四象限姿態自穩。
@@ -60,7 +60,7 @@
 │  FCC 獨立飛控大腦      │  │  CDS 駕駛艙螢幕系統    │  │  FCC-CLI 命令列終端    │
 │  * 運行 fcc.lua        │  │  * 運行 display.lua    │  │  * 運行 fcc-cli.lua    │
 │  * 20Hz 純計算後台     │  │  * 接 DirectGPU / Tom's│  │  * Pocket Computer /   │
-│  * 連接 CCPE / 感測器  │  │  * 觸控儀表與即時圖形  │  │    終端機 (go x z 指令) │
+│  * 連接 CCPE / 感測器  │  │  * 觸控儀表與即時圖形  │  │    終端機 (go x y z 指令) │
 │  * 廣播 Ch 102 遙測    │  │  * 接收 Ch 102 / 發 103│  │  * 接收 Ch 102 / 發 103│
 └───────────┬────────────┘  └───────────┬────────────┘  └───────────┬────────────┘
             │                           │                           │
@@ -112,7 +112,7 @@ boot
 
 - **選擇 [1] Install to Disk (安裝為本機 `startup.lua`)**：
   - `[1] FCC Flight Core`：安裝分散式飛控大腦 (20Hz 純計算後台)
-  - `[2] FCC-CLI Console`：安裝獨立命令終端 (輸入 `go 100 100` 等)
+  - `[2] FCC-CLI Console`：安裝獨立命令終端 (輸入 `go 100 100 100` 等)
   - `[3] Cockpit Display`：安裝駕駛艙螢幕系統 (DirectGPU / 觸控儀表)
   - `[4] All-In-One Run`：安裝單機一體化全功能飛控
   - `[5] Turtle Node`：安裝動力烏龜韌體並自動重啟
@@ -164,7 +164,8 @@ boot run              # 啟動 一體化飛控
 
 ```text
 === 核心飛控指令表 ===
-go <x> <z> [radius]  - 自動導航至指定 X Z 座標 (預設到達半徑 20m)
+go <x> <y> <z>       - 自動導航至 X Y Z；Y 同時作為目標高度
+go2 <x> <z> [radius] - 水平導航至 X Z (預設到達半徑 20m；自訂半徑請用 go2)
 cancel               - 取消目前自動導航航點
 alt <alt>            - 設定目標高度 (例如: alt 200 或相對高度 alt +50, alt -20)
 hold                 - 鎖定當前高度 (啟動 PD-V 高度維持模式)
