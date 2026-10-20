@@ -1,6 +1,6 @@
 --[[
     boot.lua — CC-AeroAutoPilot Universal Release Launcher & Auto-Updater
-    Version: v4.1.0
+    Version: v4.2.0
     ====================================================================
     自動從 GitHub Releases 下載最新版本並執行或安裝至本機磁碟。
 

@@ -1,7 +1,7 @@
 --[[
     Create: Avionics & CC: Tweaked
     Standalone Cockpit Display System (CDS / Glass Cockpit)
-    Version: v4.1.0
+    Version: v4.2.0
     
     特點:
     - 專門負責駕駛艙螢幕繪圖渲染與觸控按鈕交互
@@ -11,7 +11,7 @@
     - 即使渲染再繁重，也 100% 不會拖慢飛船飛控運算
 --]]
 
-local VERSION = "v4.1.0"
+local VERSION = "v4.2.0"
 local args = {...}
 local requestedDriver = args[1] and string.lower(args[1]) or "auto"
 
@@ -39,12 +39,13 @@ local FlightCore = {
         roll = 0.0
     },
     nav = {
-        x = nil, y = nil, z = nil,
+        x = nil, y = nil, z = nil, velocityX = 0, velocityZ = 0,
         yaw = 0.0, pitch = 0.0, roll = 0.0, speed = 0.0,
         source = "BARO",
-        targetHeading = 0.0, headingHold = false,
-        targetX = nil, targetZ = nil, wpActive = false,
-        arrivalRadius = 20.0
+        targetHeading = 0.0, headingHold = false, braking = false, fixReady = false,
+        positionReady = false, headingReady = false,
+        targetX = nil, targetY = nil, targetZ = nil, wpActive = false,
+        arrivalRadius = 12.0
     },
     virtualOutputs = {
         FL = 0.0, FR = 0.0, BL = 0.0, BR = 0.0,
@@ -184,7 +185,7 @@ end
 function FlightCore.setWaypoint(x, z, radius)
     FlightCore.nav.targetX = tonumber(x)
     FlightCore.nav.targetZ = tonumber(z)
-    FlightCore.nav.arrivalRadius = tonumber(radius) or 20.0
+    FlightCore.nav.arrivalRadius = tonumber(radius) or 12.0
     FlightCore.nav.wpActive = true
     FlightCore.sendCmd({cmd = "SET_WAYPOINT", x = x, z = z, radius = radius})
 end

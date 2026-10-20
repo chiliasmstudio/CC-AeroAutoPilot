@@ -163,9 +163,13 @@ stateDiagram-v2
     HOLD_ALT --> IDLE : 觸發 STOP 指令
 ```
 
-### 3.5 航點與航向控制停用
+### 3.5 受限航點導航
 
-懸停安全設定不接受 `go` / `go2` 航點、航向鎖定或水平推進命令。CLI 會在送出無線封包前拒絕這類命令；飛控 API 同樣會清除航點／航向狀態，因此觸控介面或舊版客戶端也不能啟動水平導航。
+航點控制與高度控制分開執行。每個 20Hz 飛控週期先讀取 CCPE `sensor_system` 的世界座標、世界速度與 INS 航向；也支援 Create: Avionics `navigation_table` 航向及 CC:Tweaked GPS 定位。CCPE INS 航向採 0° 北、順時針為正；Create: Avionics 回傳 `atan2(worldX, worldZ)`，內部轉換為 `180° - heading`，統一成北向 0°、順時針增加。CCPE 定位逾 0.5 秒、GPS 定位逾 1.5 秒或航向逾 0.5 秒即視為過期。
+
+飛控先用 `atan2(ΔX, -ΔZ)` 算出目標方位，轉向誤差大於 12° 時只輸出低幅度左右轉向；誤差在 5° 至 12° 時允許低速前進並修正航向。對準後以目標距離及沿航線速度控制 `FWD` / `BWD`，目標速度上限 3.5 格/秒，預留減速距離並限制推力。進入到點半徑後，進入煞停狀態並在速度低於 0.3 格/秒時結束。`go x y z` 會設定目標高度；`go2 x z [radius]` 保持原高度，預設半徑 12 格。
+
+導航必須先處於 `HOLD_ALT`。若在 `IDLE` 下輸入 3D `go`，目標高度會暫存，但不會啟動引擎；先執行 `hold` 或 `calib` 才會開始導航。位置或航向資料超過 0.5 秒未更新時，所有水平輸出立即歸零並暫停導航；恢復有效資料後可繼續。導航控制器只寫水平輸出，不修改四軸升力 PID 的輸出。實際推力仍依烏龜角色標籤 `FWD`、`BWD`、`LEFT`、`RIGHT` 接線。
 
 ---
 
@@ -315,7 +319,7 @@ telemetry = {
         headingHold = true,
         targetHeading = 90.0,
         wpActive = true,
-        targetX = 500.0, targetZ = 500.0, arrivalRadius = 20.0,
+        targetX = 500.0, targetZ = 500.0, arrivalRadius = 12.0,
         diag = "Fix: X:125 Y:95 Z:450 (AIC)"
     },
     hw = {                      -- 設備庫存表

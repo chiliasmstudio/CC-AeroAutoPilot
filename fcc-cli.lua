@@ -1,12 +1,12 @@
 --[[
     fcc-cli.lua — Standalone Command Line Interface & Console for VTOL Avionics
-    Version: v4.1.0
+    Version: v4.2.0
     
     特點:
     - 完全獨立於 FCC 飛控電腦，可在任何終端機 / Pocket Computer 上運行
     - 上方視窗即時動態顯示主要飛控資訊 (高度、垂直速度、四軸升力、發動機健康度)
     - 下方命令視窗提供即時指令輸入 (CMD> )，兩者並行運作互不干擾
-    - 懸停安全設定：只接受高度、懸停、校準、停止和診斷指令
+    - 支援受限航點導航、高度懸停、航向保持與診斷指令
 
     使用範例:
       fcc-cli                   -- 啟動即時資訊儀表 ＆ 互動命令終端 (REPL)
@@ -19,7 +19,7 @@
       fcc-cli reboot turtles    -- 遠端重啟所有動力烏龜
 --]]
 
-local VERSION = "v4.1.0"
+local VERSION = "v4.2.0"
 local rawArgs = { ... }
 
 -- 1. 初始化數據機
@@ -80,18 +80,6 @@ local function executeCommand(args, out)
     if #args == 0 then return true end
     local cmd = string.lower(args[1])
 
-    local hoverOnlyDisabled = {
-        go = true, wp = true, waypoint = true, goto = true, go2 = true, wp2 = true,
-        cancel = true, stopnav = true, stopwp = true,
-        hdg = true, heading = true, yaw = true, synchdg = true,
-        sync_heading = true, sync = true, togglehdg = true, toggle_heading = true,
-        fwd = true, forward = true, thrust = true, turn = true, steer = true
-    }
-    if hoverOnlyDisabled[cmd] then
-        out.printError("Disabled: this firmware profile only supports vertical hover control.")
-        return true
-    end
-
     -- 三維航點: go <x> <y> <z>; 二維航點: go2 <x> <z> [radius]
     if cmd == "go" or cmd == "wp" or cmd == "waypoint" or cmd == "goto" or cmd == "go2" or cmd == "wp2" then
         local x = tonumber(args[2])
@@ -99,10 +87,10 @@ local function executeCommand(args, out)
         local is3d = cmd ~= "go2" and cmd ~= "wp2" and args[4] ~= nil
         local y = is3d and second or nil
         local z = is3d and tonumber(args[4]) or second
-        local r = is3d and (tonumber(args[5]) or 20.0) or (tonumber(args[4]) or 20.0)
+        local r = is3d and (tonumber(args[5]) or 12.0) or (tonumber(args[4]) or 12.0)
         if not x or not second or (is3d and not z) then
             out.printError("Usage: go <x> <y> <z> | go2 <x> <z> [radius]")
-            out.print("Examples: go 1000 100 1000 | go2 1000 100 (default radius 20m)")
+            out.print("Examples: go 1000 100 1000 | go2 1000 100 (default radius 12m)")
             return true
         end
         sendFccCmd({ cmd = "SET_WAYPOINT", x = x, y = y, z = z, radius = r })
@@ -196,22 +184,24 @@ local function executeCommand(args, out)
     elseif cmd == "fwd" or cmd == "forward" or cmd == "thrust" then
         local val = tonumber(args[2])
         if not val then
-            out.printError("Usage: fwd <val> (-15.0 ~ 15.0)")
+            out.printError("Usage: fwd <val> (-4.0 ~ 4.0)")
             return true
         end
+        val = math.max(-4.0, math.min(4.0, val))
         sendFccCmd({ cmd = "SET_FWD", val = val })
-        out.print(string.format("[OK] Forward thrust set to %.1f", val))
+        out.print(string.format("[OK] Forward thrust set to %.1f (limited range)", val))
         return true
 
     -- 轉向推力: turn <throttle>
     elseif cmd == "turn" or cmd == "steer" then
         local val = tonumber(args[2])
         if not val then
-            out.printError("Usage: turn <val> (-15.0 to +15.0, positive=right, negative=left)")
+            out.printError("Usage: turn <val> (-2.5 to +2.5, positive=right, negative=left)")
             return true
         end
+        val = math.max(-2.5, math.min(2.5, val))
         sendFccCmd({ cmd = "SET_TURN", val = val })
-        out.print(string.format("[OK] Turn thrust set to %.1f", val))
+        out.print(string.format("[OK] Turn thrust set to %.1f (limited range)", val))
         return true
 
     -- 基準油門: base <throttle>
@@ -311,10 +301,12 @@ local function executeCommand(args, out)
         out.print("=== Available Commands ===")
         out.print(" sys / hw         - Display installed systems & hardware inventory")
         out.print(" rescan           - Trigger hardware & sensor rescan on FCC")
-        out.print(" Waypoint, heading, forward, and turning controls are disabled")
+        out.print(" go <x> <y> <z> / go2 <x> <z> [radius] - Navigate to waypoint")
+        out.print(" cancel           - Cancel waypoint navigation")
         out.print(" alt <alt>        - Set target altitude (e.g. alt 200, alt +50)")
         out.print(" hold / calib     - Hold altitude / Liftoff auto calibration")
         out.print(" lock / stop      - Lock current altitude / Stop engines (IDLE)")
+        out.print(" hdg <0-359>      - Hold heading; fwd +/-4, turn +/-2.5 max")
         out.print(" update turtles   - One-click OTA firmware update all turtles")
         out.print(" reboot turtles   - Remote reboot all engine turtles")
         out.print(" clear            - Clear command console window")
@@ -449,16 +441,16 @@ local function renderTelemetryDashboard()
         local dist = math.sqrt(dx*dx + dz*dz)
         topWin.setTextColor(colors.lime)
         if nav.targetY then
-            topWin.write(string.format("-> (%d,%d,%d) Dist:%.0fm (R:%.0fm)", math.floor(nav.targetX), math.floor(nav.targetY), math.floor(nav.targetZ), dist, nav.arrivalRadius or 20))
+            topWin.write(string.format("-> (%d,%d,%d) Dist:%.0fm (R:%.0fm)", math.floor(nav.targetX), math.floor(nav.targetY), math.floor(nav.targetZ), dist, nav.arrivalRadius or 12))
         else
-            topWin.write(string.format("-> (%d,%d) Dist:%.0fm (R:%.0fm)", math.floor(nav.targetX), math.floor(nav.targetZ), dist, nav.arrivalRadius or 20))
+            topWin.write(string.format("-> (%d,%d) Dist:%.0fm (R:%.0fm)", math.floor(nav.targetX), math.floor(nav.targetZ), dist, nav.arrivalRadius or 12))
         end
     elseif nav.wpActive and nav.targetX and nav.targetZ then
         topWin.setTextColor(colors.lime)
         topWin.write(string.format("-> (%d,%d) [Searching GPS/INS...]", math.floor(nav.targetX), math.floor(nav.targetZ)))
     else
         topWin.setTextColor(colors.gray)
-        topWin.write("HOVER-ONLY: Horizontal navigation disabled")
+        topWin.write(nav.braking and "Braking at waypoint" or "No waypoint active")
     end
 
     -- 7. 發動機烏龜節點健康度 (Engines)
@@ -543,7 +535,7 @@ local function commandConsoleLoop()
     cmdWin.clear()
     cmdWin.setCursorPos(1, 1)
     cmdWin.setTextColor(colors.lightGray)
-    cmdWin.write("Type 'help' for hover controls, 'update turtles', 'exit'\n")
+    cmdWin.write("Type 'help' for flight controls, 'go x y z', 'update turtles', 'exit'\n")
 
     local history = {}
     while true do

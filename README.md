@@ -1,9 +1,9 @@
 # 🚀 CC-AeroAutoPilot: 四軸航空自動導航與分散式多螢幕飛控系統
 
-> **目前電腦端韌體為懸停專用安全設定**：保留高度保持、校準與緊急停止；航點、航向、前進、後退與側推控制已停用，水平推進輸出固定為零。
+> **目前電腦端韌體保留懸停並重新啟用受限導航**：航點導航需要有效位置與航向資料，並要求先啟用高度保持；感測器失效或資料過期時，水平推力歸零。垂直升力控制與水平導航分離。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Computer Suite: v4.1.0](https://img.shields.io/badge/Computer_Suite-v4.1.0-blue.svg)](https://github.com/chiliasmstudio/CC-AeroAutoPilot/releases/latest)
+[![Computer Suite: v4.2.0](https://img.shields.io/badge/Computer_Suite-v4.2.0-blue.svg)](https://github.com/chiliasmstudio/CC-AeroAutoPilot/releases/latest)
 [![Turtle Firmware: v4.0.12](https://img.shields.io/badge/Turtle_Firmware-v4.0.12-green.svg)](https://github.com/chiliasmstudio/CC-AeroAutoPilot/releases/latest)
 
 > [!NOTE]
@@ -25,11 +25,12 @@
    - **All-In-One (單機一體化)**：亦可使用單台主電腦兼任飛控運算與螢幕渲染。
 2. 🧭 **CCPE 物理實體感知與全自動導航 (CCPE / FMC / AIC Integration)**：
    - 完美相容 **CC Peripheral Extender (`ccpe.sensor_system`)**，實時讀取飛艇實體的絕對世界物理座標 $(X, Y, Z)$、三軸向量速度與歐拉角姿態（Pitch, Yaw, Roll）。
-   - 目前保留高度保持、懸停校準與緊急停止；水平導航與水平推進停用。
-   - 感測器仍供高度與姿態保持使用；位置導航不參與飛控迴圈。
+   - 保留高度保持、懸停校準與緊急停止；重新啟用需定位及航向感測器的航點導航。
+   - 導航只控制標記為 `FWD`、`BWD`、`LEFT`、`RIGHT` 的烏龜，永不改動四象限升力輸出。
+   - 導航限速並以速度回授減速；位置或航向資料失效時立即停用水平輸出。
 3. 🚢 **全向推進發動機叢集 (Full-Axis Propulsion & Cluster Redundancy)**：
    - **升降動力 (4-Quad Lift)**：`FL` (左前), `FR` (右前), `BL` (左後), `BR` (右後) 差動升力與四象限姿態自穩。
-   - **懸停安全設定**：巡航與側推通道固定為零；維護資訊仍會列出已安裝節點。
+   - 巡航與側推節點只接受導航／手動方向控制器的受限輸出；電腦本體六面紅石輸出保持為零。
 4. 🖥️ **三合一通用顯示技術與觸控支援 (Universal 3-in-1 Display Driver)**：
    - 🎨 **Tom's Peripherals GPU**：高解析 32-bit ARGB 繪圖、抗鋸齒平滑儀表刻度盤與 5x7 點陣字型。
    - ⚡ **CC-DirectGPU-Mod**：硬體加速 24-bit True RGB 向量圖形渲染與原生觸控。
@@ -158,18 +159,22 @@ boot run              # 啟動 一體化飛控
 
 ---
 
-## 💻 FCC-CLI 終端指令參考手冊（懸停專用）
+## 💻 FCC-CLI 終端指令參考手冊（懸停與受限導航）
 
-在 `fcc-cli` 終端中使用高度保持與懸停維護指令：
+在 `fcc-cli` 終端中輸入以下懸停、航點導航與維護指令：
 
 ```text
 === 核心飛控指令表 ===
+go <x> <y> <z>      - 導航至三維座標；Y 設為目標高度
+go2 <x> <z> [r]     - 導航至水平座標；預設到點半徑 12 格
+cancel              - 取消航點並停止水平推力
 alt <alt>            - 設定目標高度 (例如: alt 200 或相對高度 alt +50, alt -20)
 hold                 - 鎖定當前高度 (啟動 PD-V 高度維持模式)
 calib                - 啟動原處起飛自動校準 (尋找懸停平衡推力)
 lock                 - 快速鎖定當前高度
 stop                 - 緊急停機 (所有引擎推力立即歸零)
 base <val>           - 調整懸停基準推力
+hdg <0-359>          - 航向保持；fwd 範圍 ±4、turn 範圍 ±2.5
 sys / hw             - 檢視全艦已安裝硬體設備清單 (GPU/螢幕/烏龜/CCPE/感測器)
 rescan               - 命令飛控電腦重新掃描所有硬體與感測器
 update turtles       - 一鍵無線 OTA 遠端更新全艦所有烏龜韌體
@@ -178,7 +183,7 @@ clear                - 清空下方命令列視窗
 exit                 - 退出終端
 ```
 
-`go`、`hdg`、`fwd`、`turn` 等水平控制指令會回報停用，不會傳送推進命令。
+先執行 `hold` 穩定飛行再使用 `go2`；`go x y z` 會保留目標並設定高度，仍須先執行 `hold` 或 `calib` 才會啟動水平導航。FCC 必須讀到有效位置與航向；未取得定位時會停推並顯示等待狀態。
 
 ---
 

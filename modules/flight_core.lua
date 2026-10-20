@@ -68,8 +68,8 @@ FlightCore.state = {
     calibPhase = "GROUND_SEARCH", -- "GROUND_SEARCH", "HOVER_3M"
     calibThrottle = 0.0,      -- 校正微調油門
     rampRate = 0.015,         -- 線性加力速率
-    fwdThrottle = 0.0,        -- 前進/後退油門 (-15.0 ~ 15.0，正為前進，負為後退)
-    turnThrottle = 0.0,       -- 轉向推力 (-15.0 ~ 15.0，正為右推/面向右，負為左推/面向左)
+    fwdThrottle = 0.0,        -- 前進/後退油門 (-4.0 ~ 4.0，正為前進，負為後退)
+    turnThrottle = 0.0,       -- 轉向推力 (-2.5 ~ 2.5，正為右推/面向右，負為左推/面向左)
     strafeThrottle = 0.0      -- 相容別名
 }
 
@@ -82,14 +82,26 @@ FlightCore.nav = {
     pitch = 0.0,
     roll = 0.0,
     speed = 0.0,          -- 水平線速度 (m/s)
+    velocityX = 0.0,
+    velocityZ = 0.0,
+    lastPositionAt = nil,
+    lastHeadingAt = nil,
+    previousX = nil,
+    previousZ = nil,
+    previousPositionAt = nil,
     source = "BARO",      -- "INS", "GPS", "BARO", "NONE"
     targetHeading = 0.0,  -- 目標航向 (0~359°)
+    headingScanAt = nil,
     headingHold = false,  -- 航向鎖定開關
     targetX = nil,        -- 航點目標 X
     targetY = nil,        -- 可選的航點目標高度 Y
     targetZ = nil,        -- 航點目標 Z
     wpActive = false,     -- 航點自動巡航自駕儀
-    arrivalRadius = 20.0  -- 目的地到達判定半徑 (可偏差半徑 20 格)
+    arrivalRadius = 12.0, -- 目的地到達判定半徑 (可偏差半徑 12 格)
+    braking = false,
+    fixReady = false,
+    positionReady = false,
+    headingReady = false
 }
 
 -- 高度控制專用 PID 控制器 (v3.8.4 經典基準: Kp=0.5, Ki=0.02, Kd=0.6, 嚴格輸出限幅 [-1.5, +1.8])
@@ -353,8 +365,8 @@ end
 function FlightCore.initSensorsAndModem()
     FlightCore.altiSensor = peripheral.find("altitude_sensor")
     FlightCore.gimbalSensor = peripheral.find("gimbal_sensor")
-    FlightCore.navTable = nil
-    FlightCore.aicSensor = nil
+    FlightCore.navTable = peripheral.find("navigation_table") or peripheral.find("avionics_navigation_table")
+    FlightCore.aicSensor = getCCPESensorSystem() or false
     FlightCore.modems = {}
     for _, name in ipairs(peripheral.getNames()) do
         if peripheral.getType(name) == "modem" then
@@ -501,8 +513,9 @@ function FlightCore.outputToEngines(sigFL, sigFR, sigBL, sigBR, sigFWD, sigBWD, 
     sigLEFT = sigLEFT or FlightCore.engineOutputs.LEFT or 0
     sigRIGHT = sigRIGHT or FlightCore.engineOutputs.RIGHT or 0
 
-    -- Hover-only firmware: horizontal propulsion is always commanded to zero.
-    sigFWD, sigBWD, sigLEFT, sigRIGHT = 0, 0, 0, 0
+    sigFL, sigFR, sigBL, sigBR = math.max(0, math.min(15, sigFL)), math.max(0, math.min(15, sigFR)), math.max(0, math.min(15, sigBL)), math.max(0, math.min(15, sigBR))
+    sigFWD, sigBWD = math.max(0, math.min(15, sigFWD)), math.max(0, math.min(15, sigBWD))
+    sigLEFT, sigRIGHT = math.max(0, math.min(15, sigLEFT)), math.max(0, math.min(15, sigRIGHT))
 
     local targets = {
         FL = sigFL, FR = sigFR, BL = sigBL, BR = sigBR,
@@ -569,17 +582,22 @@ function FlightCore.outputToEngines(sigFL, sigFR, sigBL, sigBR, sigFWD, sigBWD, 
         pcall(function() m.transmit(100, 101, payload) end)
     end
 
-    -- Hover-only firmware uses turtle nodes for the four lift channels.
-    -- Do not mirror lift power to every computer side: that can energize
-    -- unrelated horizontal engines attached directly to the computer.
+    -- Lift and navigation propulsion are driven only through labeled turtle nodes.
+    -- Keep direct computer outputs off so a role cannot leak to adjacent engines.
     for _, s in ipairs({"top", "bottom", "left", "right", "back", "front"}) do
         pcall(function() redstone.setAnalogOutput(s, 0) end)
     end
 end
 
 function FlightCore.setForwardThrottle(val)
-    FlightCore.state.fwdThrottle = 0
-    FlightCore.state.statusMsg = "HOVER-ONLY: Horizontal thrust disabled"
+    val = tonumber(val) or 0
+    FlightCore.nav.wpActive = false
+    FlightCore.nav.braking = false
+    FlightCore.nav.headingHold = false
+    FlightCore.state.turnThrottle = 0
+    FlightCore.state.strafeThrottle = 0
+    FlightCore.state.fwdThrottle = math.max(-4.0, math.min(4.0, val))
+    FlightCore.state.statusMsg = string.format("Manual Cruise: %.1f", FlightCore.state.fwdThrottle)
 end
 
 function FlightCore.adjustForwardThrottle(delta)
@@ -587,9 +605,14 @@ function FlightCore.adjustForwardThrottle(delta)
 end
 
 function FlightCore.setTurnThrottle(val)
-    FlightCore.state.turnThrottle = 0
-    FlightCore.state.strafeThrottle = 0
-    FlightCore.state.statusMsg = "HOVER-ONLY: Turning thrust disabled"
+    val = tonumber(val) or 0
+    FlightCore.nav.wpActive = false
+    FlightCore.nav.braking = false
+    FlightCore.nav.headingHold = false
+    FlightCore.state.fwdThrottle = 0
+    FlightCore.state.turnThrottle = math.max(-2.5, math.min(2.5, val))
+    FlightCore.state.strafeThrottle = FlightCore.state.turnThrottle
+    FlightCore.state.statusMsg = string.format("Manual Turn: %.1f", FlightCore.state.turnThrottle)
 end
 
 function FlightCore.adjustTurnThrottle(delta)
@@ -609,6 +632,8 @@ function FlightCore.stopHorizontalThrust()
     FlightCore.state.turnThrottle = 0.0
     FlightCore.state.strafeThrottle = 0.0
     FlightCore.nav.wpActive = false
+    FlightCore.nav.headingHold = false
+    FlightCore.nav.braking = false
     FlightCore.virtualOutputs.FWD = 0.0
     FlightCore.virtualOutputs.BWD = 0.0
     FlightCore.virtualOutputs.LEFT = 0.0
@@ -617,22 +642,303 @@ function FlightCore.stopHorizontalThrust()
     FlightCore.engineOutputs.BWD = 0
     FlightCore.engineOutputs.LEFT = 0
     FlightCore.engineOutputs.RIGHT = 0
-    FlightCore.state.statusMsg = "Directional Thrust: STOPPED"
+    FlightCore.state.statusMsg = "Horizontal Thrust: STOPPED"
 end
 
 function FlightCore.setWaypoint(x, z, radius, targetY)
-    FlightCore.nav.wpActive = false
-    FlightCore.nav.targetX = nil
-    FlightCore.nav.targetY = nil
-    FlightCore.nav.targetZ = nil
+    x, z = tonumber(x), tonumber(z)
+    radius = math.max(3.0, math.min(64.0, tonumber(radius) or 12.0))
+    targetY = tonumber(targetY)
+    if not x or not z then
+        FlightCore.state.statusMsg = "ERR: Waypoint requires numeric X and Z"
+        return false
+    end
+
+    FlightCore.nav.targetX = x
+    FlightCore.nav.targetY = targetY
+    FlightCore.nav.targetZ = z
+    FlightCore.nav.arrivalRadius = radius
+    FlightCore.nav.wpActive = true
+    FlightCore.nav.headingHold = true
+    FlightCore.nav.braking = false
     FlightCore.state.fwdThrottle = 0
-    FlightCore.state.statusMsg = "HOVER-ONLY: Waypoint navigation disabled"
+    FlightCore.state.turnThrottle = 0
+    FlightCore.state.strafeThrottle = 0
+    if targetY then
+        FlightCore.state.targetAlt = math.max(0, math.min(1000, targetY))
+        if FlightCore.state.mode == "HOLD_ALT" then
+            FlightCore.setTargetAlt(targetY)
+        end
+    end
+    FlightCore.state.statusMsg = string.format("NAV SET: X %.0f Z %.0f (R %.0f)", x, z, radius)
+    return true
 end
 
 function FlightCore.cancelWaypoint()
     FlightCore.nav.wpActive = false
+    FlightCore.nav.braking = false
+    FlightCore.nav.headingHold = false
     FlightCore.state.fwdThrottle = 0.0
-    FlightCore.state.statusMsg = "Waypoint navigation is disabled in hover-only mode"
+    FlightCore.state.turnThrottle = 0.0
+    FlightCore.state.strafeThrottle = 0.0
+    FlightCore.state.statusMsg = "Waypoint Navigation CANCELLED"
+end
+
+local function wrapHeading(degrees)
+    return ((degrees % 360) + 360) % 360
+end
+
+local function signedAngle(degrees)
+    return ((degrees + 180) % 360) - 180
+end
+
+local function readXYZ(value)
+    if type(value) ~= "table" and type(value) ~= "userdata" then return nil end
+    local x = tonumber(value.x or value[1])
+    local y = tonumber(value.y or value[2])
+    local z = tonumber(value.z or value[3])
+    if not x or not z or x ~= x or z ~= z then return nil end
+    return x, y, z
+end
+
+local function clamp(value, low, high)
+    return math.max(low, math.min(high, value))
+end
+
+function FlightCore.updateNavigationSensors()
+    local nav = FlightCore.nav
+    local now = os.epoch("utc") / 1000
+    local ss = FlightCore.aicSensor
+    if ss == false then ss = nil end
+    if ss == nil then
+        ss = getCCPESensorSystem()
+        FlightCore.aicSensor = ss or false
+    end
+
+    local gotPosition = false
+    if ss then
+        local onBody = true
+        if type(ss.isOnBody) == "function" then
+            local ok, value = pcall(ss.isOnBody)
+            onBody = ok and value == true
+        elseif ss.isOnBody ~= nil then
+            onBody = ss.isOnBody == true
+        end
+
+        if onBody then
+            local position
+            for _, methodName in ipairs({"getBodyPosition", "getPosition"}) do
+                local method = ss[methodName]
+                if type(method) == "function" then
+                    local ok, value = pcall(method)
+                    if ok and value then
+                        local x, y, z = readXYZ(value)
+                        if x and z then
+                            position = {x = x, y = y, z = z}
+                            break
+                        end
+                    end
+                end
+            end
+
+            if position then
+                nav.x, nav.y, nav.z = position.x, position.y, position.z or nav.y
+                nav.source = "AIC"
+                nav.lastPositionAt = now
+                gotPosition = true
+
+                local ok, velocity = pcall(function()
+                    return type(ss.getVelocity) == "function" and ss.getVelocity() or nil
+                end)
+                local vx, vz
+                if ok and velocity then
+                    local velocityX, _, velocityZ = readXYZ(velocity)
+                    vx, vz = velocityX, velocityZ
+                end
+                if not vx or not vz then
+                    local prevAt = nav.previousPositionAt
+                    local dt = prevAt and (now - prevAt) or 0
+                    if nav.previousX and nav.previousZ and dt > 0.01 and dt <= 0.5 then
+                        vx = (position.x - nav.previousX) / dt
+                        vz = (position.z - nav.previousZ) / dt
+                    end
+                end
+                if vx and vz and math.abs(vx) < 40 and math.abs(vz) < 40 then
+                    if nav.previousPositionAt then
+                        nav.velocityX = (nav.velocityX or 0) * 0.65 + vx * 0.35
+                        nav.velocityZ = (nav.velocityZ or 0) * 0.65 + vz * 0.35
+                    else
+                        nav.velocityX, nav.velocityZ = vx, vz
+                    end
+                    nav.speed = math.sqrt(nav.velocityX * nav.velocityX + nav.velocityZ * nav.velocityZ)
+                end
+                nav.previousX, nav.previousZ, nav.previousPositionAt = position.x, position.z, now
+            end
+
+            local okAngles, angles = pcall(function()
+                return type(ss.getAngles) == "function" and ss.getAngles() or nil
+            end)
+            if okAngles and angles then
+                local yaw = tonumber(angles.yaw or angles[3])
+                if yaw and yaw == yaw and math.abs(yaw) <= 100000 then
+                    nav.yaw = wrapHeading(yaw)
+                    nav.lastHeadingAt = now
+                end
+            end
+        end
+    end
+
+    -- Some Create: Avionics builds expose only the nav-table heading peripheral.
+    if not nav.lastHeadingAt or now - nav.lastHeadingAt > 0.5 then
+        if not FlightCore.navTable and (not nav.headingScanAt or now - nav.headingScanAt >= 1.0) then
+            FlightCore.navTable = peripheral.find("navigation_table") or peripheral.find("avionics_navigation_table")
+            nav.headingScanAt = now
+        end
+        local tablePeripheral = FlightCore.navTable
+        if tablePeripheral then
+            local ok, heading, radians = pcall(function()
+                if type(tablePeripheral.getHeading) == "function" then
+                    return tablePeripheral.getHeading()
+                elseif type(tablePeripheral.getHeadingRad) == "function" then
+                    return nil, tablePeripheral.getHeadingRad()
+                end
+                return nil, nil
+            end)
+            if ok then
+                if type(heading) == "number" then
+                    -- Create: Avionics measures atan2(worldX, worldZ); convert to north/clockwise.
+                    nav.yaw = wrapHeading(180 - heading)
+                    nav.lastHeadingAt = now
+                elseif type(radians) == "number" then
+                    nav.yaw = wrapHeading(180 - math.deg(radians))
+                    nav.lastHeadingAt = now
+                end
+            end
+        end
+    end
+
+    -- GPS is a slow fallback; poll sparingly and with a short timeout.
+    if not gotPosition then
+        FlightCore.gpsTick = (FlightCore.gpsTick or 0) + 1
+        if FlightCore.gpsTick % 20 == 0 and gps and type(gps.locate) == "function" then
+            local ok, x, y, z = pcall(gps.locate, 0.02, false)
+            if ok and type(x) == "number" and type(z) == "number" then
+                nav.x, nav.y, nav.z = x, y, z
+                nav.source = "GPS"
+                local gpsNow = os.epoch("utc") / 1000
+                local prevAt = nav.previousPositionAt
+                local dt = prevAt and (gpsNow - prevAt) or 0
+                if nav.previousX and nav.previousZ and dt > 0.1 and dt <= 2.0 then
+                    local vx = (x - nav.previousX) / dt
+                    local vz = (z - nav.previousZ) / dt
+                    if math.abs(vx) < 40 and math.abs(vz) < 40 then
+                        nav.velocityX = (nav.velocityX or 0) * 0.65 + vx * 0.35
+                        nav.velocityZ = (nav.velocityZ or 0) * 0.65 + vz * 0.35
+                        nav.speed = math.sqrt(nav.velocityX * nav.velocityX + nav.velocityZ * nav.velocityZ)
+                    end
+                end
+                nav.previousX, nav.previousZ, nav.previousPositionAt = x, z, gpsNow
+                nav.lastPositionAt = gpsNow
+                gotPosition = true
+            end
+        end
+    end
+
+    local positionTimeout = nav.source == "GPS" and 2.0 or 1.0
+    if nav.lastPositionAt and now - nav.lastPositionAt > positionTimeout then
+        nav.x, nav.z = nil, nil
+        nav.source = "NONE"
+        nav.velocityX, nav.velocityZ, nav.speed = 0, 0, 0
+        nav.previousX, nav.previousZ, nav.previousPositionAt = nil, nil, nil
+    end
+    if nav.lastHeadingAt and now - nav.lastHeadingAt > 1.0 then
+        nav.lastHeadingAt = nil
+    end
+    local positionFreshness = nav.source == "GPS" and 1.5 or 0.5
+    nav.positionReady = nav.x ~= nil and nav.z ~= nil and nav.lastPositionAt ~= nil
+        and now - nav.lastPositionAt <= positionFreshness
+    nav.headingReady = nav.lastHeadingAt ~= nil and now - nav.lastHeadingAt <= 0.5
+    nav.fixReady = nav.positionReady and nav.headingReady
+    return nav.fixReady
+end
+
+function FlightCore.updateNavigationControl()
+    local nav = FlightCore.nav
+    local state = FlightCore.state
+    local fwd, turn = 0, 0
+
+    if state.mode ~= "HOLD_ALT" then
+        if nav.wpActive then state.statusMsg = "NAV PAUSED: engage altitude hold first" end
+    elseif nav.wpActive and not nav.fixReady then
+        state.statusMsg = "NAV PAUSED: position / heading fix unavailable"
+    elseif nav.headingHold and not nav.headingReady then
+        state.statusMsg = "HEADING HOLD PAUSED: heading unavailable"
+    elseif nav.braking and not nav.fixReady then
+        state.statusMsg = "NAV BRAKING PAUSED: position / heading fix unavailable"
+    elseif nav.braking then
+        local yawRad = math.rad(nav.yaw or 0)
+        local forwardSpeed = (nav.velocityX or 0) * math.sin(yawRad)
+            - (nav.velocityZ or 0) * math.cos(yawRad)
+        if math.abs(forwardSpeed) <= 0.3 then
+            nav.braking = false
+            nav.headingHold = false
+            state.statusMsg = string.format("NAV ARRIVED: %.1fm/s", nav.speed or 0)
+        else
+            fwd = clamp(-forwardSpeed * 1.2, -3.0, 3.0)
+            state.statusMsg = string.format("NAV BRAKING: %.1fm/s", nav.speed or 0)
+        end
+    elseif nav.wpActive then
+        local dx = nav.targetX - nav.x
+        local dz = nav.targetZ - nav.z
+        local distance = math.sqrt(dx * dx + dz * dz)
+        if distance <= nav.arrivalRadius then
+            nav.wpActive = false
+            nav.braking = true
+            turn = 0
+        else
+            local bearing = wrapHeading(math.deg(math.atan(dx, -dz)))
+            nav.targetHeading = bearing
+            local headingError = signedAngle(bearing - nav.yaw)
+            if math.abs(headingError) > 5 then
+                turn = clamp(headingError * 0.07, -2.5, 2.5)
+                if math.abs(turn) < 0.7 then turn = headingError > 0 and 0.7 or -0.7 end
+            end
+
+            if math.abs(headingError) <= 12 then
+                local unitX, unitZ = dx / distance, dz / distance
+                local alongSpeed = (nav.velocityX or 0) * unitX + (nav.velocityZ or 0) * unitZ
+                local brakingRoom = math.max(0, distance - nav.arrivalRadius - 8)
+                local targetSpeed = math.min(3.5, math.sqrt(brakingRoom * 1.4))
+                fwd = clamp((targetSpeed - alongSpeed) * 1.2, -3.0, 4.0)
+                if fwd < 0.4 and alongSpeed < targetSpeed - 0.5 then fwd = 0.4 end
+            end
+            state.statusMsg = string.format("NAV: %.0fm HDG %+03d SPD %.1f THR %.1f", distance, headingError, nav.speed or 0, fwd)
+        end
+    elseif nav.headingHold then
+        local headingError = signedAngle((nav.targetHeading or nav.yaw) - nav.yaw)
+        if math.abs(headingError) > 5 then
+            turn = clamp(headingError * 0.07, -2.5, 2.5)
+            if math.abs(turn) < 0.7 then turn = headingError > 0 and 0.7 or -0.7 end
+        end
+        fwd = clamp(state.fwdThrottle or 0, -4.0, 4.0)
+        state.statusMsg = string.format("HDG HOLD: %03d* ERR %+03d", math.floor(nav.yaw or 0), math.floor(headingError))
+    else
+        fwd = clamp(state.fwdThrottle or 0, -4.0, 4.0)
+        turn = clamp(state.turnThrottle or state.strafeThrottle or 0, -2.5, 2.5)
+    end
+
+    if (nav.wpActive or nav.braking) and not nav.fixReady then
+        fwd, turn = 0, 0
+    elseif nav.headingHold and not nav.headingReady then
+        fwd, turn = 0, 0
+    end
+    state.fwdThrottle = fwd
+    state.turnThrottle = turn
+    state.strafeThrottle = turn
+    FlightCore.virtualOutputs.FWD = math.max(0, fwd)
+    FlightCore.virtualOutputs.BWD = math.max(0, -fwd)
+    FlightCore.virtualOutputs.RIGHT = math.max(0, turn)
+    FlightCore.virtualOutputs.LEFT = math.max(0, -turn)
 end
 
 function FlightCore.setTargetAlt(alt)
@@ -664,6 +970,8 @@ function FlightCore.stopEngines()
     FlightCore.state.turnThrottle = 0.0
     FlightCore.state.strafeThrottle = 0.0
     FlightCore.nav.wpActive = false
+    FlightCore.nav.braking = false
+    FlightCore.nav.headingHold = false
     FlightCore.state.statusMsg = "Engines Stopped (IDLE)"
     FlightCore.engineOutputs = { FL = 0, FR = 0, BL = 0, BR = 0, FWD = 0, BWD = 0, LEFT = 0, RIGHT = 0 }
     FlightCore.virtualOutputs = { FL = 0.0, FR = 0.0, BL = 0.0, BR = 0.0, FWD = 0.0, BWD = 0.0, LEFT = 0.0, RIGHT = 0.0 }
@@ -679,6 +987,9 @@ function FlightCore.holdAltitude()
             local currentAlt = FlightCore.altiSensor.getHeight() or 0
             FlightCore.state.targetAlt = currentAlt
             FlightCore.state.virtualAlt = currentAlt
+        end
+        if FlightCore.nav.wpActive and FlightCore.nav.targetY then
+            FlightCore.state.targetAlt = math.max(0, math.min(1000, FlightCore.nav.targetY))
         end
         FlightCore.state.mode = "HOLD_ALT"
         FlightCore.state.statusMsg = "Altitude Hold Active"
@@ -707,10 +1018,15 @@ function FlightCore.startCalibration()
 end
 
 function FlightCore.setTargetHeading(hdg)
-    FlightCore.nav.headingHold = false
-    FlightCore.state.turnThrottle = 0
-    FlightCore.state.strafeThrottle = 0
-    FlightCore.state.statusMsg = "HOVER-ONLY: Heading control disabled"
+    hdg = tonumber(hdg)
+    if not hdg then return false end
+    FlightCore.nav.wpActive = false
+    FlightCore.nav.braking = false
+    FlightCore.state.fwdThrottle = 0
+    FlightCore.nav.targetHeading = (math.floor(hdg) % 360 + 360) % 360
+    FlightCore.nav.headingHold = true
+    FlightCore.state.statusMsg = string.format("Target Heading: %03d*", FlightCore.nav.targetHeading)
+    return true
 end
 
 function FlightCore.adjustTargetHeading(delta)
@@ -718,26 +1034,23 @@ function FlightCore.adjustTargetHeading(delta)
 end
 
 function FlightCore.toggleHeadingHold()
-    FlightCore.nav.headingHold = false
-    FlightCore.state.turnThrottle = 0
-    FlightCore.state.strafeThrottle = 0
-    FlightCore.state.statusMsg = "HOVER-ONLY: Heading control disabled"
+    FlightCore.nav.headingHold = not FlightCore.nav.headingHold
+    if FlightCore.nav.headingHold then
+        FlightCore.setTargetHeading(FlightCore.nav.yaw or 0)
+    else
+        FlightCore.state.turnThrottle = 0
+        FlightCore.state.strafeThrottle = 0
+        FlightCore.state.statusMsg = "Heading Hold: OFF"
+    end
 end
 
 function FlightCore.syncHeading()
-    FlightCore.nav.headingHold = false
-    FlightCore.state.turnThrottle = 0
-    FlightCore.state.strafeThrottle = 0
-    FlightCore.state.statusMsg = "HOVER-ONLY: Heading control disabled"
+    FlightCore.setTargetHeading(FlightCore.nav.yaw or 0)
+    FlightCore.state.statusMsg = string.format("Heading Synced: %03d*", FlightCore.nav.targetHeading)
 end
 
 function FlightCore.updateFlightLogic()
     FlightCore.pwmTick = (FlightCore.pwmTick + 1) % 10
-    FlightCore.state.fwdThrottle = 0
-    FlightCore.state.turnThrottle = 0
-    FlightCore.state.strafeThrottle = 0
-    FlightCore.nav.wpActive = false
-    FlightCore.nav.headingHold = false
 
     if FlightCore.state.mode == "IDLE" then
         FlightCore.engineOutputs = { FL = 0, FR = 0, BL = 0, BR = 0, FWD = 0, BWD = 0, LEFT = 0, RIGHT = 0 }
@@ -808,6 +1121,7 @@ function FlightCore.updateFlightLogic()
     FlightCore.nav.y = currentAlt
     FlightCore.nav.pitch = currPitch
     FlightCore.nav.roll = currRoll
+    FlightCore.updateNavigationSensors()
 
     -- ============================================================
     -- [A] 高度維持與垂直升力控制核心 (基於 v3.8.4 經典架構)
@@ -821,7 +1135,8 @@ function FlightCore.updateFlightLogic()
             if (altDelta >= 0.35) or (altDelta >= 0.15 and currentVspeed >= 0.12) then
                 local hoverBase = math.max(1.0, FlightCore.state.calibThrottle)
                 FlightCore.state.baseThrottle = hoverBase
-                FlightCore.state.targetAlt = math.ceil(currentAlt)
+                FlightCore.state.targetAlt = FlightCore.nav.wpActive and FlightCore.nav.targetY
+                    or math.ceil(currentAlt)
                 FlightCore.state.virtualAlt = currentAlt
                 FlightCore.state.mode = "HOLD_ALT"
                 FlightCore.state.statusMsg = string.format("Hover Locked: %.2f (Alt: %.1fm)", hoverBase, currentAlt)
@@ -882,12 +1197,9 @@ function FlightCore.updateFlightLogic()
         end
     end
 
-    -- ============================================================
-    -- Hover-only: horizontal propulsion channels are fixed at zero.
-    FlightCore.virtualOutputs.FWD = 0
-    FlightCore.virtualOutputs.BWD = 0
-    FlightCore.virtualOutputs.LEFT = 0
-    FlightCore.virtualOutputs.RIGHT = 0
+    -- Navigation only controls the labeled horizontal turtle channels.
+    -- It never modifies the four lift outputs computed above.
+    FlightCore.updateNavigationControl()
 
     -- [C] 高頻 Sigma-Delta 誤差擴散 PWM 調變與底層輸出
     -- ============================================================
@@ -910,10 +1222,10 @@ function FlightCore.updateFlightLogic()
     FlightCore.engineOutputs.FR = calcDitheredPWM("FR", FlightCore.virtualOutputs.FR)
     FlightCore.engineOutputs.BL = calcDitheredPWM("BL", FlightCore.virtualOutputs.BL)
     FlightCore.engineOutputs.BR = calcDitheredPWM("BR", FlightCore.virtualOutputs.BR)
-    FlightCore.engineOutputs.FWD = 0
-    FlightCore.engineOutputs.BWD = 0
-    FlightCore.engineOutputs.LEFT = 0
-    FlightCore.engineOutputs.RIGHT = 0
+    FlightCore.engineOutputs.FWD = calcDitheredPWM("FWD", FlightCore.virtualOutputs.FWD)
+    FlightCore.engineOutputs.BWD = calcDitheredPWM("BWD", FlightCore.virtualOutputs.BWD)
+    FlightCore.engineOutputs.LEFT = calcDitheredPWM("LEFT", FlightCore.virtualOutputs.LEFT)
+    FlightCore.engineOutputs.RIGHT = calcDitheredPWM("RIGHT", FlightCore.virtualOutputs.RIGHT)
 
     FlightCore.outputToEngines(
         FlightCore.engineOutputs.FL,
