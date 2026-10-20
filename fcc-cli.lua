@@ -1,27 +1,25 @@
 --[[
     fcc-cli.lua — Standalone Command Line Interface & Console for VTOL Avionics
-    Version: v4.0.13
+    Version: v4.1.0
     
     特點:
     - 完全獨立於 FCC 飛控電腦，可在任何終端機 / Pocket Computer 上運行
-    - 上方視窗即時動態顯示主要飛控資訊 (高度、垂直速度、航向、座標、航點、發動機健康度)
+    - 上方視窗即時動態顯示主要飛控資訊 (高度、垂直速度、四軸升力、發動機健康度)
     - 下方命令視窗提供即時指令輸入 (CMD> )，兩者並行運作互不干擾
-    - 支援單行快捷指令 (例如: fcc-cli go 100 100 / fcc-cli alt 250 / fcc-cli update turtles)
+    - 懸停安全設定：只接受高度、懸停、校準、停止和診斷指令
 
     使用範例:
       fcc-cli                   -- 啟動即時資訊儀表 ＆ 互動命令終端 (REPL)
-      fcc-cli go 100 200        -- 設定航點至 (100, 200)，容許半徑 20m
       fcc-cli alt 250           -- 設定目標高度 250m
       fcc-cli alt +50           -- 目標高度增加 50m
       fcc-cli calib             -- 啟動自動起飛校準
       fcc-cli hold              -- 啟動高度維持模式
       fcc-cli stop              -- 緊急停機
-      fcc-cli hdg 90            -- 鎖定航向 90 度 (正東)
       fcc-cli update turtles    -- 一鍵 OTA 遠端更新所有動力烏龜程式碼
       fcc-cli reboot turtles    -- 遠端重啟所有動力烏龜
 --]]
 
-local VERSION = "v4.0.13"
+local VERSION = "v4.1.0"
 local rawArgs = { ... }
 
 -- 1. 初始化數據機
@@ -81,6 +79,18 @@ local function executeCommand(args, out)
 
     if #args == 0 then return true end
     local cmd = string.lower(args[1])
+
+    local hoverOnlyDisabled = {
+        go = true, wp = true, waypoint = true, goto = true, go2 = true, wp2 = true,
+        cancel = true, stopnav = true, stopwp = true,
+        hdg = true, heading = true, yaw = true, synchdg = true,
+        sync_heading = true, sync = true, togglehdg = true, toggle_heading = true,
+        fwd = true, forward = true, thrust = true, turn = true, steer = true
+    }
+    if hoverOnlyDisabled[cmd] then
+        out.printError("Disabled: this firmware profile only supports vertical hover control.")
+        return true
+    end
 
     -- 三維航點: go <x> <y> <z>; 二維航點: go2 <x> <z> [radius]
     if cmd == "go" or cmd == "wp" or cmd == "waypoint" or cmd == "goto" or cmd == "go2" or cmd == "wp2" then
@@ -301,15 +311,10 @@ local function executeCommand(args, out)
         out.print("=== Available Commands ===")
         out.print(" sys / hw         - Display installed systems & hardware inventory")
         out.print(" rescan           - Trigger hardware & sensor rescan on FCC")
-        out.print(" go <x> <y> <z>   - Navigate to XYZ; Y is target altitude")
-        out.print(" go2 <x> <z> [r]  - Navigate horizontally (radius default 20m)")
-        out.print(" cancel           - Cancel waypoint navigation")
+        out.print(" Waypoint, heading, forward, and turning controls are disabled")
         out.print(" alt <alt>        - Set target altitude (e.g. alt 200, alt +50)")
         out.print(" hold / calib     - Hold altitude / Liftoff auto calibration")
         out.print(" lock / stop      - Lock current altitude / Stop engines (IDLE)")
-        out.print(" hdg <0-359>      - Lock target heading (e.g. hdg 90)")
-        out.print(" synchdg          - Sync target heading to current yaw")
-        out.print(" fwd / turn <val> - Forward/turn thrust (-15.0 ~ 15.0)")
         out.print(" update turtles   - One-click OTA firmware update all turtles")
         out.print(" reboot turtles   - Remote reboot all engine turtles")
         out.print(" clear            - Clear command console window")
@@ -453,7 +458,7 @@ local function renderTelemetryDashboard()
         topWin.write(string.format("-> (%d,%d) [Searching GPS/INS...]", math.floor(nav.targetX), math.floor(nav.targetZ)))
     else
         topWin.setTextColor(colors.gray)
-        topWin.write("No Waypoint Active (Type 'go x y z' or 'go2 x z')")
+        topWin.write("HOVER-ONLY: Horizontal navigation disabled")
     end
 
     -- 7. 發動機烏龜節點健康度 (Engines)
@@ -538,7 +543,7 @@ local function commandConsoleLoop()
     cmdWin.clear()
     cmdWin.setCursorPos(1, 1)
     cmdWin.setTextColor(colors.lightGray)
-    cmdWin.write("Type 'help' for commands, 'go x y z', 'update turtles', 'exit'\n")
+    cmdWin.write("Type 'help' for hover controls, 'update turtles', 'exit'\n")
 
     local history = {}
     while true do

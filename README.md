@@ -1,7 +1,9 @@
 # 🚀 CC-AeroAutoPilot: 四軸航空自動導航與分散式多螢幕飛控系統
 
+> **目前電腦端韌體為懸停專用安全設定**：保留高度保持、校準與緊急停止；航點、航向、前進、後退與側推控制已停用，水平推進輸出固定為零。
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Computer Suite: v4.0.13](https://img.shields.io/badge/Computer_Suite-v4.0.13-blue.svg)](https://github.com/chiliasmstudio/CC-AeroAutoPilot/releases/latest)
+[![Computer Suite: v4.1.0](https://img.shields.io/badge/Computer_Suite-v4.1.0-blue.svg)](https://github.com/chiliasmstudio/CC-AeroAutoPilot/releases/latest)
 [![Turtle Firmware: v4.0.12](https://img.shields.io/badge/Turtle_Firmware-v4.0.12-green.svg)](https://github.com/chiliasmstudio/CC-AeroAutoPilot/releases/latest)
 
 > [!NOTE]
@@ -23,13 +25,11 @@
    - **All-In-One (單機一體化)**：亦可使用單台主電腦兼任飛控運算與螢幕渲染。
 2. 🧭 **CCPE 物理實體感知與全自動導航 (CCPE / FMC / AIC Integration)**：
    - 完美相容 **CC Peripheral Extender (`ccpe.sensor_system`)**，實時讀取飛艇實體的絕對世界物理座標 $(X, Y, Z)$、三軸向量速度與歐拉角姿態（Pitch, Yaw, Roll）。
-   - 支援 `go <x> <y> <z>` 三維航點導航（Y 同時設定目標高度），以及 `go2 <x> <z> [radius]` 水平導航。
-   - 具備多源導航融合與自動降級機制：優先 AIC/CCPE $\to$ 導航桌 (Navigation Table) $\to$ GPS $\to$ 航位推算 (INS)。
+   - 目前保留高度保持、懸停校準與緊急停止；水平導航與水平推進停用。
+   - 感測器仍供高度與姿態保持使用；位置導航不參與飛控迴圈。
 3. 🚢 **全向推進發動機叢集 (Full-Axis Propulsion & Cluster Redundancy)**：
    - **升降動力 (4-Quad Lift)**：`FL` (左前), `FR` (右前), `BL` (左後), `BR` (右後) 差動升力與四象限姿態自穩。
-   - **巡航動力 (Cruise Thrust)**：`FWD` (前進推進), `BWD` (後退反推)。
-   - **側推轉向動力 (Lateral & Steering)**：`LEFT` (左側推), `RIGHT` (右側推)。
-   - 支援同角色多烏龜負載均衡（例如配置 2 隻 FWD 烏龜自動同步分擔推力）。
+   - **懸停安全設定**：巡航與側推通道固定為零；維護資訊仍會列出已安裝節點。
 4. 🖥️ **三合一通用顯示技術與觸控支援 (Universal 3-in-1 Display Driver)**：
    - 🎨 **Tom's Peripherals GPU**：高解析 32-bit ARGB 繪圖、抗鋸齒平滑儀表刻度盤與 5x7 點陣字型。
    - ⚡ **CC-DirectGPU-Mod**：硬體加速 24-bit True RGB 向量圖形渲染與原生觸控。
@@ -60,8 +60,8 @@
 │  FCC 獨立飛控大腦      │  │  CDS 駕駛艙螢幕系統    │  │  FCC-CLI 命令列終端    │
 │  * 運行 fcc.lua        │  │  * 運行 display.lua    │  │  * 運行 fcc-cli.lua    │
 │  * 20Hz 純計算後台     │  │  * 接 DirectGPU / Tom's│  │  * Pocket Computer /   │
-│  * 連接 CCPE / 感測器  │  │  * 觸控儀表與即時圖形  │  │    終端機 (go x y z 指令) │
-│  * 廣播 Ch 102 遙測    │  │  * 接收 Ch 102 / 發 103│  │  * 接收 Ch 102 / 發 103│
+│  * 連接 CCPE / 感測器  │  │  * 觸控儀表與即時圖形  │  │    終端機 (懸停控制指令) │
+│  * 廣播 Ch 102 遙測    │  │  * 接收 Ch 102 / 發 103│  │  * 僅懸停與維護指令    │
 └───────────┬────────────┘  └───────────┬────────────┘  └───────────┬────────────┘
             │                           │                           │
 ════════════╧═══════════════════════════╧═══════════════════════════╧═════════════════
@@ -158,24 +158,18 @@ boot run              # 啟動 一體化飛控
 
 ---
 
-## 💻 FCC-CLI 終端指令參考手冊
+## 💻 FCC-CLI 終端指令參考手冊（懸停專用）
 
-在 `fcc-cli` 終端中輸入以下指令即可對飛艇進行全方位控制：
+在 `fcc-cli` 終端中使用高度保持與懸停維護指令：
 
 ```text
 === 核心飛控指令表 ===
-go <x> <y> <z>       - 自動導航至 X Y Z；Y 同時作為目標高度
-go2 <x> <z> [radius] - 水平導航至 X Z (預設到達半徑 20m；自訂半徑請用 go2)
-cancel               - 取消目前自動導航航點
 alt <alt>            - 設定目標高度 (例如: alt 200 或相對高度 alt +50, alt -20)
 hold                 - 鎖定當前高度 (啟動 PD-V 高度維持模式)
 calib                - 啟動原處起飛自動校準 (尋找懸停平衡推力)
 lock                 - 快速鎖定當前高度
 stop                 - 緊急停機 (所有引擎推力立即歸零)
-hdg <0-359>          - 鎖定目標航向角 (例如: hdg 90 代表正東)
-synchdg              - 將目標航向同步至當前實際朝向
-fwd <val>            - 手動設定前進/後退推力 (-15.0 ~ 15.0)
-turn <val>           - 手動設定偏航轉向推力 (-15.0 ~ 15.0)
+base <val>           - 調整懸停基準推力
 sys / hw             - 檢視全艦已安裝硬體設備清單 (GPU/螢幕/烏龜/CCPE/感測器)
 rescan               - 命令飛控電腦重新掃描所有硬體與感測器
 update turtles       - 一鍵無線 OTA 遠端更新全艦所有烏龜韌體
@@ -183,6 +177,8 @@ reboot turtles       - 遠端一鍵重啟全艦所有發動機烏龜
 clear                - 清空下方命令列視窗
 exit                 - 退出終端
 ```
+
+`go`、`hdg`、`fwd`、`turn` 等水平控制指令會回報停用，不會傳送推進命令。
 
 ---
 

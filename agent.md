@@ -21,6 +21,11 @@
 2. 修改烏龜韌體 `turtle_startup.lua` 時，執行 `python bundle.py --bump-turtle patch`。兩端都修改時執行 `python bundle.py --bump patch`。
 3. 以上命令會更新 `version.xml` 並重新打包；檢查 `version.xml`、產生檔版本標頭與差異後，將版本檔和所有產物一併提交。純文件修改不需遞增韌體版本。
 4. `.github/workflows/version-check.yml` 會在 Pull Request 和推送至 `main` 時檢查：若對應韌體程式有變更，`version.xml` 的該端版本必須高於基底提交，否則 CI 失敗。此檢查是防止漏升版的強制閘門。
+5. **禁止行為變更以舊版本提交**：完成程式修改後，先執行版本遞增與打包，再檢查 `version.xml`、README 版本徽章及所有生成檔標頭一致，最後才提交。電腦端功能或安全設定改動一律至少使用 `minor`；一般修正使用 `patch`。建置與版本檢查失敗時不可提交。
+
+### 目前電腦端飛控設定
+
+目前 Computer Suite 採用懸停專用安全設定：只保留高度維持、懸停校準與緊急停止；航點、航向、巡航及側推控制關閉。每次飛控更新與輸出封包均將 `FWD`、`BWD`、`LEFT`、`RIGHT` 固定為 0，電腦本體六個紅石面也保持 0。每次飛控修改後，部署包需使用 `python bundle.py --bump-computer <patch|minor|major>` 生成，並確認版本真的遞增。
 
 ---
 

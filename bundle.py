@@ -238,6 +238,8 @@ Drivers.normal = """
     Create: Avionics & CC: Tweaked
     Unified Multi-Engine Avionics Flight Computer (多軸模組化統一飛控大腦)
     Version: {VERSION} Modular Bundle
+    HOVER-ONLY PROFILE: altitude hold, calibration, and emergency stop remain enabled.
+    Waypoints, heading, cruise, and lateral thrust are disabled; horizontal outputs are clamped to zero.
     
     螢幕尺寸自適應分類 (Dual Screen Size Mode):
     - 完整顯示螢幕 (>= 5x5): 啟動超大 A350 儀表、細緻多引擎遙測與 3 排完整控制面板。
@@ -360,11 +362,13 @@ parallel.waitForAny(flightLoop, renderLoop, eventLoop)
     Create: Avionics & CC: Tweaked
     Standalone Flight Control Computer (FCC - 分散式純飛控大腦)
     Version: {VERSION}
+    HOVER-ONLY PROFILE: altitude hold, calibration, and emergency stop remain enabled.
+    Waypoints, heading, cruise, and lateral thrust are disabled; horizontal outputs are clamped to zero.
     
     特點:
     - 0% 畫面渲染開銷 (No UI Rendering Overhead)，運算時間 < 0.2ms
     - 20Hz 高頻穩定 PD-V 垂直升力與高度控制，永不卡頓
-    - 支援 Channel 100/101 烏龜推進動力同步
+    - 支援 Channel 100/101 四軸升力烏龜同步；水平輸出固定為零
     - 支援 Channel 102 遙測狀態廣播 (10Hz) 與 Channel 103 駕駛艙螢幕指令接收
     - 徹底根除 "Too long without yielding"
 --]]
