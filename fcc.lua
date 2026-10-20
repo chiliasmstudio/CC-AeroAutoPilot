@@ -1,7 +1,7 @@
 --[[
     Create: Avionics & CC: Tweaked
     Standalone Flight Control Computer (FCC - 分散式純飛控大腦)
-    Version: v4.3.0
+    Version: v4.4.0
     NAV PROFILE: hover controls remain independent; waypoint control is speed-limited and requires fresh position/heading fixes.
     
     特點:
@@ -12,7 +12,7 @@
     - 徹底根除 "Too long without yielding"
 --]]
 
-local VERSION = "v4.3.0"
+local VERSION = "v4.4.0"
 
 -- ========================================================
 -- PART 1: 飛控與動力控制核心 (FLIGHT & PROPULSION CORE)
@@ -84,7 +84,7 @@ FlightCore.state = {
     calibThrottle = 0.0,      -- 校正微調油門
     rampRate = 0.015,         -- 線性加力速率
     fwdThrottle = 0.0,        -- 前進/後退油門 (-4.0 ~ 4.0，正為前進，負為後退)
-    turnThrottle = 0.0,       -- 轉向推力 (-2.5 ~ 2.5，正為右推/面向右，負為左推/面向左)
+    turnThrottle = 0.0,       -- 手動轉向推力 (-2.5 ~ 2.5；自動航向可依回應提高至 12)
     strafeThrottle = 0.0      -- 相容別名
 }
 
@@ -94,6 +94,12 @@ FlightCore.nav = {
     y = nil,
     z = nil,
     yaw = 0.0,            -- 當前航向角 (0~359°, 0=北, 90=東, 180=南, 270=西)
+    yawRate = 0.0,        -- 航向角速度 (度/秒，順時針為正)
+    previousYaw = nil,
+    previousYawAt = nil,
+    turnPowerLimit = 3.0, -- 自動轉向起始上限；回應不足時逐步提高，最高 12
+    turnSlowSince = nil,
+    lastTurnPowerAdjustAt = 0,
     pitch = 0.0,
     roll = 0.0,
     speed = 0.0,          -- 水平線速度 (m/s)
@@ -676,6 +682,9 @@ function FlightCore.setWaypoint(x, z, radius, targetY)
     FlightCore.nav.wpActive = true
     FlightCore.nav.headingHold = true
     FlightCore.nav.braking = false
+    FlightCore.nav.turnPowerLimit = 3.0
+    FlightCore.nav.turnSlowSince = nil
+    FlightCore.nav.lastTurnPowerAdjustAt = 0
     FlightCore.state.fwdThrottle = 0
     FlightCore.state.turnThrottle = 0
     FlightCore.state.strafeThrottle = 0
@@ -832,6 +841,30 @@ function FlightCore.updateNavigationSensors()
         end
     end
 
+    -- Estimate actual yaw response from fresh heading samples. This lets the
+    -- turn controller detect weak steering instead of assuming fixed thrust.
+    if nav.lastHeadingAt == now then
+        local previousAt = nav.previousYawAt
+        local dt = previousAt and (now - previousAt) or 0
+        if nav.previousYaw ~= nil and dt >= 0.02 and dt <= 0.5 then
+            local delta = signedAngle(nav.yaw - nav.previousYaw)
+            local measuredRate = delta / dt
+            if math.abs(measuredRate) <= 360 then
+                nav.yawRate = (nav.yawRate or 0) * 0.55 + measuredRate * 0.45
+            else
+                nav.yawRate = 0
+            end
+        else
+            nav.yawRate = 0
+        end
+        nav.previousYaw = nav.yaw
+        nav.previousYawAt = now
+    elseif nav.lastHeadingAt and now - nav.lastHeadingAt > 0.5 then
+        nav.yawRate = 0
+        nav.previousYaw = nil
+        nav.previousYawAt = nil
+    end
+
     -- GPS is a slow fallback; poll sparingly and with a short timeout.
     if not gotPosition then
         FlightCore.gpsTick = (FlightCore.gpsTick or 0) + 1
@@ -882,6 +915,43 @@ function FlightCore.updateNavigationControl()
     local state = FlightCore.state
     local fwd, turn = 0, 0
 
+    local function adaptiveTurn(headingError)
+        local errorMagnitude = math.abs(headingError)
+        if errorMagnitude <= 5 then
+            nav.turnSlowSince = nil
+            return 0
+        end
+
+        local now = os.epoch("utc") / 1000
+        local direction = headingError > 0 and 1 or -1
+        local yawRateTowardTarget = (nav.yawRate or 0) * direction
+        local expectedRate = clamp(errorMagnitude * 0.35, 6, 25)
+        local limit = clamp(nav.turnPowerLimit or 3.0, 3.0, 12.0)
+
+        if errorMagnitude > 15 and yawRateTowardTarget >= -3
+            and yawRateTowardTarget < expectedRate * 0.55 then
+            nav.turnSlowSince = nav.turnSlowSince or now
+            if now - nav.turnSlowSince >= 0.4 and now - (nav.lastTurnPowerAdjustAt or 0) >= 0.35 then
+                limit = math.min(12.0, limit + 1.5)
+                nav.lastTurnPowerAdjustAt = now
+                nav.turnSlowSince = now
+            end
+        else
+            nav.turnSlowSince = nil
+            if yawRateTowardTarget > expectedRate * 1.25 and limit > 3.0
+                and now - (nav.lastTurnPowerAdjustAt or 0) >= 0.25 then
+                limit = math.max(3.0, limit - 0.75)
+                nav.lastTurnPowerAdjustAt = now
+            end
+        end
+        nav.turnPowerLimit = limit
+
+        local requested = errorMagnitude * 0.07 - yawRateTowardTarget * 0.035
+        requested = clamp(requested, 0, limit)
+        if requested < 0.7 and errorMagnitude > 10 then requested = 0.7 end
+        return direction * requested
+    end
+
     if state.mode ~= "HOLD_ALT" then
         if nav.wpActive then state.statusMsg = "NAV PAUSED: engage altitude hold first" end
     elseif nav.wpActive and not nav.fixReady then
@@ -914,10 +984,7 @@ function FlightCore.updateNavigationControl()
             local bearing = wrapHeading(math.deg(math.atan(dx, -dz)))
             nav.targetHeading = bearing
             local headingError = signedAngle(bearing - nav.yaw)
-            if math.abs(headingError) > 5 then
-                turn = clamp(headingError * 0.07, -2.5, 2.5)
-                if math.abs(turn) < 0.7 then turn = headingError > 0 and 0.7 or -0.7 end
-            end
+            turn = adaptiveTurn(headingError)
 
             if math.abs(headingError) <= 12 then
                 local unitX, unitZ = dx / distance, dz / distance
@@ -927,16 +994,13 @@ function FlightCore.updateNavigationControl()
                 fwd = clamp((targetSpeed - alongSpeed) * 1.2, -3.0, 4.0)
                 if fwd < 0.4 and alongSpeed < targetSpeed - 0.5 then fwd = 0.4 end
             end
-            state.statusMsg = string.format("NAV: %.0fm HDG %+03d SPD %.1f THR %.1f", distance, headingError, nav.speed or 0, fwd)
+            state.statusMsg = string.format("NAV: %.0fm HDG %+03d SPD %.1f THR %.1f TURN %.1f/%.1f RATE %.1f", distance, headingError, nav.speed or 0, fwd, turn, nav.turnPowerLimit or 3.0, nav.yawRate or 0)
         end
     elseif nav.headingHold then
         local headingError = signedAngle((nav.targetHeading or nav.yaw) - nav.yaw)
-        if math.abs(headingError) > 5 then
-            turn = clamp(headingError * 0.07, -2.5, 2.5)
-            if math.abs(turn) < 0.7 then turn = headingError > 0 and 0.7 or -0.7 end
-        end
+        turn = adaptiveTurn(headingError)
         fwd = clamp(state.fwdThrottle or 0, -4.0, 4.0)
-        state.statusMsg = string.format("HDG HOLD: %03d* ERR %+03d", math.floor(nav.yaw or 0), math.floor(headingError))
+        state.statusMsg = string.format("HDG HOLD: %03d* ERR %+03d TURN %.1f/%.1f RATE %.1f", math.floor(nav.yaw or 0), math.floor(headingError), turn, nav.turnPowerLimit or 3.0, nav.yawRate or 0)
     else
         fwd = clamp(state.fwdThrottle or 0, -4.0, 4.0)
         turn = clamp(state.turnThrottle or state.strafeThrottle or 0, -2.5, 2.5)
@@ -1041,6 +1105,9 @@ function FlightCore.setTargetHeading(hdg)
     FlightCore.state.turnThrottle = 0
     FlightCore.state.strafeThrottle = 0
     FlightCore.nav.targetHeading = (math.floor(hdg) % 360 + 360) % 360
+    FlightCore.nav.turnPowerLimit = 3.0
+    FlightCore.nav.turnSlowSince = nil
+    FlightCore.nav.lastTurnPowerAdjustAt = 0
     FlightCore.nav.headingHold = true
     FlightCore.state.statusMsg = string.format("Target Heading: %03d*", FlightCore.nav.targetHeading)
     return true
