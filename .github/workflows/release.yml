@@ -39,12 +39,9 @@ jobs:
         run: |
           COMP_VER=$(python bundle.py --version-computer)
           TURT_VER=$(python bundle.py --version-turtle)
-          DATE_TAG=$(TZ="Asia/Taipei" date +'%Y%m%d')
-          if [ "${{ startsWith(github.ref, 'refs/tags/') }}" = "true" ]; then
-            TAG_NAME="${{ github.ref_name }}"
-          else
-            TAG_NAME="${DATE_TAG}"
-          fi
+          DATE_TAG=$(TZ="Asia/Taipei" date +'%Y%m%d-%H%M%S')
+          SHORT_SHA="${GITHUB_SHA:0:7}"
+          TAG_NAME="build-${DATE_TAG}-${SHORT_SHA}-r${GITHUB_RUN_NUMBER}-a${GITHUB_RUN_ATTEMPT}"
           echo "tag_name=${TAG_NAME}" >> $GITHUB_OUTPUT
           echo "comp_ver=${COMP_VER}" >> $GITHUB_OUTPUT
           echo "turt_ver=${TURT_VER}" >> $GITHUB_OUTPUT
@@ -99,7 +96,7 @@ jobs:
           - **Branch / Ref**: `${{ github.ref_name }}`
           EOF
 
-      - name: Publish GitHub Release (via GitHub CLI)
+      - name: Publish Immutable GitHub Release (via GitHub CLI)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -109,13 +106,13 @@ jobs:
 
           echo "Publishing release: $TAG with title: $TITLE"
           if gh release view "$TAG" > /dev/null 2>&1; then
-            echo "Release $TAG already exists. Editing notes and uploading assets..."
-            gh release edit "$TAG" --title "$TITLE" --notes-file release_notes.md --latest
-            gh release upload "$TAG" $FILES --clobber
-          else
-            echo "Creating new release $TAG..."
-            gh release create "$TAG" $FILES \
-              --title "$TITLE" \
-              --notes-file release_notes.md \
-              --latest
+            echo "::error::Release $TAG already exists; refusing to overwrite an immutable build."
+            exit 1
           fi
+
+          echo "Creating new release $TAG for commit ${GITHUB_SHA}..."
+          gh release create "$TAG" $FILES \
+            --target "${GITHUB_SHA}" \
+            --title "$TITLE" \
+            --notes-file release_notes.md \
+            --latest
