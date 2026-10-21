@@ -156,6 +156,33 @@ def update_file_version(filepath, version_str, role_type="computer"):
     with open(filepath, "w", encoding="utf-8") as f:
         f.write(content)
 
+VIEW_NAMES = ("OVERVIEW", "PFD", "ECAM", "CTRL", "NAV", "SYS")
+
+def inline_driver_views(driver_body, driver_name):
+    """Inline per-view source modules into the standalone driver table."""
+    modules = []
+    for view_name in VIEW_NAMES:
+        view_path = os.path.join(DRIVERS_DIR, driver_name, f"{view_name.lower()}.lua")
+        if not os.path.exists(view_path):
+            raise FileNotFoundError(f"Missing {driver_name} view module: {view_path}")
+        source = read_file(view_path)
+        match = re.search(r"\breturn\s+(function[\s\S]*?)\s*$", source)
+        if not match:
+            raise ValueError(f"View module must return a renderer function: {view_path}")
+        renderer = match.group(1).strip()
+        modules.append(f"        {view_name} = {renderer},")
+
+    view_table = "{\n" + "\n".join(modules) + "\n    }"
+    updated, count = re.subn(
+        r"(\bviews\s*=\s*)Views(\s*,)",
+        lambda match: match.group(1) + view_table + match.group(2),
+        driver_body,
+        count=1,
+    )
+    if count != 1:
+        raise ValueError(f"{driver_name} driver must expose exactly one `views = Views` field")
+    return updated
+
 def bundle():
     vers = get_versions()
     COMP_VER = vers["computer"]
@@ -193,9 +220,9 @@ def bundle():
         end = code.rfind("}")
         return code[start:end+1].strip()
 
-    direct_body = extract_driver_body(driver_direct_code)
-    tom_body = extract_driver_body(driver_tom_code)
-    normal_body = extract_driver_body(driver_normal_code)
+    direct_body = inline_driver_views(extract_driver_body(driver_direct_code), "directgpu")
+    tom_body = inline_driver_views(extract_driver_body(driver_tom_code), "tom")
+    normal_body = inline_driver_views(extract_driver_body(driver_normal_code), "normal")
 
     drivers_header = """
 -- ========================================================

@@ -62,8 +62,29 @@ CC-AeroAutoPilot/
     ├── flight_core.lua          # 飛控核心 (PID、高度/陀螺儀感測器、烏龜掃描、狀態機)
     └── drivers\                 # 顯示驅動層
         ├── directgpu.lua        # CC-DirectGPU-Mod 高解析全彩向量驅動
+        ├── directgpu\           # DirectGPU 各畫面 renderer
+        │   ├── overview.lua
+        │   ├── pfd.lua
+        │   ├── ecam.lua
+        │   ├── ctrl.lua
+        │   ├── nav.lua
+        │   └── sys.lua
         ├── tom.lua              # Tom's Peripherals GPU 全彩點陣/向量驅器
-        └── normal.lua           # CC: Tweaked 原生 Advanced Monitor & Terminal 驅動
+        ├── tom\                 # Tom GPU 各畫面 renderer
+        │   ├── overview.lua
+        │   ├── pfd.lua
+        │   ├── ecam.lua
+        │   ├── ctrl.lua
+        │   ├── nav.lua
+        │   └── sys.lua
+        ├── normal.lua           # CC: Tweaked 原生 Advanced Monitor & Terminal 驅動
+        └── normal\              # Native Monitor / Terminal 各畫面 renderer
+            ├── overview.lua
+            ├── pfd.lua
+            ├── ecam.lua
+            ├── ctrl.lua
+            ├── nav.lua
+            └── sys.lua
 ```
 
 ---
@@ -77,14 +98,20 @@ CC-AeroAutoPilot/
 ### 1. 合併與提取邏輯
 1. **讀取 `modules/bitmap_font.lua`**：提取字體點陣表 `FONT_5X7`。
 2. **讀取 `modules/flight_core.lua`**：去除最底部的 `return FlightCore`，保留所有 PID、感測器、四軸混控與狀態機邏輯作為全域/局部後端。
-3. **讀取 `modules/drivers/*.lua`**：
-   * 去除各驅動頂部的 `require` 與 `package.loaded` 包裝。
-   * 將各驅動本體分別綁定至 `Drivers.direct`、`Drivers.tom` 與 `Drivers.normal`。
+3. **讀取 `modules/drivers/*.lua` 與各畫面模組**：
+   * 讀取 `modules/drivers/{directgpu,tom,normal}.lua` 的硬體驅動與共用 UI 外框。
+   * 讀取 `modules/drivers/<driver>/{overview,pfd,ecam,ctrl,nav,sys}.lua`，將 renderer 函式內嵌到該驅動的 `views` 表。
+   * 去除各驅動頂部的 `require` 與 `package.loaded` 包裝，將驅動本體分別綁定至 `Drivers.direct`、`Drivers.tom` 與 `Drivers.normal`。
 4. **注入 Part 3 Orchestrator**：包含多工事件循環 `flightLoop`（20Hz 飛控）、`renderLoop`（20Hz 畫面刷新）、`eventLoop`（熱插拔與觸控事件路由）與 `selectBestDriver()` 最佳驅動探測器。
 5. **輸出至 `run.lua`**：合併後直接寫入 `run.lua`。
 
 ### 2. 語法平衡與區塊自動校驗
 `bundle.py` 內建 Lua Lexer 檢查器，在打包後自動解析 `function`, `if ... then`, `do`, `repeat ... until`, `end` 之區塊堆疊深度，確保編譯產出的 `run.lua` 100% 語法平衡且無遺漏 `end`。
+
+### 3. UI 畫面模組維護規範
+每個硬體驅動的根檔只負責周邊偵測、解析度、共用標頭/選單/按鈕框架、觸控路由與畫面分派；個別畫面內容放在同名子目錄，例如 `modules/drivers/tom/nav.lua`。畫面 renderer 接收 `(self, scr, ctx)`：`self` 是驅動、`scr` 是目前螢幕、`ctx` 是驅動提供的共用繪圖工具與版面資料。renderer 可新增該畫面的按鈕，但共用按鈕繪製與觸控命中仍由驅動處理。
+
+直接透過 `modules/init.lua` 載入時，驅動以 `safeRequire` 載入每個畫面模組；打包時 `bundle.py` 會把相同 renderer 內嵌到 `run.lua`、`display.lua` 等單檔產物，因此發布環境不需要另外部署 `modules/`。請只修改 `modules/` 原始碼，不要手改生成的 Lua 產物。新增一個畫面時，需同步新增三種驅動的畫面模組、更新各驅動的 `Views` 與路由、更新 `VIEW_TITLES`/選單，以及更新 `bundle.py` 的 `VIEW_NAMES`。
 
 ---
 

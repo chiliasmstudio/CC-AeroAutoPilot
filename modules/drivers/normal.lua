@@ -11,6 +11,15 @@ end
 
 local FlightCore = package.loaded["modules.flight_core"] or safeRequire("modules.flight_core") or _G.FlightCore
 
+local Views = {
+    OVERVIEW = safeRequire("modules.drivers.normal.overview"),
+    PFD = safeRequire("modules.drivers.normal.pfd"),
+    ECAM = safeRequire("modules.drivers.normal.ecam"),
+    CTRL = safeRequire("modules.drivers.normal.ctrl"),
+    NAV = safeRequire("modules.drivers.normal.nav"),
+    SYS = safeRequire("modules.drivers.normal.sys"),
+}
+
 local VIEW_TITLES = {
     OVERVIEW = "FLIGHT MONITOR",
     PFD      = "PRIMARY FLIGHT",
@@ -21,6 +30,7 @@ local VIEW_TITLES = {
 }
 
 local Driver = {
+    views = Views,
     screens = {},
     refreshScreens = function(self)
         local existing = {}
@@ -129,6 +139,14 @@ local Driver = {
             addBtn(menuBtnX, 1, menuBtnW, 1, isFull and "[ MENU ]" or "[=]", "0", "9", function() scr.isMenuOpen = true end)
         end
 
+        local viewContext = {
+            FlightCore = FlightCore,
+            addBtn = addBtn,
+            h = h,
+            isFull = isFull,
+            w = w,
+        }
+
         -- 2. 視圖分流
         if scr.isMenuOpen then
             local startY = 3
@@ -152,374 +170,17 @@ local Driver = {
             addMenuCard(2, 3, isFull and "6. SYS (DIAGNOSE)" or "6. SYS", "SYS", "0", "a")
 
         elseif scr.currentView == "OVERVIEW" then
-            local currAlt = FlightCore.altiSensor and FlightCore.altiSensor.getHeight() or 0
-            local currVspeed = FlightCore.altiSensor and FlightCore.altiSensor.getVerticalSpeed() or 0
-            local currPitch, currRoll = FlightCore.getGimbalData()
-
-            if isFull then
-                -- 5x5 或以上：完整大儀表板 (Full Avionics Dashboard)
-                local navInfo = ""
-                if FlightCore.nav.x then
-                    navInfo = string.format("POS:[%s] X:%+6.0f Y:%4.0f Z:%+6.0f | HDG:%03d* | SPD: %4.1f m/s", FlightCore.nav.source, FlightCore.nav.x, FlightCore.nav.y or currAlt, FlightCore.nav.z, math.floor(FlightCore.nav.yaw), FlightCore.nav.speed)
-                else
-                    navInfo = string.format("ALT: %6.1fm | TARGET: %6.1fm | V.S: %+5.2f m/s | HDG: %03d*", currAlt, FlightCore.state.targetAlt, currVspeed, math.floor(FlightCore.nav.yaw))
-                end
-                self:safeBlit(scr, 2, 3, navInfo, "0", "b")
-                self:safeBlit(scr, 2, 4, string.format("ATTITUDE: PITCH %+4.1f* | ROLL %+4.1f* | BASE THROTTLE: %4.2f / 15.0", currPitch, currRoll, FlightCore.state.baseThrottle), "0", "8")
-
-                local gridY = 6
-                local quadW = math.floor((w - 3) / 2)
-                local quadH = math.max(4, math.floor((h - gridY - 12) / 2))
-
-                local quadDefs = {
-                    {slot="FL", col=1, row=1, title="[FL] FRONT-LEFT QUADRANT"},
-                    {slot="FR", col=2, row=1, title="[FR] FRONT-RIGHT QUADRANT"},
-                    {slot="BL", col=1, row=2, title="[BL] BACK-LEFT QUADRANT"},
-                    {slot="BR", col=2, row=2, title="[BR] BACK-RIGHT QUADRANT"}
-                }
-
-                for _, q in ipairs(quadDefs) do
-                    local qx = 2 + (q.col - 1) * (quadW + 1)
-                    local qy = gridY + (q.row - 1) * (quadH + 1)
-                    local qH = FlightCore.getQuadHealth(q.slot)
-                    local val = FlightCore.virtualOutputs[q.slot]
-                    local online = qH.online > 0
-
-                    for r = 0, quadH - 1 do
-                        self:safeBlit(scr, qx, qy + r, string.rep(" ", quadW), "0", "7")
-                    end
-                    self:safeBlit(scr, qx + 1, qy, string.format("%s (ENGINES: %d | ACT: %d)", q.title, qH.total, qH.online), online and "9" or "e", "8")
-
-                    local barLen = math.max(6, quadW - 24)
-                    local ratio = math.min(1.0, math.max(0.0, val / 15.0))
-                    local filled = math.floor(ratio * barLen + 0.5)
-                    local barStr = "[" .. string.rep("=", filled) .. string.rep(" ", barLen - filled) .. "]"
-                    self:safeBlit(scr, qx + 1, qy + 1, string.format("THR: %4.1f/15.0 %s", val, barStr), "5", "7")
-                    self:safeBlit(scr, qx + 1, qy + 2, string.format("PWM OUTPUT: %2d / 15 | STATUS: %s", FlightCore.engineOutputs[q.slot] or 0, online and "HEALTHY" or "OFFLINE"), online and "3" or "e", "7")
-                end
-
-                local statY = gridY + quadH * 2 + 2
-                self:safeBlit(scr, 2, statY, string.format("STATUS: %s | BASE: %4.2f/15", FlightCore.state.statusMsg, FlightCore.state.baseThrottle), "0", "b")
-
-                -- 3 排按鈕
-                local bY1 = statY + 2
-                local bW1 = math.floor((w - 7) / 6)
-                addBtn(2, bY1, bW1, 2, "+50m", "0", "5", function() FlightCore.adjustTargetAlt(50) end)
-                addBtn(3 + bW1, bY1, bW1, 2, "+10m", "0", "5", function() FlightCore.adjustTargetAlt(10) end)
-                addBtn(4 + bW1*2, bY1, bW1, 2, "+1m", "0", "5", function() FlightCore.adjustTargetAlt(1) end)
-                addBtn(5 + bW1*3, bY1, bW1, 2, "-1m", "0", "e", function() FlightCore.adjustTargetAlt(-1) end)
-                addBtn(6 + bW1*4, bY1, bW1, 2, "-10m", "0", "e", function() FlightCore.adjustTargetAlt(-10) end)
-                addBtn(7 + bW1*5, bY1, bW1, 2, "LOCK", "0", "3", function() FlightCore.lockCurrentAlt() end)
-
-                local bY2 = bY1 + 3
-                local bW2 = math.floor((w - 5) / 4)
-                addBtn(2, bY2, bW2, 2, "BASE +1.0", "3", "0", function() FlightCore.adjustBaseThrottle(1.0) end)
-                addBtn(3 + bW2, bY2, bW2, 2, "BASE -1.0", "9", "0", function() FlightCore.adjustBaseThrottle(-1.0) end)
-                addBtn(4 + bW2*2, bY2, bW2, 2, "RE-SCAN HW", "b", "0", function() FlightCore.scanQuadTurtles(); FlightCore.state.statusMsg="Re-scanned!" end)
-                addBtn(5 + bW2*3, bY2, bW2, 2, "CALIBRATE", "a", "0", function() FlightCore.startCalibration() end)
-
-                local bY3 = bY2 + 3
-                local bW3 = math.floor((w - 3) / 2)
-                local holdBg = (FlightCore.state.mode == "HOLD_ALT") and "5" or "3"
-                addBtn(2, bY3, bW3, 2, "[ HOLD ALTITUDE ]", "0", holdBg, function() FlightCore.holdAltitude() end)
-                addBtn(3 + bW3, bY3, bW3, 2, "[ STOP / IDLE ]", "0", stopBg, function() FlightCore.stopEngines() end)
-            else
-                -- 3x3 ~ 4x5 精簡版 (Compact Edition)
-                local navShort = ""
-                if FlightCore.nav.x then
-                    navShort = string.format("X:%.0f Z:%.0f H:%03d* | A:%.0f", FlightCore.nav.x, FlightCore.nav.z, math.floor(FlightCore.nav.yaw), currAlt)
-                else
-                    navShort = string.format("ALT:%5.1fm | H:%03d* | V:%+4.1f", currAlt, math.floor(FlightCore.nav.yaw), currVspeed)
-                end
-                self:safeBlit(scr, 2, 2, string.format("%s | [%s]", navShort, FlightCore.state.mode:sub(1,4)), "0", "b")
-
-                local gridY = 4
-                local quadW = math.floor((w - 3) / 2)
-                local quadH = math.max(2, math.floor((h - gridY - 5) / 2))
-
-                local quadDefs = {
-                    {slot="FL", col=1, row=1, title="FL"},
-                    {slot="FR", col=2, row=1, title="FR"},
-                    {slot="BL", col=1, row=2, title="BL"},
-                    {slot="BR", col=2, row=2, title="BR"}
-                }
-
-                for _, q in ipairs(quadDefs) do
-                    local qx = 2 + (q.col - 1) * (quadW + 1)
-                    local qy = gridY + (q.row - 1) * (quadH + 1)
-                    local qH = FlightCore.getQuadHealth(q.slot)
-                    local val = FlightCore.virtualOutputs[q.slot]
-                    local online = qH.online > 0
-
-                    for r = 0, quadH - 1 do
-                        self:safeBlit(scr, qx, qy + r, string.rep(" ", quadW), "0", "7")
-                    end
-                    self:safeBlit(scr, qx + 1, qy, string.format("[%s] %dE (%d ON)", q.slot, qH.total, qH.online), online and "9" or "e", "8")
-                    self:safeBlit(scr, qx + 1, qy + 1, string.format("THR: %4.1f P:%d", val, FlightCore.engineOutputs[q.slot] or 0), "5", "7")
-                end
-
-                local statY = h - 4
-                self:safeBlit(scr, 2, statY, string.format("BASE: %4.2f | %s", FlightCore.state.baseThrottle, FlightCore.state.statusMsg:sub(1, math.max(10, w - 18))), "0", "b")
-
-                local bY1 = h - 3
-                local bW4 = math.floor((w - 5) / 4)
-                addBtn(2, bY1, bW4, 1, "+10m", "0", "5", function() FlightCore.adjustTargetAlt(10) end)
-                addBtn(3 + bW4, bY1, bW4, 1, "-10m", "0", "e", function() FlightCore.adjustTargetAlt(-10) end)
-                addBtn(4 + bW4*2, bY1, bW4, 1, "B+1", "3", "0", function() FlightCore.adjustBaseThrottle(1.0) end)
-                addBtn(5 + bW4*3, bY1, bW4, 1, "B-1", "9", "0", function() FlightCore.adjustBaseThrottle(-1.0) end)
-
-                local bY2 = h - 1
-                local bW2 = math.floor((w - 3) / 2)
-                local holdBg = (FlightCore.state.mode == "HOLD_ALT") and "5" or "3"
-                addBtn(2, bY2, bW2, 1, "HOLD", "0", holdBg, function() FlightCore.holdAltitude() end)
-                local stopBg = (FlightCore.state.mode == "IDLE") and "e" or "6"
-                addBtn(3 + bW2, bY2, bW2, 1, "STOP", "0", stopBg, function() FlightCore.stopEngines() end)
-            end
-
+            self.views.OVERVIEW(self, scr, viewContext)
         elseif scr.currentView == "PFD" then
-            local currAlt = FlightCore.altiSensor and FlightCore.altiSensor.getHeight() or 0
-            local currVspeed = FlightCore.altiSensor and FlightCore.altiSensor.getVerticalSpeed() or 0
-            local currPitch, currRoll = FlightCore.getGimbalData()
-
-            self:safeBlit(scr, 2, 3, string.format("ALT: %6.1fm | TARGET: %6.1fm", currAlt, FlightCore.state.targetAlt), "0", "b")
-            self:safeBlit(scr, 2, 4, string.format("VERTICAL SPEED: %+5.2f m/s", currVspeed), "0", "8")
-            self:safeBlit(scr, 2, 5, string.format("PITCH: %+4.1f* | ROLL: %+4.1f*", currPitch, currRoll), "0", "8")
-            self:safeBlit(scr, 2, 6, string.format("MODE: [%s]", FlightCore.state.mode), (FlightCore.state.mode == "HOLD_ALT") and "5" or "e", "8")
-
-            local btmY = h - (isFull and 3 or 2)
-            local btnW = math.floor((w - 5) / 4)
-            local btnH = isFull and 3 or 2
-            addBtn(2, btmY, btnW, btnH, "+10m", "0", "5", function() FlightCore.adjustTargetAlt(10) end)
-            addBtn(3 + btnW, btmY, btnW, btnH, "-10m", "0", "e", function() FlightCore.adjustTargetAlt(-10) end)
-            addBtn(4 + btnW*2, btmY, btnW, btnH, "HOLD", "0", "3", function() FlightCore.holdAltitude() end)
-            addBtn(5 + btnW*3, btmY, btnW, btnH, "STOP", "0", "e", function() FlightCore.stopEngines() end)
-
+            self.views.PFD(self, scr, viewContext)
         elseif scr.currentView == "ECAM" then
-            local gridY = 3
-            local quadW = math.floor((w - 3) / 2)
-            local quadH = math.max(3, math.floor((h - gridY - 2) / 2))
-
-            local quadDefs = {
-                {slot="FL", col=1, row=1, title="[FL] FRONT-LEFT"},
-                {slot="FR", col=2, row=1, title="[FR] FRONT-RIGHT"},
-                {slot="BL", col=1, row=2, title="[BL] BACK-LEFT"},
-                {slot="BR", col=2, row=2, title="[BR] BACK-RIGHT"}
-            }
-
-            for _, q in ipairs(quadDefs) do
-                local qx = 2 + (q.col - 1) * (quadW + 1)
-                local qy = gridY + (q.row - 1) * (quadH + 1)
-                local qH = FlightCore.getQuadHealth(q.slot)
-                local val = FlightCore.virtualOutputs[q.slot]
-                local sig = FlightCore.engineOutputs[q.slot]
-                local online = qH.online > 0
-
-                for r = 0, quadH - 1 do
-                    self:safeBlit(scr, qx, qy + r, string.rep(" ", quadW), "0", "7")
-                end
-                self:safeBlit(scr, qx + 1, qy, string.format("%s (%dE)", q.title, qH.total), online and "9" or "e", "8")
-                self:safeBlit(scr, qx + 1, qy + 1, string.format("THR: %4.1f/15.0", val), "5", "7")
-                self:safeBlit(scr, qx + 1, qy + 2, string.format("PWM: %2d/15", sig), "3", "7")
-                if quadH >= 4 then
-                    self:safeBlit(scr, qx + 1, qy + 3, string.format("ACTIVE: %d/%d", qH.online, qH.total), online and "5" or "e", "7")
-                end
-            end
-
-            self:safeBlit(scr, 2, h, string.format("BASE: %4.2f/15 | %s", FlightCore.state.baseThrottle, FlightCore.state.statusMsg:sub(1, w - 20)), "0", "b")
-
+            self.views.ECAM(self, scr, viewContext)
         elseif scr.currentView == "CTRL" then
-            local currAlt = FlightCore.altiSensor and FlightCore.altiSensor.getHeight() or 0
-            local currVspeed = FlightCore.altiSensor and FlightCore.altiSensor.getVerticalSpeed() or 0
-            local currPitch, currRoll = FlightCore.getGimbalData()
-
-            if isFull then
-                -- CC Monitor 大螢幕版 (>= 5x5)
-                local navInfo = ""
-                if FlightCore.nav.x then
-                    navInfo = string.format("ALT: %6.1fm | TGT: %4.0fm | POS:[%s] X:%.0f Z:%.0f | HDG: %03d*", currAlt, FlightCore.state.targetAlt, FlightCore.nav.source, FlightCore.nav.x, FlightCore.nav.z, math.floor(FlightCore.nav.yaw))
-                else
-                    navInfo = string.format("ALT: %6.1fm | TGT: %4.0fm | V.S: %+5.2f | HDG: %03d*", currAlt, FlightCore.state.targetAlt, currVspeed, math.floor(FlightCore.nav.yaw))
-                end
-                self:safeBlit(scr, 2, 3, navInfo, "0", "b")
-                self:safeBlit(scr, 2, 4, string.format("MODE: [%s] | BASE: %4.2f | GYRO: %+2.0f*, %+2.0f*", FlightCore.state.mode, FlightCore.state.baseThrottle, currPitch, currRoll), "0", "8")
-
-                local btnAreaH = h - 6
-                local rowH = math.max(2, math.floor((btnAreaH - 4) / 3))
-
-                -- Row 1: Target Alt
-                local bY1 = 6
-                local bW1 = math.floor((w - 7) / 6)
-                addBtn(2, bY1, bW1, rowH, "+50m", "0", "5", function() FlightCore.adjustTargetAlt(50) end)
-                addBtn(3 + bW1, bY1, bW1, rowH, "+10m", "0", "5", function() FlightCore.adjustTargetAlt(10) end)
-                addBtn(4 + bW1*2, bY1, bW1, rowH, "+1m", "0", "5", function() FlightCore.adjustTargetAlt(1) end)
-                addBtn(5 + bW1*3, bY1, bW1, rowH, "-1m", "0", "e", function() FlightCore.adjustTargetAlt(-1) end)
-                addBtn(6 + bW1*4, bY1, bW1, rowH, "-10m", "0", "e", function() FlightCore.adjustTargetAlt(-10) end)
-                addBtn(7 + bW1*5, bY1, bW1, rowH, "LOCK", "0", "3", function() FlightCore.lockCurrentAlt() end)
-
-                -- Row 2: Throttle
-                local bY2 = bY1 + rowH + 1
-                local bW2 = math.floor((w - 5) / 4)
-                addBtn(2, bY2, bW2, rowH, "BASE +1.0", "3", "0", function() FlightCore.adjustBaseThrottle(1.0) end)
-                addBtn(3 + bW2, bY2, bW2, rowH, "BASE -1.0", "9", "0", function() FlightCore.adjustBaseThrottle(-1.0) end)
-                addBtn(4 + bW2*2, bY2, bW2, rowH, "BASE +0.1", "b", "0", function() FlightCore.adjustBaseThrottle(0.1) end)
-                addBtn(5 + bW2*3, bY2, bW2, rowH, "BASE -0.1", "7", "0", function() FlightCore.adjustBaseThrottle(-0.1) end)
-
-                -- Row 3: Flight Ops
-                local bY3 = bY2 + rowH + 1
-                local bW3 = math.floor((w - 5) / 4)
-                addBtn(2, bY3, bW3, rowH, "HOLD", "5", "0", function() FlightCore.holdAltitude() end)
-                addBtn(3 + bW3, bY3, bW3, rowH, "CALIB", "a", "0", function() FlightCore.startCalibration() end)
-                addBtn(4 + bW3*2, bY3, bW3, rowH, "RE-SCAN", "b", "0", function() FlightCore.scanQuadTurtles(); FlightCore.state.statusMsg="Re-scanned!" end)
-                addBtn(5 + bW3*3, bY3, bW3, rowH, "STOP", "e", "0", function() FlightCore.stopEngines() end)
-            else
-                -- 3x3 ~ 4x5 精簡版
-                local navCompact = FlightCore.nav.x and string.format("[%s] X:%.0f Z:%.0f H:%03d*", FlightCore.state.mode:sub(1,4), FlightCore.nav.x, FlightCore.nav.z, math.floor(FlightCore.nav.yaw)) or string.format("[%s] A:%.0f->%.0f H:%03d*", FlightCore.state.mode:sub(1,4), currAlt, FlightCore.state.targetAlt, math.floor(FlightCore.nav.yaw))
-                self:safeBlit(scr, 2, 3, navCompact, "0", "b")
-
-                local rowH = math.max(1, math.floor((h - 7) / 3))
-
-                -- Row 1: Target Alt
-                local bY1 = 5
-                local bW1 = math.floor((w - 5) / 4)
-                addBtn(2, bY1, bW1, rowH, "+10m", "0", "5", function() FlightCore.adjustTargetAlt(10) end)
-                addBtn(3 + bW1, bY1, bW1, rowH, "+1m", "0", "5", function() FlightCore.adjustTargetAlt(1) end)
-                addBtn(4 + bW1*2, bY1, bW1, rowH, "-1m", "0", "e", function() FlightCore.adjustTargetAlt(-1) end)
-                addBtn(5 + bW1*3, bY1, bW1, rowH, "-10m", "0", "e", function() FlightCore.adjustTargetAlt(-10) end)
-
-                -- Row 2: Throttle
-                local bY2 = bY1 + rowH + 1
-                local bW2 = math.floor((w - 5) / 4)
-                addBtn(2, bY2, bW2, rowH, "B +1", "3", "0", function() FlightCore.adjustBaseThrottle(1.0) end)
-                addBtn(3 + bW2, bY2, bW2, rowH, "B -1", "9", "0", function() FlightCore.adjustBaseThrottle(-1.0) end)
-                addBtn(4 + bW2*2, bY2, bW2, rowH, "B +.1", "b", "0", function() FlightCore.adjustBaseThrottle(0.1) end)
-                addBtn(5 + bW2*3, bY2, bW2, rowH, "B -.1", "7", "0", function() FlightCore.adjustBaseThrottle(-0.1) end)
-
-                -- Row 3: Flight Ops
-                local bY3 = bY2 + rowH + 1
-                local bW3 = math.floor((w - 5) / 4)
-                addBtn(2, bY3, bW3, rowH, "HOLD", "5", "0", function() FlightCore.holdAltitude() end)
-                addBtn(3 + bW3, bY3, bW3, rowH, "CALIB", "a", "0", function() FlightCore.startCalibration() end)
-                addBtn(4 + bW3*2, bY3, bW3, rowH, "RE-SCAN", "b", "0", function() FlightCore.scanQuadTurtles(); FlightCore.state.statusMsg="Re-scanned!" end)
-                addBtn(5 + bW3*3, bY3, bW3, rowH, "STOP", "e", "0", function() FlightCore.stopEngines() end)
-            end
-
+            self.views.CTRL(self, scr, viewContext)
         elseif scr.currentView == "NAV" then
-            local currAlt = FlightCore.altiSensor and FlightCore.altiSensor.getHeight() or 0
-            local currPitch, currRoll = FlightCore.getGimbalData()
-            local holdStr = FlightCore.nav.headingHold and "ON" or "OFF"
-
-            if isFull then
-                local posStr = ""
-                if FlightCore.nav.x then
-                    posStr = string.format("POS:[%s] X:%+6.0f Y:%4.0f Z:%+6.0f | SPD: %4.1f m/s", FlightCore.nav.source, FlightCore.nav.x, FlightCore.nav.y or currAlt, FlightCore.nav.z, FlightCore.nav.speed)
-                else
-                    posStr = string.format("POS:[%s] ALT: %4.0fm | GYRO: P:%+2.0f* R:%+2.0f*", FlightCore.nav.source, currAlt, currPitch, currRoll)
-                end
-                self:safeBlit(scr, 2, 3, posStr, "0", "b")
-                self:safeBlit(scr, 2, 4, string.format("CURRENT HDG: %03d* | TARGET HDG: %03d* | HEADING HOLD: [%s]", math.floor(FlightCore.nav.yaw), FlightCore.nav.targetHeading, holdStr), "0", "8")
-            else
-                local posStr = ""
-                if FlightCore.nav.x and w >= 32 then
-                    posStr = string.format("[%s] X:%.0f Z:%.0f S:%.1f", FlightCore.nav.source, FlightCore.nav.x, FlightCore.nav.z, FlightCore.nav.speed)
-                else
-                    posStr = string.format("ALT: %.0fm", currAlt)
-                end
-                self:safeBlit(scr, 2, 2, posStr, "0", "b")
-                self:safeBlit(scr, 2, 3, string.format("H:%03d* -> T:%03d* [%s]", math.floor(FlightCore.nav.yaw), FlightCore.nav.targetHeading, holdStr), "0", "8")
-            end
-
-            local gridY = isFull and 6 or 4
-            local btnAreaH = h - gridY - 1
-            local rowH = math.max(1, math.floor((btnAreaH - 2) / 3))
-            local colW = math.floor((w - 5) / 4)
-
-            -- Row 1: 航向微調/步進調整 (Heading Step Adjustments)
-            local bY1 = gridY
-            addBtn(2, bY1, colW, rowH, isFull and "[ HDG -45* ]" or "-45*", "0", "3", function() FlightCore.adjustTargetHeading(-45) end)
-            addBtn(3 + colW, bY1, colW, rowH, isFull and "[ HDG -5* ]" or "-5*", "0", "b", function() FlightCore.adjustTargetHeading(-5) end)
-            addBtn(4 + colW*2, bY1, colW, rowH, isFull and "[ HDG +5* ]" or "+5*", "0", "b", function() FlightCore.adjustTargetHeading(5) end)
-            addBtn(5 + colW*3, bY1, colW, rowH, isFull and "[ HDG +45* ]" or "+45*", "0", "3", function() FlightCore.adjustTargetHeading(45) end)
-
-            -- Row 2: 四大主方位快速鎖定 (Cardinal Direction Presets)
-            local bY2 = bY1 + rowH + 1
-            addBtn(2, bY2, colW, rowH, isFull and "[ 000* NORTH ]" or "0* N", "0", "5", function() FlightCore.setTargetHeading(0) end)
-            addBtn(3 + colW, bY2, colW, rowH, isFull and "[ 090* EAST ]" or "90* E", "0", "5", function() FlightCore.setTargetHeading(90) end)
-            addBtn(4 + colW*2, bY2, colW, rowH, isFull and "[ 180* SOUTH ]" or "180* S", "0", "3", function() FlightCore.setTargetHeading(180) end)
-            addBtn(5 + colW*3, bY2, colW, rowH, isFull and "[ 270* WEST ]" or "270* W", "0", "3", function() FlightCore.setTargetHeading(270) end)
-
-            -- Row 3: 自駕儀航向保持與快速功能 (Heading Hold Autopilot & Ops)
-            local bY3 = bY2 + rowH + 1
-            local holdBg = FlightCore.nav.headingHold and "5" or "8"
-            local holdText = isFull and (FlightCore.nav.headingHold and "[ HDG HOLD: ON ]" or "[ HDG HOLD: OFF ]") or (FlightCore.nav.headingHold and "HOLD:ON" or "HOLD:OFF")
-            addBtn(2, bY3, colW, rowH, holdText, "0", holdBg, function() FlightCore.toggleHeadingHold() end)
-            addBtn(3 + colW, bY3, colW, rowH, isFull and "[ SYNC HDG ]" or "SYNC HDG", "0", "9", function() FlightCore.syncHeading() end)
-            local altHoldBg = (FlightCore.state.mode == "HOLD_ALT") and "5" or "3"
-            addBtn(4 + colW*2, bY3, colW, rowH, isFull and "[ HOLD ALT ]" or "HOLD ALT", "0", altHoldBg, function() FlightCore.holdAltitude() end)
-            local stopBg = (FlightCore.state.mode == "IDLE") and "e" or "6"
-            addBtn(5 + colW*3, bY3, colW, rowH, isFull and "[ STOP IDLE ]" or "STOP", "0", stopBg, function() FlightCore.stopEngines() end)
-
+            self.views.NAV(self, scr, viewContext)
         elseif scr.currentView == "SYS" then
-            local hw = (FlightCore.getHardwareInventory and FlightCore.getHardwareInventory()) or FlightCore.hw or {
-                displays = { hasDirectGpu=false, tomsCount=0, monitorsCount=0, totalScreens=0 },
-                engines = { lift={online=0, total=0}, cruise={online=0, total=0}, steer={online=0, total=0}, totalOnline=0, totalCount=0 },
-                avionics = { onBody=false, aic=false, ins=false, navTable=false, alti=false, gimbal=false, modems=0, navSource="NONE" }
-            }
-            local d = hw.displays or {}
-            local e = hw.engines or {}
-            local a = hw.avionics or {}
-
-            local curY = 4
-            -- 1. DISPLAYS & GPU
-            self:safeBlit(scr, 2, curY, isFull and "[1] DISPLAYS & GPU HARDWARE" or "[1] DISPLAYS & GPU", "9", "f")
-            curY = curY + 1
-            local dgpuStr = d.hasDirectGpu and "YES (DirectGPU HW Fast)" or "NO (DirectGPU Not Found)"
-            local dgpuCol = d.hasDirectGpu and "d" or "7"
-            self:safeBlit(scr, 3, curY, "DirectGPU  : " .. dgpuStr, dgpuCol, "f")
-            curY = curY + 1
-            local scrStr = string.format("Screens    : Tom's GPU:%d | Native Mon:%d (Total: %d)", d.tomsCount or 0, d.monitorsCount or 0, d.totalScreens or 0)
-            self:safeBlit(scr, 3, curY, scrStr, "0", "f")
-            curY = curY + 1
-
-            -- 2. PROPULSION NODES
-            curY = curY + 1
-            self:safeBlit(scr, 2, curY, isFull and "[2] PROPULSION ENGINE NODES" or "[2] ENGINES", "9", "f")
-            curY = curY + 1
-            local el = e.lift or {}
-            local ec = e.cruise or {}
-            local es = e.steer or {}
-            local liftStr = string.format("Lift (4-Quad): FL:%d FR:%d BL:%d BR:%d (Act: %d/%d)", el.FL or 0, el.FR or 0, el.BL or 0, el.BR or 0, el.online or 0, el.total or 0)
-            self:safeBlit(scr, 3, curY, liftStr, (el.online or 0) > 0 and "5" or "e", "f")
-            curY = curY + 1
-            local cruiseStr = string.format("Cruise Thrust: FWD:%d | BWD:%d (Act: %d/%d)", ec.FWD or 0, ec.BWD or 0, ec.online or 0, ec.total or 0)
-            self:safeBlit(scr, 3, curY, cruiseStr, (ec.online or 0) > 0 and "5" or "7", "f")
-            curY = curY + 1
-            local steerStr = string.format("Lateral/Steer: LEFT:%d | RIGHT:%d (Act: %d/%d)", es.LEFT or 0, es.RIGHT or 0, es.online or 0, es.total or 0)
-            self:safeBlit(scr, 3, curY, steerStr, (es.online or 0) > 0 and "5" or "7", "f")
-            curY = curY + 1
-
-            -- 3. AVIONICS & SENSORS
-            curY = curY + 1
-            self:safeBlit(scr, 2, curY, isFull and "[3] AVIONICS & SENSORS" or "[3] SENSORS", "9", "f")
-            curY = curY + 1
-            local aicStatus = a.onBody and "[DETECTED (ON BODY)]" or (a.aic and "[DETECTED]" or "[STANDBY/SEARCHING]")
-            local aicCol = (a.onBody or a.aic) and "d" or "e"
-            self:safeBlit(scr, 3, curY, "CCPE AIC/FMC : " .. aicStatus, aicCol, "f")
-            curY = curY + 1
-            local sensStr = string.format("Sensors & Net: Alti:%s | Gyro:%s | NavTab:%s | Modems:%d", a.alti and "ON" or "OFF", a.gimbal and "ON" or "OFF", a.navTable and "ON" or "OFF", a.modems or 0)
-            self:safeBlit(scr, 3, curY, sensStr, "0", "f")
-            curY = curY + 1
-            local navPosStr = ""
-            if FlightCore.nav.x and FlightCore.nav.z then
-                navPosStr = string.format("Position Fix : X:%.0f Y:%.0f Z:%.0f (Source: %s)", FlightCore.nav.x, FlightCore.nav.y or 0, FlightCore.nav.z, a.navSource or "INS")
-            else
-                navPosStr = "Position Fix : [ SEARCHING AIC / GPS / NAV_TABLE ]"
-            end
-            self:safeBlit(scr, 3, curY, navPosStr, FlightCore.nav.x and "d" or "e", "f")
-
-            local btmY = h - 2
-            local btmW = math.floor((w - 3) / 2)
-            addBtn(2, btmY, btmW, 2, isFull and "[ RE-SCAN HARDWARE ]" or "RE-SCAN HW", "3", "0", function() FlightCore.scanQuadTurtles(); FlightCore.state.statusMsg="Re-scanned!" end)
-            addBtn(3 + btmW, btmY, btmW, 2, isFull and "[ STOP ALL ENGINES ]" or "STOP ALL", "e", "0", function() FlightCore.stopEngines() end)
+            self.views.SYS(self, scr, viewContext)
         end
 
         for _, btn in ipairs(scr.buttons) do

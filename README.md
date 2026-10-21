@@ -3,7 +3,7 @@
 > **目前電腦端韌體保留懸停並重新啟用受限導航**：航點導航需要有效位置與航向資料，並要求先啟用高度保持；感測器失效或資料過期時，水平推力歸零。垂直升力控制與水平導航分離。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Computer Suite: v4.5.0](https://img.shields.io/badge/Computer_Suite-v4.5.0-blue.svg)](https://github.com/chiliasmstudio/CC-AeroAutoPilot/releases/latest)
+[![Computer Suite: v4.5.1](https://img.shields.io/badge/Computer_Suite-v4.5.1-blue.svg)](https://github.com/chiliasmstudio/CC-AeroAutoPilot/releases/latest)
 [![Turtle Firmware: v4.0.12](https://img.shields.io/badge/Turtle_Firmware-v4.0.12-green.svg)](https://github.com/chiliasmstudio/CC-AeroAutoPilot/releases/latest)
 
 > [!NOTE]
@@ -218,6 +218,8 @@ python bundle.py
 - **`fcc-cli.lua`**：獨立命令列終端與儀表 (FCC-CLI)。
 - **`turtle_startup.lua`**：發動機烏龜通用韌體。
 - **`boot.lua`**：通用 Release 自動下載與安裝啟動器。
+
+顯示 UI 原始碼依「驅動 / 畫面」拆分：例如 `modules/drivers/tom/nav.lua` 是 Tom GPU 的 NAV 畫面，`modules/drivers/directgpu/overview.lua` 是 DirectGPU 的概覽畫面。驅動根檔保留周邊初始化、共用 UI 框架與觸控路由；打包器會將各畫面 renderer 內嵌至發布檔，因此建置後只需分發單檔資產。
 
 ---
 

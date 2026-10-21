@@ -1,7 +1,7 @@
 --[[
     Create: Avionics & CC: Tweaked
     Standalone Cockpit Display System (CDS / Glass Cockpit)
-    Version: v4.5.0
+    Version: v4.5.1
     
     特點:
     - 專門負責駕駛艙螢幕繪圖渲染與觸控按鈕交互
@@ -11,7 +11,7 @@
     - 即使渲染再繁重，也 100% 不會拖慢飛船飛控運算
 --]]
 
-local VERSION = "v4.5.0"
+local VERSION = "v4.5.1"
 local args = {...}
 local requestedDriver = args[1] and string.lower(args[1]) or "auto"
 
@@ -305,177 +305,24 @@ local Drivers = {}
 -- 2.1 驅動 A: CC-DirectGPU-Mod (高解析硬體加速)
 -- --------------------------------------------------------
 Drivers.direct = {
-    screens = {},
-    refreshScreens = function(self)
-        local existing = {}
-        for _, scr in ipairs(self.screens) do
-            if scr.key then existing[scr.key] = scr end
-        end
-        local newScreens = {}
-        for _, name in ipairs(peripheral.getNames()) do
-            if peripheral.getType(name) == "directgpu" then
-                local gpu = peripheral.wrap(name)
-                if gpu then
-                    local count = 1
-                    pcall(function() if gpu.getDisplayCount then count = gpu.getDisplayCount() end end)
-                    for dId = 0, count - 1 do
-                        local key = name .. "#" .. tostring(dId)
-                        local info = {pixelWidth=320, pixelHeight=240}
-                        pcall(function() if gpu.getDisplayInfo then info = gpu.getDisplayInfo(dId) or info end end)
-                        local prev = existing[key]
-                        table.insert(newScreens, {
-                            key = key,
-                            name = name,
-                            gpu = gpu,
-                            displayId = dId,
-                            screenW = info.pixelWidth or 320,
-                            screenH = info.pixelHeight or 240,
-                            currentView = prev and prev.currentView or "OVERVIEW",
-                            isMenuOpen = prev and prev.isMenuOpen or false,
-                            buttons = prev and prev.buttons or {}
-                        })
-                    end
-                end
-            end
-        end
-        self.screens = newScreens
-        return #self.screens > 0
-    end,
-    init = function(self)
-        return self:refreshScreens()
-    end,
-    drawA350Dial = function(self, scr, cx, cy, r, val, maxVal, label, sig, slot)
-        local gpu = scr.gpu
-        local dispId = scr.displayId
-        local labelSize = math.max(9, math.floor(r * 0.44))
-        local lblOffset = math.floor(#label * (labelSize * 0.32))
-        gpu.drawText(dispId, label, cx - lblOffset, cy - r - math.floor(labelSize * 1.1), 200, 230, 255, "Arial", labelSize, "bold")
-
-        local arcPts, arcPtsOuter = {}, {}
-        for deg = 210, -30, -10 do
-            local rad = math.rad(deg)
-            table.insert(arcPts, { math.floor(cx + r * math.cos(rad) + 0.5), math.floor(cy - r * math.sin(rad) + 0.5) })
-            table.insert(arcPtsOuter, { math.floor(cx + (r + 1) * math.cos(rad) + 0.5), math.floor(cy - (r + 1) * math.sin(rad) + 0.5) })
-        end
-        gpu.drawPolylines(dispId, arcPts, 160, 180, 205)
-        gpu.drawPolylines(dispId, arcPtsOuter, 120, 140, 165)
-
-        for _, deg in ipairs({210, 90, -30}) do
-            local rad = math.rad(deg)
-            gpu.drawLine(dispId, math.floor(cx + (r - 3) * math.cos(rad) + 0.5), math.floor(cy - (r - 3) * math.sin(rad) + 0.5),
-                                           math.floor(cx + (r + 5) * math.cos(rad) + 0.5), math.floor(cy - (r + 5) * math.sin(rad) + 0.5), 180, 200, 225)
-        end
-
-        local redPts = {}
-        for deg = 10, -30, -8 do
-            local rad = math.rad(deg)
-            table.insert(redPts, { math.floor(cx + r * math.cos(rad) + 0.5), math.floor(cy - r * math.sin(rad) + 0.5) })
-        end
-        gpu.drawPolylines(dispId, redPts, 255, 55, 55)
-
-        local ratio = math.min(1.0, math.max(0.0, val / (maxVal or 15.0)))
-        local nRad = math.rad(210 - ratio * 240)
-        local nx = math.floor(cx + (r - 3) * math.cos(nRad) + 0.5)
-        local ny = math.floor(cy - (r - 3) * math.sin(nRad) + 0.5)
-        gpu.drawLine(dispId, cx, cy, nx, ny, 50, 255, 100)
-        gpu.drawCircle(dispId, cx, cy, math.max(2, math.floor(r * 0.14)), 200, 220, 240, true)
-
-        local boxW = math.max(28, math.floor(r * 1.50))
-        local boxH = math.max(12, math.floor(r * 0.58))
-        local boxX = cx - math.floor(boxW / 2)
-        local boxY = cy + math.floor(r * 0.28)
-        gpu.fillRect(dispId, boxX, boxY, boxW, boxH, 12, 18, 28)
-        gpu.drawPolylines(dispId, {{boxX, boxY}, {boxX+boxW, boxY}, {boxX+boxW, boxY+boxH}, {boxX, boxY+boxH}, {boxX, boxY}}, 40, 150, 200)
-
-        local valStr = string.format("%4.1f", val)
-        local numFontSize = math.max(9, math.floor(boxH * 0.70))
-        gpu.drawText(dispId, valStr, boxX + 3, boxY + 2, 70, 255, 120, "Arial", numFontSize, "bold")
-
-        local sigStr = string.format("PWM:%d", sig or 0)
-        local sigFontSize = math.max(8, math.floor(boxH * 0.50))
-        gpu.drawText(dispId, sigStr, cx - math.floor(#sigStr * 2.8), boxY + boxH + 2, 150, 190, 225, "Arial", sigFontSize, "plain")
-    end,
-    draw = function(self)
-        for _, scr in ipairs(self.screens) do
-            local ok, err = pcall(function() self:drawScreen(scr) end)
-            if not ok then
-                pcall(function() self:refreshScreens() end)
-                break
-            end
-        end
-    end,
-    drawScreen = function(self, scr)
-        local gpu = scr.gpu
-        local dispId = scr.displayId
-        local ok, dispInfo = pcall(function() return gpu.getDisplayInfo(dispId) end)
-        if ok and dispInfo and dispInfo.pixelWidth and dispInfo.pixelHeight and dispInfo.pixelWidth > 0 and dispInfo.pixelHeight > 0 then
-            scr.screenW = dispInfo.pixelWidth
-            scr.screenH = dispInfo.pixelHeight
-        end
-        local sw = scr.screenW or 320
-        local sh = scr.screenH or 240
-        local isFull = (sw >= 750 and sh >= 750) -- 5x5 (820x820) 或以上為完整顯示，3x3/4x4/5x4/4x5 (<=656) 為精簡版
-
-        gpu.clear(dispId, 15, 20, 30)
-        scr.buttons = {}
-
-        local function addBtn(x, y, w, h, text, bg, fg, act)
-            table.insert(scr.buttons, {x=x, y=y, w=w, h=h, text=text, bg=bg, fg=fg, action=act})
-        end
-
-        local headerH = isFull and math.max(26, math.min(36, math.floor(sh * 0.06))) or (sh < 220 and 14 or 20)
-        gpu.fillRect(dispId, 0, 0, sw, headerH, 25, 40, 65)
-
-        local menuBtnW = isFull and 54 or (sw < 220 and 18 or 24)
-        local menuBtnH = headerH - 4
-        local menuBtnX = sw - menuBtnW - 3
-        local menuBtnY = 2
-        if scr.isMenuOpen then
-            addBtn(menuBtnX, menuBtnY, menuBtnW, menuBtnH, "[X]", {190, 45, 45}, {255, 255, 255}, function() scr.isMenuOpen = false end)
-        else
-            addBtn(menuBtnX, menuBtnY, menuBtnW, menuBtnH, isFull and "[MENU]" or "[=]", {35, 80, 150}, {255, 255, 255}, function() scr.isMenuOpen = true end)
-        end
-
-        local titleFontSize = isFull and math.max(10, math.min(14, math.floor(headerH * 0.48))) or (sh < 220 and 8 or 9)
-        local viewTitle = scr.isMenuOpen and "SELECT VIEW" or (isFull and (VIEW_TITLES[scr.currentView] or scr.currentView) or scr.currentView)
-        gpu.drawText(dispId, viewTitle, 8, math.floor((headerH - titleFontSize) / 2), 240, 245, 255, "Arial", titleFontSize, "bold")
-
-        -- 佈局高度自適應分配器
-        local numBtnRows = isFull and 3 or 2
-        local btnRowH = isFull and math.max(24, math.min(32, math.floor(sh * 0.08))) or (sh < 220 and 12 or (sh < 350 and 16 or 22))
-        local btnSpacing = (sh < 220) and 2 or 3
-        local totalBtnH = numBtnRows * btnRowH + (numBtnRows - 1) * btnSpacing
-        local statH = isFull and 20 or (sh < 220 and 11 or 15)
-
-        local topMargin = headerH + ((sh < 220) and 2 or 4)
-        local statY = sh - totalBtnH - statH - ((sh < 220) and 3 or 5)
-        local instY = topMargin
-        local instH = statY - instY - ((sh < 220) and 2 or 4)
-        local btnAreaY = statY + statH + ((sh < 220) and 2 or 3)
-
-        if scr.isMenuOpen then
-            local cardW = math.floor((sw - 20) / 2)
-            local cardH = math.floor((sh - headerH - 20) / 3)
-            local startY = headerH + 5
-
-            local function addMenuCard(col, row, title, targetView, color)
-                local cx = 6 + (col - 1) * (cardW + 8)
-                local cy = startY + (row - 1) * (cardH + 5)
-                addBtn(cx, cy, cardW, cardH, title, color, {255, 255, 255}, function()
-                    scr.currentView = targetView
-                    scr.isMenuOpen = false
-                end)
-            end
-
-            local shortTitle = cardW < 65
-            addMenuCard(1, 1, isFull and "1. OVERVIEW (ALL)" or (shortTitle and "1. OVR" or "1. OVERVIEW"), "OVERVIEW", {25, 60, 95})
-            addMenuCard(2, 1, isFull and "2. PFD (FLIGHT)" or (shortTitle and "2. PFD" or "2. PFD"), "PFD", {20, 90, 50})
-            addMenuCard(1, 2, isFull and "3. ECAM (QUAD ENG)" or (shortTitle and "3. ECAM" or "3. ECAM"), "ECAM", {120, 40, 30})
-            addMenuCard(2, 2, isFull and "4. CTRL (CONTROLS)" or (shortTitle and "4. CTRL" or "4. CTRL"), "CTRL", {18, 120, 100})
-            addMenuCard(1, 3, isFull and "5. NAV (HEADING)" or (shortTitle and "5. NAV" or "5. NAV"), "NAV", {35, 115, 165})
-            addMenuCard(2, 3, isFull and "6. SYS (DIAGNOSE)" or (shortTitle and "6. SYS" or "6. SYS"), "SYS", {80, 45, 95})
-
-        elseif scr.currentView == "OVERVIEW" then
+    views = {
+        OVERVIEW = function(self, scr, ctx)
+    local FlightCore = ctx.FlightCore
+    local addBtn = ctx.addBtn
+    local btnAreaY = ctx.btnAreaY
+    local btnRowH = ctx.btnRowH
+    local btnSpacing = ctx.btnSpacing
+    local dispId = ctx.dispId
+    local gpu = ctx.gpu
+    local headerH = ctx.headerH
+    local instH = ctx.instH
+    local instY = ctx.instY
+    local isFull = ctx.isFull
+    local sh = ctx.sh
+    local statH = ctx.statH
+    local statY = ctx.statY
+    local sw = ctx.sw
+    local topMargin = ctx.topMargin
             local currAlt = FlightCore.altiSensor and FlightCore.altiSensor.getHeight() or 0
             local currVspeed = FlightCore.altiSensor and FlightCore.altiSensor.getVerticalSpeed() or 0
             local currPitch, currRoll = FlightCore.getGimbalData()
@@ -698,8 +545,24 @@ Drivers.direct = {
                 local stopBg = (FlightCore.state.mode == "IDLE") and {198, 40, 40} or {183, 28, 28}
                 addBtn(pfdX + bW2 + 3, bY2, bW2, btnRowH, "STOP", stopBg, {255, 255, 255}, function() FlightCore.stopEngines() end)
             end
-
-        elseif scr.currentView == "PFD" then
+end,
+        PFD = function(self, scr, ctx)
+    local FlightCore = ctx.FlightCore
+    local addBtn = ctx.addBtn
+    local btnAreaY = ctx.btnAreaY
+    local btnRowH = ctx.btnRowH
+    local btnSpacing = ctx.btnSpacing
+    local dispId = ctx.dispId
+    local gpu = ctx.gpu
+    local headerH = ctx.headerH
+    local instH = ctx.instH
+    local instY = ctx.instY
+    local isFull = ctx.isFull
+    local sh = ctx.sh
+    local statH = ctx.statH
+    local statY = ctx.statY
+    local sw = ctx.sw
+    local topMargin = ctx.topMargin
             local currAlt = FlightCore.altiSensor and FlightCore.altiSensor.getHeight() or 0
             local currVspeed = FlightCore.altiSensor and FlightCore.altiSensor.getVerticalSpeed() or 0
             local currPitch, currRoll = FlightCore.getGimbalData()
@@ -747,8 +610,24 @@ Drivers.direct = {
             addBtn(6 + (bW+4)*2, bY, bW, btnRowH, "HOLD", holdBg, {255, 255, 255}, function() FlightCore.holdAltitude() end)
             local stopBg = (FlightCore.state.mode == "IDLE") and {200, 45, 45} or {160, 30, 30}
             addBtn(6 + (bW+4)*3, bY, bW, btnRowH, "STOP", stopBg, {255, 255, 255}, function() FlightCore.stopEngines() end)
-
-        elseif scr.currentView == "ECAM" then
+end,
+        ECAM = function(self, scr, ctx)
+    local FlightCore = ctx.FlightCore
+    local addBtn = ctx.addBtn
+    local btnAreaY = ctx.btnAreaY
+    local btnRowH = ctx.btnRowH
+    local btnSpacing = ctx.btnSpacing
+    local dispId = ctx.dispId
+    local gpu = ctx.gpu
+    local headerH = ctx.headerH
+    local instH = ctx.instH
+    local instY = ctx.instY
+    local isFull = ctx.isFull
+    local sh = ctx.sh
+    local statH = ctx.statH
+    local statY = ctx.statY
+    local sw = ctx.sw
+    local topMargin = ctx.topMargin
             local topY = headerH + 3
             local btmH = isFull and 22 or 14
             local areaH = sh - topY - btmH - 4
@@ -817,8 +696,24 @@ Drivers.direct = {
                 local statChars = math.max(6, math.floor((sw - 60) / 6))
                 gpu.drawText(dispId, string.format("B:%4.2f | %s", FlightCore.state.baseThrottle, FlightCore.state.statusMsg:sub(1, statChars)), 6, statY + 3, 80, 230, 255, "Arial", 8, "bold")
             end
-
-        elseif scr.currentView == "CTRL" then
+end,
+        CTRL = function(self, scr, ctx)
+    local FlightCore = ctx.FlightCore
+    local addBtn = ctx.addBtn
+    local btnAreaY = ctx.btnAreaY
+    local btnRowH = ctx.btnRowH
+    local btnSpacing = ctx.btnSpacing
+    local dispId = ctx.dispId
+    local gpu = ctx.gpu
+    local headerH = ctx.headerH
+    local instH = ctx.instH
+    local instY = ctx.instY
+    local isFull = ctx.isFull
+    local sh = ctx.sh
+    local statH = ctx.statH
+    local statY = ctx.statY
+    local sw = ctx.sw
+    local topMargin = ctx.topMargin
             local currAlt = FlightCore.altiSensor and FlightCore.altiSensor.getHeight() or 0
             local currVspeed = FlightCore.altiSensor and FlightCore.altiSensor.getVerticalSpeed() or 0
             local currPitch, currRoll = FlightCore.getGimbalData()
@@ -933,8 +828,24 @@ Drivers.direct = {
                 local stopBg = (FlightCore.state.mode == "IDLE") and {200, 45, 45} or {160, 30, 30}
                 addBtn(6 + (bW3+4)*3, r3Y, bW3, ctrlRowH, "STOP", stopBg, {255, 255, 255}, function() FlightCore.stopEngines() end)
             end
-
-        elseif scr.currentView == "NAV" then
+end,
+        NAV = function(self, scr, ctx)
+    local FlightCore = ctx.FlightCore
+    local addBtn = ctx.addBtn
+    local btnAreaY = ctx.btnAreaY
+    local btnRowH = ctx.btnRowH
+    local btnSpacing = ctx.btnSpacing
+    local dispId = ctx.dispId
+    local gpu = ctx.gpu
+    local headerH = ctx.headerH
+    local instH = ctx.instH
+    local instY = ctx.instY
+    local isFull = ctx.isFull
+    local sh = ctx.sh
+    local statH = ctx.statH
+    local statY = ctx.statY
+    local sw = ctx.sw
+    local topMargin = ctx.topMargin
             local currAlt = FlightCore.altiSensor and FlightCore.altiSensor.getHeight() or 0
             local currVspeed = FlightCore.altiSensor and FlightCore.altiSensor.getVerticalSpeed() or 0
             local currPitch, currRoll = FlightCore.getGimbalData()
@@ -991,8 +902,24 @@ Drivers.direct = {
             addBtn(6 + (bW4+4)*2, r3Y, bW4, rowH, isFull and "[ HOLD ALT ]" or "HOLD ALT", altHoldBg, {255, 255, 255}, function() FlightCore.holdAltitude() end)
             local stopBg = (FlightCore.state.mode == "IDLE") and {198, 40, 40} or {183, 28, 28}
             addBtn(6 + (bW4+4)*3, r3Y, bW4, rowH, isFull and "[ STOP IDLE ]" or "STOP", stopBg, {255, 255, 255}, function() FlightCore.stopEngines() end)
-
-        elseif scr.currentView == "SYS" then
+end,
+        SYS = function(self, scr, ctx)
+    local FlightCore = ctx.FlightCore
+    local addBtn = ctx.addBtn
+    local btnAreaY = ctx.btnAreaY
+    local btnRowH = ctx.btnRowH
+    local btnSpacing = ctx.btnSpacing
+    local dispId = ctx.dispId
+    local gpu = ctx.gpu
+    local headerH = ctx.headerH
+    local instH = ctx.instH
+    local instY = ctx.instY
+    local isFull = ctx.isFull
+    local sh = ctx.sh
+    local statH = ctx.statH
+    local statY = ctx.statY
+    local sw = ctx.sw
+    local topMargin = ctx.topMargin
             local hw = (FlightCore.getHardwareInventory and FlightCore.getHardwareInventory()) or FlightCore.hw or {
                 displays = { hasDirectGpu=false, tomsCount=0, monitorsCount=0, totalScreens=0 },
                 engines = { lift={online=0, total=0}, cruise={online=0, total=0}, steer={online=0, total=0}, totalOnline=0, totalCount=0 },
@@ -1070,6 +997,209 @@ Drivers.direct = {
             local btmW = math.floor((sw - 16) / 2)
             addBtn(6, btmY, btmW, btmSysH, isFull and "[ RE-SCAN HARDWARE ]" or "RE-SCAN HW", {25, 100, 190}, {255, 255, 255}, function() FlightCore.scanQuadTurtles(); FlightCore.state.statusMsg="Re-scanned!" end)
             addBtn(6 + btmW + 4, btmY, btmW, btmSysH, isFull and "[ STOP ALL ENGINES ]" or "STOP ALL", {190, 40, 40}, {255, 255, 255}, function() FlightCore.stopEngines() end)
+end,
+    },
+    screens = {},
+    refreshScreens = function(self)
+        local existing = {}
+        for _, scr in ipairs(self.screens) do
+            if scr.key then existing[scr.key] = scr end
+        end
+        local newScreens = {}
+        for _, name in ipairs(peripheral.getNames()) do
+            if peripheral.getType(name) == "directgpu" then
+                local gpu = peripheral.wrap(name)
+                if gpu then
+                    local count = 1
+                    pcall(function() if gpu.getDisplayCount then count = gpu.getDisplayCount() end end)
+                    for dId = 0, count - 1 do
+                        local key = name .. "#" .. tostring(dId)
+                        local info = {pixelWidth=320, pixelHeight=240}
+                        pcall(function() if gpu.getDisplayInfo then info = gpu.getDisplayInfo(dId) or info end end)
+                        local prev = existing[key]
+                        table.insert(newScreens, {
+                            key = key,
+                            name = name,
+                            gpu = gpu,
+                            displayId = dId,
+                            screenW = info.pixelWidth or 320,
+                            screenH = info.pixelHeight or 240,
+                            currentView = prev and prev.currentView or "OVERVIEW",
+                            isMenuOpen = prev and prev.isMenuOpen or false,
+                            buttons = prev and prev.buttons or {}
+                        })
+                    end
+                end
+            end
+        end
+        self.screens = newScreens
+        return #self.screens > 0
+    end,
+    init = function(self)
+        return self:refreshScreens()
+    end,
+    drawA350Dial = function(self, scr, cx, cy, r, val, maxVal, label, sig, slot)
+        local gpu = scr.gpu
+        local dispId = scr.displayId
+        local labelSize = math.max(9, math.floor(r * 0.44))
+        local lblOffset = math.floor(#label * (labelSize * 0.32))
+        gpu.drawText(dispId, label, cx - lblOffset, cy - r - math.floor(labelSize * 1.1), 200, 230, 255, "Arial", labelSize, "bold")
+
+        local arcPts, arcPtsOuter = {}, {}
+        for deg = 210, -30, -10 do
+            local rad = math.rad(deg)
+            table.insert(arcPts, { math.floor(cx + r * math.cos(rad) + 0.5), math.floor(cy - r * math.sin(rad) + 0.5) })
+            table.insert(arcPtsOuter, { math.floor(cx + (r + 1) * math.cos(rad) + 0.5), math.floor(cy - (r + 1) * math.sin(rad) + 0.5) })
+        end
+        gpu.drawPolylines(dispId, arcPts, 160, 180, 205)
+        gpu.drawPolylines(dispId, arcPtsOuter, 120, 140, 165)
+
+        for _, deg in ipairs({210, 90, -30}) do
+            local rad = math.rad(deg)
+            gpu.drawLine(dispId, math.floor(cx + (r - 3) * math.cos(rad) + 0.5), math.floor(cy - (r - 3) * math.sin(rad) + 0.5),
+                                           math.floor(cx + (r + 5) * math.cos(rad) + 0.5), math.floor(cy - (r + 5) * math.sin(rad) + 0.5), 180, 200, 225)
+        end
+
+        local redPts = {}
+        for deg = 10, -30, -8 do
+            local rad = math.rad(deg)
+            table.insert(redPts, { math.floor(cx + r * math.cos(rad) + 0.5), math.floor(cy - r * math.sin(rad) + 0.5) })
+        end
+        gpu.drawPolylines(dispId, redPts, 255, 55, 55)
+
+        local ratio = math.min(1.0, math.max(0.0, val / (maxVal or 15.0)))
+        local nRad = math.rad(210 - ratio * 240)
+        local nx = math.floor(cx + (r - 3) * math.cos(nRad) + 0.5)
+        local ny = math.floor(cy - (r - 3) * math.sin(nRad) + 0.5)
+        gpu.drawLine(dispId, cx, cy, nx, ny, 50, 255, 100)
+        gpu.drawCircle(dispId, cx, cy, math.max(2, math.floor(r * 0.14)), 200, 220, 240, true)
+
+        local boxW = math.max(28, math.floor(r * 1.50))
+        local boxH = math.max(12, math.floor(r * 0.58))
+        local boxX = cx - math.floor(boxW / 2)
+        local boxY = cy + math.floor(r * 0.28)
+        gpu.fillRect(dispId, boxX, boxY, boxW, boxH, 12, 18, 28)
+        gpu.drawPolylines(dispId, {{boxX, boxY}, {boxX+boxW, boxY}, {boxX+boxW, boxY+boxH}, {boxX, boxY+boxH}, {boxX, boxY}}, 40, 150, 200)
+
+        local valStr = string.format("%4.1f", val)
+        local numFontSize = math.max(9, math.floor(boxH * 0.70))
+        gpu.drawText(dispId, valStr, boxX + 3, boxY + 2, 70, 255, 120, "Arial", numFontSize, "bold")
+
+        local sigStr = string.format("PWM:%d", sig or 0)
+        local sigFontSize = math.max(8, math.floor(boxH * 0.50))
+        gpu.drawText(dispId, sigStr, cx - math.floor(#sigStr * 2.8), boxY + boxH + 2, 150, 190, 225, "Arial", sigFontSize, "plain")
+    end,
+    draw = function(self)
+        for _, scr in ipairs(self.screens) do
+            local ok, err = pcall(function() self:drawScreen(scr) end)
+            if not ok then
+                pcall(function() self:refreshScreens() end)
+                break
+            end
+        end
+    end,
+    drawScreen = function(self, scr)
+        local gpu = scr.gpu
+        local dispId = scr.displayId
+        local ok, dispInfo = pcall(function() return gpu.getDisplayInfo(dispId) end)
+        if ok and dispInfo and dispInfo.pixelWidth and dispInfo.pixelHeight and dispInfo.pixelWidth > 0 and dispInfo.pixelHeight > 0 then
+            scr.screenW = dispInfo.pixelWidth
+            scr.screenH = dispInfo.pixelHeight
+        end
+        local sw = scr.screenW or 320
+        local sh = scr.screenH or 240
+        local isFull = (sw >= 750 and sh >= 750) -- 5x5 (820x820) 或以上為完整顯示，3x3/4x4/5x4/4x5 (<=656) 為精簡版
+
+        gpu.clear(dispId, 15, 20, 30)
+        scr.buttons = {}
+
+        local function addBtn(x, y, w, h, text, bg, fg, act)
+            table.insert(scr.buttons, {x=x, y=y, w=w, h=h, text=text, bg=bg, fg=fg, action=act})
+        end
+
+        local headerH = isFull and math.max(26, math.min(36, math.floor(sh * 0.06))) or (sh < 220 and 14 or 20)
+        gpu.fillRect(dispId, 0, 0, sw, headerH, 25, 40, 65)
+
+        local menuBtnW = isFull and 54 or (sw < 220 and 18 or 24)
+        local menuBtnH = headerH - 4
+        local menuBtnX = sw - menuBtnW - 3
+        local menuBtnY = 2
+        if scr.isMenuOpen then
+            addBtn(menuBtnX, menuBtnY, menuBtnW, menuBtnH, "[X]", {190, 45, 45}, {255, 255, 255}, function() scr.isMenuOpen = false end)
+        else
+            addBtn(menuBtnX, menuBtnY, menuBtnW, menuBtnH, isFull and "[MENU]" or "[=]", {35, 80, 150}, {255, 255, 255}, function() scr.isMenuOpen = true end)
+        end
+
+        local titleFontSize = isFull and math.max(10, math.min(14, math.floor(headerH * 0.48))) or (sh < 220 and 8 or 9)
+        local viewTitle = scr.isMenuOpen and "SELECT VIEW" or (isFull and (VIEW_TITLES[scr.currentView] or scr.currentView) or scr.currentView)
+        gpu.drawText(dispId, viewTitle, 8, math.floor((headerH - titleFontSize) / 2), 240, 245, 255, "Arial", titleFontSize, "bold")
+
+        -- 佈局高度自適應分配器
+        local numBtnRows = isFull and 3 or 2
+        local btnRowH = isFull and math.max(24, math.min(32, math.floor(sh * 0.08))) or (sh < 220 and 12 or (sh < 350 and 16 or 22))
+        local btnSpacing = (sh < 220) and 2 or 3
+        local totalBtnH = numBtnRows * btnRowH + (numBtnRows - 1) * btnSpacing
+        local statH = isFull and 20 or (sh < 220 and 11 or 15)
+
+        local topMargin = headerH + ((sh < 220) and 2 or 4)
+        local statY = sh - totalBtnH - statH - ((sh < 220) and 3 or 5)
+        local instY = topMargin
+        local instH = statY - instY - ((sh < 220) and 2 or 4)
+        local btnAreaY = statY + statH + ((sh < 220) and 2 or 3)
+
+        local viewContext = {
+            FlightCore = FlightCore,
+            addBtn = addBtn,
+            btnAreaY = btnAreaY,
+            btnRowH = btnRowH,
+            btnSpacing = btnSpacing,
+            dispId = dispId,
+            gpu = gpu,
+            headerH = headerH,
+            instH = instH,
+            instY = instY,
+            isFull = isFull,
+            sh = sh,
+            statH = statH,
+            statY = statY,
+            sw = sw,
+            topMargin = topMargin,
+        }
+
+        if scr.isMenuOpen then
+            local cardW = math.floor((sw - 20) / 2)
+            local cardH = math.floor((sh - headerH - 20) / 3)
+            local startY = headerH + 5
+
+            local function addMenuCard(col, row, title, targetView, color)
+                local cx = 6 + (col - 1) * (cardW + 8)
+                local cy = startY + (row - 1) * (cardH + 5)
+                addBtn(cx, cy, cardW, cardH, title, color, {255, 255, 255}, function()
+                    scr.currentView = targetView
+                    scr.isMenuOpen = false
+                end)
+            end
+
+            local shortTitle = cardW < 65
+            addMenuCard(1, 1, isFull and "1. OVERVIEW (ALL)" or (shortTitle and "1. OVR" or "1. OVERVIEW"), "OVERVIEW", {25, 60, 95})
+            addMenuCard(2, 1, isFull and "2. PFD (FLIGHT)" or (shortTitle and "2. PFD" or "2. PFD"), "PFD", {20, 90, 50})
+            addMenuCard(1, 2, isFull and "3. ECAM (QUAD ENG)" or (shortTitle and "3. ECAM" or "3. ECAM"), "ECAM", {120, 40, 30})
+            addMenuCard(2, 2, isFull and "4. CTRL (CONTROLS)" or (shortTitle and "4. CTRL" or "4. CTRL"), "CTRL", {18, 120, 100})
+            addMenuCard(1, 3, isFull and "5. NAV (HEADING)" or (shortTitle and "5. NAV" or "5. NAV"), "NAV", {35, 115, 165})
+            addMenuCard(2, 3, isFull and "6. SYS (DIAGNOSE)" or (shortTitle and "6. SYS" or "6. SYS"), "SYS", {80, 45, 95})
+
+        elseif scr.currentView == "OVERVIEW" then
+            self.views.OVERVIEW(self, scr, viewContext)
+        elseif scr.currentView == "PFD" then
+            self.views.PFD(self, scr, viewContext)
+        elseif scr.currentView == "ECAM" then
+            self.views.ECAM(self, scr, viewContext)
+        elseif scr.currentView == "CTRL" then
+            self.views.CTRL(self, scr, viewContext)
+        elseif scr.currentView == "NAV" then
+            self.views.NAV(self, scr, viewContext)
+        elseif scr.currentView == "SYS" then
+            self.views.SYS(self, scr, viewContext)
         end
 
         for _, btn in ipairs(scr.buttons) do
@@ -1235,235 +1365,28 @@ local FONT_5X7 = {
 }
 
 Drivers.tom = {
-    screens = {},
-    refreshScreens = function(self)
-        local existing = {}
-        for _, scr in ipairs(self.screens) do
-            if scr.id then existing[scr.id] = scr end
-        end
-        local newScreens = {}
-        for _, name in ipairs(peripheral.getNames()) do
-            local pType = peripheral.getType(name)
-            if pType == "tm_gpu" or pType == "toms_gpu" or pType == "gpu" or pType == "tm_monitor" then
-                local gpu = peripheral.wrap(name)
-                if gpu and gpu.fill and gpu.filledRectangle then
-                    -- 必須先 setSize + refreshSize 才能 getSize 得到正確像素解析度
-                    pcall(function() if gpu.setSize then gpu.setSize(64) end end)
-                    pcall(function() if gpu.refreshSize then gpu.refreshSize() end end)
-                    local w, h = 192, 192
-                    local ok, gw, gh = pcall(function() return gpu.getSize() end)
-                    if ok and gw and gh and gw > 0 and gh > 0 then
-                        if gw < 32 then gw = gw * 64 end
-                        if gh < 32 then gh = gh * 64 end
-                        w, h = gw, gh
-                    end
-                    local prev = existing[name]
-                    table.insert(newScreens, {
-                        id = name,
-                        gpu = gpu,
-                        screenW = w,
-                        screenH = h,
-                        currentView = prev and prev.currentView or "OVERVIEW",
-                        isMenuOpen = prev and prev.isMenuOpen or false,
-                        buttons = prev and prev.buttons or {}
-                    })
-                end
-            end
-        end
-        self.screens = newScreens
-        return #self.screens > 0
-    end,
-    init = function(self)
-        -- 先做一次掃描讓 GPU setSize，等待硬體初始化完成後再重新讀取真實尺寸
-        self:refreshScreens()
-        sleep(0.1)
-        return self:refreshScreens()
-    end,
-    toARGB = function(self, hexColor)
-        if type(hexColor) == "table" then
-            local r = hexColor[1] or 0
-            local g = hexColor[2] or 0
-            local b = hexColor[3] or 0
-            local a = hexColor[4] or 255
-            local val = a * 16777216 + r * 65536 + g * 256 + b
-            if val >= 2147483648 then val = val - 4294967296 end
-            return val
-        elseif type(hexColor) == "number" then
-            local a = 255
-            local r = math.floor(hexColor / 65536) % 256
-            local g = math.floor(hexColor / 256) % 256
-            local b = hexColor % 256
-            local val = a * 16777216 + r * 65536 + g * 256 + b
-            if val >= 2147483648 then val = val - 4294967296 end
-            return val
-        end
-        return -1
-    end,
-    drawText = function(self, scr, x, y, text, color, scale)
-        scale = scale or 1
-        local curX = x
-        local argb = self:toARGB(color)
-        local sw, sh = scr.screenW, scr.screenH
-        local POW2 = { [0]=1, [1]=2, [2]=4, [3]=8, [4]=16, [5]=32, [6]=64, [7]=128 }
-
-        for i = 1, #text do
-            local ch = text:sub(i, i)
-            local bitmap = FONT_5X7[ch] or FONT_5X7['?']
-
-            if bitmap then
-                for col = 1, 5 do
-                    local byte = bitmap[col]
-                    local px = curX + (col - 1) * scale
-                    if px >= 1 and px <= sw then
-                        local runStart = nil
-                        local runLen = 0
-                        for row = 0, 6 do
-                            if (math.floor(byte / POW2[row]) % 2) == 1 then
-                                if not runStart then runStart = row end
-                                runLen = runLen + 1
-                            else
-                                if runStart then
-                                    local py = y + runStart * scale
-                                    local ph = runLen * scale
-                                    if py <= sh then
-                                        pcall(function() scr.gpu.filledRectangle(px, py, scale, ph, argb) end)
-                                    end
-                                    runStart = nil
-                                    runLen = 0
-                                end
-                            end
-                        end
-                        if runStart then
-                            local py = y + runStart * scale
-                            local ph = runLen * scale
-                            if py <= sh then
-                                pcall(function() scr.gpu.filledRectangle(px, py, scale, ph, argb) end)
-                            end
-                        end
-                    end
-                end
-            end
-            curX = curX + 6 * scale
-        end
-    end,
-    draw = function(self)
-        for _, scr in ipairs(self.screens) do
-            local ok, err = pcall(function() self:drawScreen(scr) end)
-            if not ok then
-                pcall(function() self:refreshScreens() end)
-                break
-            end
-        end
-    end,
-    drawScreen = function(self, scr)
-        local ok, w, h = pcall(function() return scr.gpu.getSize() end)
-        -- Tom's GPU getSize() 返回像素大小；若回傳值為圖塊單位（< 32）則以 64px (setSize 64) 換算
-        if ok and w and h and w > 0 and h > 0 then
-            if w < 32 then w = w * 64 end
-            if h < 32 then h = h * 64 end
-            scr.screenW, scr.screenH = w, h
-        end
-        local sw, sh = scr.screenW or 192, scr.screenH or 192
-        local isFull = (sw >= 300 and sh >= 300) -- 5x5 (320x320) 或以上為完整顯示，3x3/4x4/5x4/4x5 (<=256) 為精簡版
-
-        local function toARGB(c) return self:toARGB(c) end
-        local function sFill(c) pcall(function() scr.gpu.fill(toARGB(c)) end) end
-        local function sFR(x, y, bw, bh, c)
-            x, y = math.max(1, math.min(sw, x)), math.max(1, math.min(sh, y))
-            bw, bh = math.max(1, math.min(sw - x + 1, bw)), math.max(1, math.min(sh - y + 1, bh))
-            pcall(function() scr.gpu.filledRectangle(x, y, bw, bh, toARGB(c)) end)
-        end
-        local function sR(x, y, bw, bh, c)
-            x, y = math.max(1, math.min(sw, x)), math.max(1, math.min(sh, y))
-            bw, bh = math.max(1, math.min(sw - x + 1, bw)), math.max(1, math.min(sh - y + 1, bh))
-            pcall(function() scr.gpu.rectangle(x, y, bw, bh, toARGB(c)) end)
-        end
-        local function sL(x1, y1, x2, y2, c)
-            pcall(function() scr.gpu.line(math.max(1, math.min(sw, x1)), math.max(1, math.min(sh, y1)), math.max(1, math.min(sw, x2)), math.max(1, math.min(sh, y2)), toARGB(c)) end)
-        end
-        local function sLS(x1, y1, x2, y2, c)
-            pcall(function()
-                if scr.gpu.lineS then scr.gpu.lineS(math.max(1, math.min(sw, x1)), math.max(1, math.min(sh, y1)), math.max(1, math.min(sw, x2)), math.max(1, math.min(sh, y2)), toARGB(c))
-                else scr.gpu.line(math.max(1, math.min(sw, x1)), math.max(1, math.min(sh, y1)), math.max(1, math.min(sw, x2)), math.max(1, math.min(sh, y2)), toARGB(c)) end
-            end)
-        end
-        local function sTxt(x, y, txt, fc, sz)
-            self:drawText(scr, x, y, txt, fc, sz or 1)
-        end
-        local function sArc(cx, cy, r, startD, endD, stepD, c)
-            local px, py = nil, nil
-            local st = (startD > endD) and -math.abs(stepD or 5) or math.abs(stepD or 5)
-            for deg = startD, endD, st do
-                local rad = math.rad(deg)
-                local nx, ny = cx + r * math.cos(rad), cy - r * math.sin(rad)
-                if px and py then sLS(px, py, nx, ny, c) end
-                px, py = nx, ny
-            end
-        end
-
-        local function addBtn(x, y, bw, bh, text, bg, fg, act)
-            table.insert(scr.buttons, {x=x, y=y, w=bw, h=bh, text=text, bg=bg, fg=fg, action=act})
-        end
-
-        sFill(0x0F141E)
-        scr.buttons = {}
-
-        -- 1. 頂部狀態列
-        local headerH = isFull and math.max(26, math.min(36, math.floor(sh * 0.06))) or (sh < 220 and 14 or 20)
-        sFR(1, 1, sw, headerH, 0x192841)
-
-        local menuBtnW = isFull and 54 or (sw < 220 and 18 or 24)
-        local menuBtnH = headerH - 4
-        local menuBtnX = sw - menuBtnW - 3
-        local menuBtnY = 2
-        if scr.isMenuOpen then
-            addBtn(menuBtnX, menuBtnY, menuBtnW, menuBtnH, "[X]", 0x992222, 0xFFFFFF, function() scr.isMenuOpen = false end)
-        else
-            addBtn(menuBtnX, menuBtnY, menuBtnW, menuBtnH, isFull and "[MENU]" or "[=]", 0x224488, 0xFFFFFF, function() scr.isMenuOpen = true end)
-        end
-
-        local maxTitleW = menuBtnX - 12
-        local viewTitle = scr.isMenuOpen and "SELECT VIEW" or (isFull and (VIEW_TITLES[scr.currentView] or scr.currentView) or scr.currentView)
-        local titleSize = (isFull and #viewTitle * 12 <= maxTitleW and headerH >= 24) and 2 or 1
-        sTxt(6, math.floor((headerH - 7 * titleSize) / 2) + 1, viewTitle, 0xF0F5FF, titleSize)
-
-        -- 佈局高度自適應分配器
-        local numBtnRows = isFull and 3 or 2
-        local btnRowH = isFull and math.max(24, math.min(32, math.floor(sh * 0.08))) or (sh < 220 and 12 or (sh < 350 and 16 or 22))
-        local btnSpacing = (sh < 220) and 2 or 3
-        local totalBtnH = numBtnRows * btnRowH + (numBtnRows - 1) * btnSpacing
-        local statH = isFull and 20 or (sh < 220 and 11 or 15)
-
-        local topMargin = headerH + ((sh < 220) and 2 or 4)
-        local statY = sh - totalBtnH - statH - ((sh < 220) and 3 or 5)
-        local instY = topMargin
-        local instH = statY - instY - ((sh < 220) and 2 or 4)
-        local btnAreaY = statY + statH + ((sh < 220) and 2 or 3)
-
-        -- 2. 視圖路由
-        if scr.isMenuOpen then
-            local cardW = math.floor((sw - 16) / 2)
-            local cardH = math.floor((sh - headerH - 16) / 3)
-            local startY = headerH + 4
-
-            local function addMenuCard(col, row, title, targetView, color)
-                local cx = 4 + (col - 1) * (cardW + 6)
-                local cy = startY + (row - 1) * (cardH + 4)
-                addBtn(cx, cy, cardW, cardH, title, color, 0xFFFFFF, function()
-                    scr.currentView = targetView
-                    scr.isMenuOpen = false
-                end)
-            end
-
-            local shortTitle = cardW < 65
-            addMenuCard(1, 1, isFull and "1. OVERVIEW (ALL)" or (shortTitle and "1. OVR" or "1. OVERVIEW"), "OVERVIEW", 0x1B3A60)
-            addMenuCard(2, 1, isFull and "2. PFD (FLIGHT)" or (shortTitle and "2. PFD" or "2. PFD"), "PFD", 0x145A32)
-            addMenuCard(1, 2, isFull and "3. ECAM (QUAD ENG)" or (shortTitle and "3. ECAM" or "3. ECAM"), "ECAM", 0x78281F)
-            addMenuCard(2, 2, isFull and "4. CTRL (CONTROLS)" or (shortTitle and "4. CTRL" or "4. CTRL"), "CTRL", 0x117864)
-            addMenuCard(1, 3, isFull and "5. NAV (PRESETS)" or (shortTitle and "5. NAV" or "5. NAV"), "NAV", 0x2471A3)
-            addMenuCard(2, 3, isFull and "6. SYS (DIAGNOSE)" or (shortTitle and "6. SYS" or "6. SYS"), "SYS", 0x512E5F)
-
-        elseif scr.currentView == "OVERVIEW" then
+    views = {
+        OVERVIEW = function(self, scr, ctx)
+    local FlightCore = ctx.FlightCore
+    local addBtn = ctx.addBtn
+    local btnAreaY = ctx.btnAreaY
+    local btnRowH = ctx.btnRowH
+    local btnSpacing = ctx.btnSpacing
+    local headerH = ctx.headerH
+    local instH = ctx.instH
+    local instY = ctx.instY
+    local isFull = ctx.isFull
+    local sArc = ctx.sArc
+    local sFR = ctx.sFR
+    local sL = ctx.sL
+    local sLS = ctx.sLS
+    local sR = ctx.sR
+    local sTxt = ctx.sTxt
+    local sh = ctx.sh
+    local statH = ctx.statH
+    local statY = ctx.statY
+    local sw = ctx.sw
+    local topMargin = ctx.topMargin
             local currAlt = FlightCore.altiSensor and FlightCore.altiSensor.getHeight() or 0
             local currVspeed = FlightCore.altiSensor and FlightCore.altiSensor.getVerticalSpeed() or 0
             local currPitch, currRoll = FlightCore.getGimbalData()
@@ -1707,8 +1630,28 @@ Drivers.tom = {
                 local stopBg = (FlightCore.state.mode == "IDLE") and 0xC62828 or 0xB71C1C
                 addBtn(pfdX + bW2 + 3, bY2, bW2, btnRowH, "STOP", stopBg, 0xFFFFFF, function() FlightCore.stopEngines() end)
             end
-
-        elseif scr.currentView == "PFD" then
+end,
+        PFD = function(self, scr, ctx)
+    local FlightCore = ctx.FlightCore
+    local addBtn = ctx.addBtn
+    local btnAreaY = ctx.btnAreaY
+    local btnRowH = ctx.btnRowH
+    local btnSpacing = ctx.btnSpacing
+    local headerH = ctx.headerH
+    local instH = ctx.instH
+    local instY = ctx.instY
+    local isFull = ctx.isFull
+    local sArc = ctx.sArc
+    local sFR = ctx.sFR
+    local sL = ctx.sL
+    local sLS = ctx.sLS
+    local sR = ctx.sR
+    local sTxt = ctx.sTxt
+    local sh = ctx.sh
+    local statH = ctx.statH
+    local statY = ctx.statY
+    local sw = ctx.sw
+    local topMargin = ctx.topMargin
             local currAlt = FlightCore.altiSensor and FlightCore.altiSensor.getHeight() or 0
             local currVspeed = FlightCore.altiSensor and FlightCore.altiSensor.getVerticalSpeed() or 0
             local currPitch, currRoll = FlightCore.getGimbalData()
@@ -1757,8 +1700,28 @@ Drivers.tom = {
             addBtn(6 + (bW+4)*2, bY, bW, btnRowH, "HOLD", holdBg, 0xFFFFFF, function() FlightCore.holdAltitude() end)
             local stopBg = (FlightCore.state.mode == "IDLE") and 0xC82D2D or 0xA01E1E
             addBtn(6 + (bW+4)*3, bY, bW, btnRowH, "STOP", stopBg, 0xFFFFFF, function() FlightCore.stopEngines() end)
-
-        elseif scr.currentView == "ECAM" then
+end,
+        ECAM = function(self, scr, ctx)
+    local FlightCore = ctx.FlightCore
+    local addBtn = ctx.addBtn
+    local btnAreaY = ctx.btnAreaY
+    local btnRowH = ctx.btnRowH
+    local btnSpacing = ctx.btnSpacing
+    local headerH = ctx.headerH
+    local instH = ctx.instH
+    local instY = ctx.instY
+    local isFull = ctx.isFull
+    local sArc = ctx.sArc
+    local sFR = ctx.sFR
+    local sL = ctx.sL
+    local sLS = ctx.sLS
+    local sR = ctx.sR
+    local sTxt = ctx.sTxt
+    local sh = ctx.sh
+    local statH = ctx.statH
+    local statY = ctx.statY
+    local sw = ctx.sw
+    local topMargin = ctx.topMargin
             local topY = headerH + 3
             local btmH = isFull and 22 or 14
             local areaH = sh - topY - btmH - 4
@@ -1872,8 +1835,28 @@ Drivers.tom = {
                 local statChars = math.max(6, math.floor((sw - 60) / 6))
                 sTxt(6, statY + 3, string.format("B:%4.2f | %s", FlightCore.state.baseThrottle, FlightCore.state.statusMsg:sub(1, statChars)), 0x50E6FF, 1)
             end
-
-        elseif scr.currentView == "CTRL" then
+end,
+        CTRL = function(self, scr, ctx)
+    local FlightCore = ctx.FlightCore
+    local addBtn = ctx.addBtn
+    local btnAreaY = ctx.btnAreaY
+    local btnRowH = ctx.btnRowH
+    local btnSpacing = ctx.btnSpacing
+    local headerH = ctx.headerH
+    local instH = ctx.instH
+    local instY = ctx.instY
+    local isFull = ctx.isFull
+    local sArc = ctx.sArc
+    local sFR = ctx.sFR
+    local sL = ctx.sL
+    local sLS = ctx.sLS
+    local sR = ctx.sR
+    local sTxt = ctx.sTxt
+    local sh = ctx.sh
+    local statH = ctx.statH
+    local statY = ctx.statY
+    local sw = ctx.sw
+    local topMargin = ctx.topMargin
             local currAlt = FlightCore.altiSensor and FlightCore.altiSensor.getHeight() or 0
             local currVspeed = FlightCore.altiSensor and FlightCore.altiSensor.getVerticalSpeed() or 0
             local currPitch, currRoll = FlightCore.getGimbalData()
@@ -1989,8 +1972,28 @@ Drivers.tom = {
                 local stopBg = (FlightCore.state.mode == "IDLE") and 0xC82D2D or 0xA01E1E
                 addBtn(6 + (bW3+4)*3, r3Y, bW3, ctrlRowH, "STOP", stopBg, 0xFFFFFF, function() FlightCore.stopEngines() end)
             end
-
-        elseif scr.currentView == "NAV" then
+end,
+        NAV = function(self, scr, ctx)
+    local FlightCore = ctx.FlightCore
+    local addBtn = ctx.addBtn
+    local btnAreaY = ctx.btnAreaY
+    local btnRowH = ctx.btnRowH
+    local btnSpacing = ctx.btnSpacing
+    local headerH = ctx.headerH
+    local instH = ctx.instH
+    local instY = ctx.instY
+    local isFull = ctx.isFull
+    local sArc = ctx.sArc
+    local sFR = ctx.sFR
+    local sL = ctx.sL
+    local sLS = ctx.sLS
+    local sR = ctx.sR
+    local sTxt = ctx.sTxt
+    local sh = ctx.sh
+    local statH = ctx.statH
+    local statY = ctx.statY
+    local sw = ctx.sw
+    local topMargin = ctx.topMargin
             local currAlt = FlightCore.altiSensor and FlightCore.altiSensor.getHeight() or 0
             local currVspeed = FlightCore.altiSensor and FlightCore.altiSensor.getVerticalSpeed() or 0
             local currPitch, currRoll = FlightCore.getGimbalData()
@@ -2048,8 +2051,28 @@ Drivers.tom = {
             addBtn(6 + (bW4+4)*2, r3Y, bW4, rowH, isFull and "[ HOLD ALT ]" or "HOLD ALT", altHoldBg, 0xFFFFFF, function() FlightCore.holdAltitude() end)
             local stopBg = (FlightCore.state.mode == "IDLE") and 0xC62828 or 0xB71C1C
             addBtn(6 + (bW4+4)*3, r3Y, bW4, rowH, isFull and "[ STOP IDLE ]" or "STOP", stopBg, 0xFFFFFF, function() FlightCore.stopEngines() end)
-
-        elseif scr.currentView == "SYS" then
+end,
+        SYS = function(self, scr, ctx)
+    local FlightCore = ctx.FlightCore
+    local addBtn = ctx.addBtn
+    local btnAreaY = ctx.btnAreaY
+    local btnRowH = ctx.btnRowH
+    local btnSpacing = ctx.btnSpacing
+    local headerH = ctx.headerH
+    local instH = ctx.instH
+    local instY = ctx.instY
+    local isFull = ctx.isFull
+    local sArc = ctx.sArc
+    local sFR = ctx.sFR
+    local sL = ctx.sL
+    local sLS = ctx.sLS
+    local sR = ctx.sR
+    local sTxt = ctx.sTxt
+    local sh = ctx.sh
+    local statH = ctx.statH
+    local statY = ctx.statY
+    local sw = ctx.sw
+    local topMargin = ctx.topMargin
             local hw = (FlightCore.getHardwareInventory and FlightCore.getHardwareInventory()) or FlightCore.hw or {
                 displays = { hasDirectGpu=false, tomsCount=0, monitorsCount=0, totalScreens=0 },
                 engines = { lift={online=0, total=0}, cruise={online=0, total=0}, steer={online=0, total=0}, totalOnline=0, totalCount=0 },
@@ -2130,6 +2153,271 @@ Drivers.tom = {
             local btmW = math.floor((sw - 16) / 2)
             addBtn(6, btmY, btmW, btmSysH, isFull and "[ RE-SCAN HARDWARE ]" or "RE-SCAN HW", 0x1964BE, 0xFFFFFF, function() FlightCore.scanQuadTurtles(); FlightCore.state.statusMsg="Re-scanned!" end)
             addBtn(6 + btmW + 4, btmY, btmW, btmSysH, isFull and "[ STOP ALL ENGINES ]" or "STOP ALL", 0xBE2828, 0xFFFFFF, function() FlightCore.stopEngines() end)
+end,
+    },
+    screens = {},
+    refreshScreens = function(self)
+        local existing = {}
+        for _, scr in ipairs(self.screens) do
+            if scr.id then existing[scr.id] = scr end
+        end
+        local newScreens = {}
+        for _, name in ipairs(peripheral.getNames()) do
+            local pType = peripheral.getType(name)
+            if pType == "tm_gpu" or pType == "toms_gpu" or pType == "gpu" or pType == "tm_monitor" then
+                local gpu = peripheral.wrap(name)
+                if gpu and gpu.fill and gpu.filledRectangle then
+                    -- 必須先 setSize + refreshSize 才能 getSize 得到正確像素解析度
+                    pcall(function() if gpu.setSize then gpu.setSize(64) end end)
+                    pcall(function() if gpu.refreshSize then gpu.refreshSize() end end)
+                    local w, h = 192, 192
+                    local ok, gw, gh = pcall(function() return gpu.getSize() end)
+                    if ok and gw and gh and gw > 0 and gh > 0 then
+                        if gw < 32 then gw = gw * 64 end
+                        if gh < 32 then gh = gh * 64 end
+                        w, h = gw, gh
+                    end
+                    local prev = existing[name]
+                    table.insert(newScreens, {
+                        id = name,
+                        gpu = gpu,
+                        screenW = w,
+                        screenH = h,
+                        currentView = prev and prev.currentView or "OVERVIEW",
+                        isMenuOpen = prev and prev.isMenuOpen or false,
+                        buttons = prev and prev.buttons or {}
+                    })
+                end
+            end
+        end
+        self.screens = newScreens
+        return #self.screens > 0
+    end,
+    init = function(self)
+        -- 先做一次掃描讓 GPU setSize，等待硬體初始化完成後再重新讀取真實尺寸
+        self:refreshScreens()
+        sleep(0.1)
+        return self:refreshScreens()
+    end,
+    toARGB = function(self, hexColor)
+        if type(hexColor) == "table" then
+            local r = hexColor[1] or 0
+            local g = hexColor[2] or 0
+            local b = hexColor[3] or 0
+            local a = hexColor[4] or 255
+            local val = a * 16777216 + r * 65536 + g * 256 + b
+            if val >= 2147483648 then val = val - 4294967296 end
+            return val
+        elseif type(hexColor) == "number" then
+            local a = 255
+            local r = math.floor(hexColor / 65536) % 256
+            local g = math.floor(hexColor / 256) % 256
+            local b = hexColor % 256
+            local val = a * 16777216 + r * 65536 + g * 256 + b
+            if val >= 2147483648 then val = val - 4294967296 end
+            return val
+        end
+        return -1
+    end,
+    drawText = function(self, scr, x, y, text, color, scale)
+        scale = scale or 1
+        local curX = x
+        local argb = self:toARGB(color)
+        local sw, sh = scr.screenW, scr.screenH
+        local POW2 = { [0]=1, [1]=2, [2]=4, [3]=8, [4]=16, [5]=32, [6]=64, [7]=128 }
+
+        for i = 1, #text do
+            local ch = text:sub(i, i)
+            local bitmap = FONT_5X7[ch] or FONT_5X7['?']
+
+            if bitmap then
+                for col = 1, 5 do
+                    local byte = bitmap[col]
+                    local px = curX + (col - 1) * scale
+                    if px >= 1 and px <= sw then
+                        local runStart = nil
+                        local runLen = 0
+                        for row = 0, 6 do
+                            if (math.floor(byte / POW2[row]) % 2) == 1 then
+                                if not runStart then runStart = row end
+                                runLen = runLen + 1
+                            else
+                                if runStart then
+                                    local py = y + runStart * scale
+                                    local ph = runLen * scale
+                                    if py <= sh then
+                                        pcall(function() scr.gpu.filledRectangle(px, py, scale, ph, argb) end)
+                                    end
+                                    runStart = nil
+                                    runLen = 0
+                                end
+                            end
+                        end
+                        if runStart then
+                            local py = y + runStart * scale
+                            local ph = runLen * scale
+                            if py <= sh then
+                                pcall(function() scr.gpu.filledRectangle(px, py, scale, ph, argb) end)
+                            end
+                        end
+                    end
+                end
+            end
+            curX = curX + 6 * scale
+        end
+    end,
+    draw = function(self)
+        for _, scr in ipairs(self.screens) do
+            local ok, err = pcall(function() self:drawScreen(scr) end)
+            if not ok then
+                pcall(function() self:refreshScreens() end)
+                break
+            end
+        end
+    end,
+    drawScreen = function(self, scr)
+        local ok, w, h = pcall(function() return scr.gpu.getSize() end)
+        -- Tom's GPU getSize() 返回像素大小；若回傳值為圖塊單位（< 32）則以 64px (setSize 64) 換算
+        if ok and w and h and w > 0 and h > 0 then
+            if w < 32 then w = w * 64 end
+            if h < 32 then h = h * 64 end
+            scr.screenW, scr.screenH = w, h
+        end
+        local sw, sh = scr.screenW or 192, scr.screenH or 192
+        local isFull = (sw >= 300 and sh >= 300) -- 5x5 (320x320) 或以上為完整顯示，3x3/4x4/5x4/4x5 (<=256) 為精簡版
+
+        local function toARGB(c) return self:toARGB(c) end
+        local function sFill(c) pcall(function() scr.gpu.fill(toARGB(c)) end) end
+        local function sFR(x, y, bw, bh, c)
+            x, y = math.max(1, math.min(sw, x)), math.max(1, math.min(sh, y))
+            bw, bh = math.max(1, math.min(sw - x + 1, bw)), math.max(1, math.min(sh - y + 1, bh))
+            pcall(function() scr.gpu.filledRectangle(x, y, bw, bh, toARGB(c)) end)
+        end
+        local function sR(x, y, bw, bh, c)
+            x, y = math.max(1, math.min(sw, x)), math.max(1, math.min(sh, y))
+            bw, bh = math.max(1, math.min(sw - x + 1, bw)), math.max(1, math.min(sh - y + 1, bh))
+            pcall(function() scr.gpu.rectangle(x, y, bw, bh, toARGB(c)) end)
+        end
+        local function sL(x1, y1, x2, y2, c)
+            pcall(function() scr.gpu.line(math.max(1, math.min(sw, x1)), math.max(1, math.min(sh, y1)), math.max(1, math.min(sw, x2)), math.max(1, math.min(sh, y2)), toARGB(c)) end)
+        end
+        local function sLS(x1, y1, x2, y2, c)
+            pcall(function()
+                if scr.gpu.lineS then scr.gpu.lineS(math.max(1, math.min(sw, x1)), math.max(1, math.min(sh, y1)), math.max(1, math.min(sw, x2)), math.max(1, math.min(sh, y2)), toARGB(c))
+                else scr.gpu.line(math.max(1, math.min(sw, x1)), math.max(1, math.min(sh, y1)), math.max(1, math.min(sw, x2)), math.max(1, math.min(sh, y2)), toARGB(c)) end
+            end)
+        end
+        local function sTxt(x, y, txt, fc, sz)
+            self:drawText(scr, x, y, txt, fc, sz or 1)
+        end
+        local function sArc(cx, cy, r, startD, endD, stepD, c)
+            local px, py = nil, nil
+            local st = (startD > endD) and -math.abs(stepD or 5) or math.abs(stepD or 5)
+            for deg = startD, endD, st do
+                local rad = math.rad(deg)
+                local nx, ny = cx + r * math.cos(rad), cy - r * math.sin(rad)
+                if px and py then sLS(px, py, nx, ny, c) end
+                px, py = nx, ny
+            end
+        end
+
+        local function addBtn(x, y, bw, bh, text, bg, fg, act)
+            table.insert(scr.buttons, {x=x, y=y, w=bw, h=bh, text=text, bg=bg, fg=fg, action=act})
+        end
+
+        sFill(0x0F141E)
+        scr.buttons = {}
+
+        -- 1. 頂部狀態列
+        local headerH = isFull and math.max(26, math.min(36, math.floor(sh * 0.06))) or (sh < 220 and 14 or 20)
+        sFR(1, 1, sw, headerH, 0x192841)
+
+        local menuBtnW = isFull and 54 or (sw < 220 and 18 or 24)
+        local menuBtnH = headerH - 4
+        local menuBtnX = sw - menuBtnW - 3
+        local menuBtnY = 2
+        if scr.isMenuOpen then
+            addBtn(menuBtnX, menuBtnY, menuBtnW, menuBtnH, "[X]", 0x992222, 0xFFFFFF, function() scr.isMenuOpen = false end)
+        else
+            addBtn(menuBtnX, menuBtnY, menuBtnW, menuBtnH, isFull and "[MENU]" or "[=]", 0x224488, 0xFFFFFF, function() scr.isMenuOpen = true end)
+        end
+
+        local maxTitleW = menuBtnX - 12
+        local viewTitle = scr.isMenuOpen and "SELECT VIEW" or (isFull and (VIEW_TITLES[scr.currentView] or scr.currentView) or scr.currentView)
+        local titleSize = (isFull and #viewTitle * 12 <= maxTitleW and headerH >= 24) and 2 or 1
+        sTxt(6, math.floor((headerH - 7 * titleSize) / 2) + 1, viewTitle, 0xF0F5FF, titleSize)
+
+        -- 佈局高度自適應分配器
+        local numBtnRows = isFull and 3 or 2
+        local btnRowH = isFull and math.max(24, math.min(32, math.floor(sh * 0.08))) or (sh < 220 and 12 or (sh < 350 and 16 or 22))
+        local btnSpacing = (sh < 220) and 2 or 3
+        local totalBtnH = numBtnRows * btnRowH + (numBtnRows - 1) * btnSpacing
+        local statH = isFull and 20 or (sh < 220 and 11 or 15)
+
+        local topMargin = headerH + ((sh < 220) and 2 or 4)
+        local statY = sh - totalBtnH - statH - ((sh < 220) and 3 or 5)
+        local instY = topMargin
+        local instH = statY - instY - ((sh < 220) and 2 or 4)
+        local btnAreaY = statY + statH + ((sh < 220) and 2 or 3)
+
+        local viewContext = {
+            FlightCore = FlightCore,
+            addBtn = addBtn,
+            btnAreaY = btnAreaY,
+            btnRowH = btnRowH,
+            btnSpacing = btnSpacing,
+            headerH = headerH,
+            instH = instH,
+            instY = instY,
+            isFull = isFull,
+            sArc = sArc,
+            sFR = sFR,
+            sL = sL,
+            sLS = sLS,
+            sR = sR,
+            sTxt = sTxt,
+            sh = sh,
+            statH = statH,
+            statY = statY,
+            sw = sw,
+            topMargin = topMargin,
+        }
+
+        -- 2. 視圖路由
+        if scr.isMenuOpen then
+            local cardW = math.floor((sw - 16) / 2)
+            local cardH = math.floor((sh - headerH - 16) / 3)
+            local startY = headerH + 4
+
+            local function addMenuCard(col, row, title, targetView, color)
+                local cx = 4 + (col - 1) * (cardW + 6)
+                local cy = startY + (row - 1) * (cardH + 4)
+                addBtn(cx, cy, cardW, cardH, title, color, 0xFFFFFF, function()
+                    scr.currentView = targetView
+                    scr.isMenuOpen = false
+                end)
+            end
+
+            local shortTitle = cardW < 65
+            addMenuCard(1, 1, isFull and "1. OVERVIEW (ALL)" or (shortTitle and "1. OVR" or "1. OVERVIEW"), "OVERVIEW", 0x1B3A60)
+            addMenuCard(2, 1, isFull and "2. PFD (FLIGHT)" or (shortTitle and "2. PFD" or "2. PFD"), "PFD", 0x145A32)
+            addMenuCard(1, 2, isFull and "3. ECAM (QUAD ENG)" or (shortTitle and "3. ECAM" or "3. ECAM"), "ECAM", 0x78281F)
+            addMenuCard(2, 2, isFull and "4. CTRL (CONTROLS)" or (shortTitle and "4. CTRL" or "4. CTRL"), "CTRL", 0x117864)
+            addMenuCard(1, 3, isFull and "5. NAV (PRESETS)" or (shortTitle and "5. NAV" or "5. NAV"), "NAV", 0x2471A3)
+            addMenuCard(2, 3, isFull and "6. SYS (DIAGNOSE)" or (shortTitle and "6. SYS" or "6. SYS"), "SYS", 0x512E5F)
+
+        elseif scr.currentView == "OVERVIEW" then
+            self.views.OVERVIEW(self, scr, viewContext)
+        elseif scr.currentView == "PFD" then
+            self.views.PFD(self, scr, viewContext)
+        elseif scr.currentView == "ECAM" then
+            self.views.ECAM(self, scr, viewContext)
+        elseif scr.currentView == "CTRL" then
+            self.views.CTRL(self, scr, viewContext)
+        elseif scr.currentView == "NAV" then
+            self.views.NAV(self, scr, viewContext)
+        elseif scr.currentView == "SYS" then
+            self.views.SYS(self, scr, viewContext)
         end
 
         local btnTextSize = 1
@@ -2223,137 +2511,13 @@ Drivers.tom = {
 -- 2.3 驅動 C: CC 原生進階彩色螢幕 (CC: Tweaked Monitor / Terminal)
 -- --------------------------------------------------------
 Drivers.normal = {
-    screens = {},
-    refreshScreens = function(self)
-        local existing = {}
-        for _, scr in ipairs(self.screens) do
-            if scr.id then existing[scr.id] = scr end
-        end
-        local newScreens = {}
-        for _, name in ipairs(peripheral.getNames()) do
-            if peripheral.getType(name) == "monitor" then
-                local mon = peripheral.wrap(name)
-                if mon then
-                    pcall(function() mon.setTextScale(0.5) end)
-                    local mw, mh = mon.getSize()
-                    local prev = existing[name]
-                    table.insert(newScreens, {
-                        id = name,
-                        device = mon,
-                        isMonitor = true,
-                        screenW = mw,
-                        screenH = mh,
-                        currentView = prev and prev.currentView or "OVERVIEW",
-                        isMenuOpen = prev and prev.isMenuOpen or false,
-                        buttons = prev and prev.buttons or {}
-                    })
-                end
-            end
-        end
-
-        if #newScreens == 0 then
-            local tw, th = term.getSize()
-            local prev = existing["terminal"]
-            table.insert(newScreens, {
-                id = "terminal",
-                device = term.current(),
-                isMonitor = false,
-                screenW = tw,
-                screenH = th,
-                currentView = prev and prev.currentView or "OVERVIEW",
-                isMenuOpen = prev and prev.isMenuOpen or false,
-                buttons = prev and prev.buttons or {}
-            })
-        end
-        self.screens = newScreens
-        return true
-    end,
-    init = function(self)
-        return self:refreshScreens()
-    end,
-    safeBlit = function(self, scr, x, y, text, fg, bg)
-        local t = scr.device
-        local w, h = scr.screenW, scr.screenH
-        if y < 1 or y > h or x > w then return end
-        if x < 1 then
-            local cut = 1 - x
-            if cut >= #text then return end
-            text = text:sub(cut + 1)
-            fg = fg:sub(cut + 1)
-            bg = bg:sub(cut + 1)
-            x = 1
-        end
-        if x + #text - 1 > w then
-            local maxLen = w - x + 1
-            text = text:sub(1, maxLen)
-            fg = fg:sub(1, maxLen)
-            bg = bg:sub(1, maxLen)
-        end
-        if #text > 0 then
-            t.setCursorPos(x, y)
-            t.blit(text, fg, bg)
-        end
-    end,
-    draw = function(self)
-        for _, scr in ipairs(self.screens) do
-            local ok, err = pcall(function() self:drawScreen(scr) end)
-            if not ok then
-                pcall(function() self:refreshScreens() end)
-                break
-            end
-        end
-    end,
-    drawScreen = function(self, scr)
-        local t = scr.device
-        local w, h = t.getSize()
-        scr.screenW, scr.screenH = w, h
-        local isFull = (w >= 140 and h >= 58) -- 5x5 (approx 145x60 chars at textScale 0.5) 或以上為完整顯示，3x3/4x4/5x4/4x5 為精簡版
-
-        t.setBackgroundColor(colors.black)
-        t.clear()
-        scr.buttons = {}
-
-        local function addBtn(x, y, bw, bh, text, fg, bg, act)
-            table.insert(scr.buttons, {x=x, y=y, w=bw, h=bh, text=text, fg=fg, bg=bg, action=act})
-        end
-
-        -- 1. 頂部導航列 (無版本號，僅顯示當前視圖名稱)
-        local menuBtnW = isFull and 8 or 5
-        local menuBtnX = w - menuBtnW + 1
-        self:safeBlit(scr, 1, 1, string.rep(" ", w), "0", "b")
-
-        local viewTitle = scr.isMenuOpen and "SELECT VIEW" or (isFull and (VIEW_TITLES[scr.currentView] or scr.currentView) or scr.currentView)
-        self:safeBlit(scr, 2, 1, viewTitle, "0", "b")
-
-        if scr.isMenuOpen then
-            addBtn(menuBtnX, 1, menuBtnW, 1, isFull and "[CLOSE]" or "[X]", "0", "e", function() scr.isMenuOpen = false end)
-        else
-            addBtn(menuBtnX, 1, menuBtnW, 1, isFull and "[ MENU ]" or "[=]", "0", "9", function() scr.isMenuOpen = true end)
-        end
-
-        -- 2. 視圖分流
-        if scr.isMenuOpen then
-            local startY = 3
-            local cardW = math.floor((w - 3) / 2)
-            local cardH = math.max(2, math.floor((h - startY - 2) / 3))
-
-            local function addMenuCard(col, row, title, targetView, fg, bg)
-                local cx = 2 + (col - 1) * (cardW + 1)
-                local cy = startY + (row - 1) * (cardH + 1)
-                addBtn(cx, cy, cardW, cardH, title, fg, bg, function()
-                    scr.currentView = targetView
-                    scr.isMenuOpen = false
-                end)
-            end
-
-            addMenuCard(1, 1, isFull and "1. OVERVIEW (ALL)" or "1. OVERVIEW", "OVERVIEW", "0", "9")
-            addMenuCard(2, 1, isFull and "2. PFD (FLIGHT)" or "2. PFD", "PFD", "0", "5")
-            addMenuCard(1, 2, isFull and "3. ECAM (QUAD ENG)" or "3. ECAM", "ECAM", "0", "e")
-            addMenuCard(2, 2, isFull and "4. CTRL (CONTROLS)" or "4. CTRL", "CTRL", "0", "3")
-            addMenuCard(1, 3, isFull and "5. NAV (HEADING)" or "5. NAV", "NAV", "0", "b")
-            addMenuCard(2, 3, isFull and "6. SYS (DIAGNOSE)" or "6. SYS", "SYS", "0", "a")
-
-        elseif scr.currentView == "OVERVIEW" then
+    views = {
+        OVERVIEW = function(self, scr, ctx)
+    local FlightCore = ctx.FlightCore
+    local addBtn = ctx.addBtn
+    local h = ctx.h
+    local isFull = ctx.isFull
+    local w = ctx.w
             local currAlt = FlightCore.altiSensor and FlightCore.altiSensor.getHeight() or 0
             local currVspeed = FlightCore.altiSensor and FlightCore.altiSensor.getVerticalSpeed() or 0
             local currPitch, currRoll = FlightCore.getGimbalData()
@@ -2477,8 +2641,13 @@ Drivers.normal = {
                 local stopBg = (FlightCore.state.mode == "IDLE") and "e" or "6"
                 addBtn(3 + bW2, bY2, bW2, 1, "STOP", "0", stopBg, function() FlightCore.stopEngines() end)
             end
-
-        elseif scr.currentView == "PFD" then
+end,
+        PFD = function(self, scr, ctx)
+    local FlightCore = ctx.FlightCore
+    local addBtn = ctx.addBtn
+    local h = ctx.h
+    local isFull = ctx.isFull
+    local w = ctx.w
             local currAlt = FlightCore.altiSensor and FlightCore.altiSensor.getHeight() or 0
             local currVspeed = FlightCore.altiSensor and FlightCore.altiSensor.getVerticalSpeed() or 0
             local currPitch, currRoll = FlightCore.getGimbalData()
@@ -2495,8 +2664,13 @@ Drivers.normal = {
             addBtn(3 + btnW, btmY, btnW, btnH, "-10m", "0", "e", function() FlightCore.adjustTargetAlt(-10) end)
             addBtn(4 + btnW*2, btmY, btnW, btnH, "HOLD", "0", "3", function() FlightCore.holdAltitude() end)
             addBtn(5 + btnW*3, btmY, btnW, btnH, "STOP", "0", "e", function() FlightCore.stopEngines() end)
-
-        elseif scr.currentView == "ECAM" then
+end,
+        ECAM = function(self, scr, ctx)
+    local FlightCore = ctx.FlightCore
+    local addBtn = ctx.addBtn
+    local h = ctx.h
+    local isFull = ctx.isFull
+    local w = ctx.w
             local gridY = 3
             local quadW = math.floor((w - 3) / 2)
             local quadH = math.max(3, math.floor((h - gridY - 2) / 2))
@@ -2528,8 +2702,13 @@ Drivers.normal = {
             end
 
             self:safeBlit(scr, 2, h, string.format("BASE: %4.2f/15 | %s", FlightCore.state.baseThrottle, FlightCore.state.statusMsg:sub(1, w - 20)), "0", "b")
-
-        elseif scr.currentView == "CTRL" then
+end,
+        CTRL = function(self, scr, ctx)
+    local FlightCore = ctx.FlightCore
+    local addBtn = ctx.addBtn
+    local h = ctx.h
+    local isFull = ctx.isFull
+    local w = ctx.w
             local currAlt = FlightCore.altiSensor and FlightCore.altiSensor.getHeight() or 0
             local currVspeed = FlightCore.altiSensor and FlightCore.altiSensor.getVerticalSpeed() or 0
             local currPitch, currRoll = FlightCore.getGimbalData()
@@ -2604,8 +2783,13 @@ Drivers.normal = {
                 addBtn(4 + bW3*2, bY3, bW3, rowH, "RE-SCAN", "b", "0", function() FlightCore.scanQuadTurtles(); FlightCore.state.statusMsg="Re-scanned!" end)
                 addBtn(5 + bW3*3, bY3, bW3, rowH, "STOP", "e", "0", function() FlightCore.stopEngines() end)
             end
-
-        elseif scr.currentView == "NAV" then
+end,
+        NAV = function(self, scr, ctx)
+    local FlightCore = ctx.FlightCore
+    local addBtn = ctx.addBtn
+    local h = ctx.h
+    local isFull = ctx.isFull
+    local w = ctx.w
             local currAlt = FlightCore.altiSensor and FlightCore.altiSensor.getHeight() or 0
             local currPitch, currRoll = FlightCore.getGimbalData()
             local holdStr = FlightCore.nav.headingHold and "ON" or "OFF"
@@ -2659,8 +2843,13 @@ Drivers.normal = {
             addBtn(4 + colW*2, bY3, colW, rowH, isFull and "[ HOLD ALT ]" or "HOLD ALT", "0", altHoldBg, function() FlightCore.holdAltitude() end)
             local stopBg = (FlightCore.state.mode == "IDLE") and "e" or "6"
             addBtn(5 + colW*3, bY3, colW, rowH, isFull and "[ STOP IDLE ]" or "STOP", "0", stopBg, function() FlightCore.stopEngines() end)
-
-        elseif scr.currentView == "SYS" then
+end,
+        SYS = function(self, scr, ctx)
+    local FlightCore = ctx.FlightCore
+    local addBtn = ctx.addBtn
+    local h = ctx.h
+    local isFull = ctx.isFull
+    local w = ctx.w
             local hw = (FlightCore.getHardwareInventory and FlightCore.getHardwareInventory()) or FlightCore.hw or {
                 displays = { hasDirectGpu=false, tomsCount=0, monitorsCount=0, totalScreens=0 },
                 engines = { lift={online=0, total=0}, cruise={online=0, total=0}, steer={online=0, total=0}, totalOnline=0, totalCount=0 },
@@ -2722,6 +2911,158 @@ Drivers.normal = {
             local btmW = math.floor((w - 3) / 2)
             addBtn(2, btmY, btmW, 2, isFull and "[ RE-SCAN HARDWARE ]" or "RE-SCAN HW", "3", "0", function() FlightCore.scanQuadTurtles(); FlightCore.state.statusMsg="Re-scanned!" end)
             addBtn(3 + btmW, btmY, btmW, 2, isFull and "[ STOP ALL ENGINES ]" or "STOP ALL", "e", "0", function() FlightCore.stopEngines() end)
+end,
+    },
+    screens = {},
+    refreshScreens = function(self)
+        local existing = {}
+        for _, scr in ipairs(self.screens) do
+            if scr.id then existing[scr.id] = scr end
+        end
+        local newScreens = {}
+        for _, name in ipairs(peripheral.getNames()) do
+            if peripheral.getType(name) == "monitor" then
+                local mon = peripheral.wrap(name)
+                if mon then
+                    pcall(function() mon.setTextScale(0.5) end)
+                    local mw, mh = mon.getSize()
+                    local prev = existing[name]
+                    table.insert(newScreens, {
+                        id = name,
+                        device = mon,
+                        isMonitor = true,
+                        screenW = mw,
+                        screenH = mh,
+                        currentView = prev and prev.currentView or "OVERVIEW",
+                        isMenuOpen = prev and prev.isMenuOpen or false,
+                        buttons = prev and prev.buttons or {}
+                    })
+                end
+            end
+        end
+
+        if #newScreens == 0 then
+            local tw, th = term.getSize()
+            local prev = existing["terminal"]
+            table.insert(newScreens, {
+                id = "terminal",
+                device = term.current(),
+                isMonitor = false,
+                screenW = tw,
+                screenH = th,
+                currentView = prev and prev.currentView or "OVERVIEW",
+                isMenuOpen = prev and prev.isMenuOpen or false,
+                buttons = prev and prev.buttons or {}
+            })
+        end
+        self.screens = newScreens
+        return true
+    end,
+    init = function(self)
+        return self:refreshScreens()
+    end,
+    safeBlit = function(self, scr, x, y, text, fg, bg)
+        local t = scr.device
+        local w, h = scr.screenW, scr.screenH
+        if y < 1 or y > h or x > w then return end
+        if x < 1 then
+            local cut = 1 - x
+            if cut >= #text then return end
+            text = text:sub(cut + 1)
+            fg = fg:sub(cut + 1)
+            bg = bg:sub(cut + 1)
+            x = 1
+        end
+        if x + #text - 1 > w then
+            local maxLen = w - x + 1
+            text = text:sub(1, maxLen)
+            fg = fg:sub(1, maxLen)
+            bg = bg:sub(1, maxLen)
+        end
+        if #text > 0 then
+            t.setCursorPos(x, y)
+            t.blit(text, fg, bg)
+        end
+    end,
+    draw = function(self)
+        for _, scr in ipairs(self.screens) do
+            local ok, err = pcall(function() self:drawScreen(scr) end)
+            if not ok then
+                pcall(function() self:refreshScreens() end)
+                break
+            end
+        end
+    end,
+    drawScreen = function(self, scr)
+        local t = scr.device
+        local w, h = t.getSize()
+        scr.screenW, scr.screenH = w, h
+        local isFull = (w >= 140 and h >= 58) -- 5x5 (approx 145x60 chars at textScale 0.5) 或以上為完整顯示，3x3/4x4/5x4/4x5 為精簡版
+
+        t.setBackgroundColor(colors.black)
+        t.clear()
+        scr.buttons = {}
+
+        local function addBtn(x, y, bw, bh, text, fg, bg, act)
+            table.insert(scr.buttons, {x=x, y=y, w=bw, h=bh, text=text, fg=fg, bg=bg, action=act})
+        end
+
+        -- 1. 頂部導航列 (無版本號，僅顯示當前視圖名稱)
+        local menuBtnW = isFull and 8 or 5
+        local menuBtnX = w - menuBtnW + 1
+        self:safeBlit(scr, 1, 1, string.rep(" ", w), "0", "b")
+
+        local viewTitle = scr.isMenuOpen and "SELECT VIEW" or (isFull and (VIEW_TITLES[scr.currentView] or scr.currentView) or scr.currentView)
+        self:safeBlit(scr, 2, 1, viewTitle, "0", "b")
+
+        if scr.isMenuOpen then
+            addBtn(menuBtnX, 1, menuBtnW, 1, isFull and "[CLOSE]" or "[X]", "0", "e", function() scr.isMenuOpen = false end)
+        else
+            addBtn(menuBtnX, 1, menuBtnW, 1, isFull and "[ MENU ]" or "[=]", "0", "9", function() scr.isMenuOpen = true end)
+        end
+
+        local viewContext = {
+            FlightCore = FlightCore,
+            addBtn = addBtn,
+            h = h,
+            isFull = isFull,
+            w = w,
+        }
+
+        -- 2. 視圖分流
+        if scr.isMenuOpen then
+            local startY = 3
+            local cardW = math.floor((w - 3) / 2)
+            local cardH = math.max(2, math.floor((h - startY - 2) / 3))
+
+            local function addMenuCard(col, row, title, targetView, fg, bg)
+                local cx = 2 + (col - 1) * (cardW + 1)
+                local cy = startY + (row - 1) * (cardH + 1)
+                addBtn(cx, cy, cardW, cardH, title, fg, bg, function()
+                    scr.currentView = targetView
+                    scr.isMenuOpen = false
+                end)
+            end
+
+            addMenuCard(1, 1, isFull and "1. OVERVIEW (ALL)" or "1. OVERVIEW", "OVERVIEW", "0", "9")
+            addMenuCard(2, 1, isFull and "2. PFD (FLIGHT)" or "2. PFD", "PFD", "0", "5")
+            addMenuCard(1, 2, isFull and "3. ECAM (QUAD ENG)" or "3. ECAM", "ECAM", "0", "e")
+            addMenuCard(2, 2, isFull and "4. CTRL (CONTROLS)" or "4. CTRL", "CTRL", "0", "3")
+            addMenuCard(1, 3, isFull and "5. NAV (HEADING)" or "5. NAV", "NAV", "0", "b")
+            addMenuCard(2, 3, isFull and "6. SYS (DIAGNOSE)" or "6. SYS", "SYS", "0", "a")
+
+        elseif scr.currentView == "OVERVIEW" then
+            self.views.OVERVIEW(self, scr, viewContext)
+        elseif scr.currentView == "PFD" then
+            self.views.PFD(self, scr, viewContext)
+        elseif scr.currentView == "ECAM" then
+            self.views.ECAM(self, scr, viewContext)
+        elseif scr.currentView == "CTRL" then
+            self.views.CTRL(self, scr, viewContext)
+        elseif scr.currentView == "NAV" then
+            self.views.NAV(self, scr, viewContext)
+        elseif scr.currentView == "SYS" then
+            self.views.SYS(self, scr, viewContext)
         end
 
         for _, btn in ipairs(scr.buttons) do
