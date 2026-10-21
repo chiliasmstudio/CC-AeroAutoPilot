@@ -1,6 +1,6 @@
 --[[
     fcc-cli.lua — Standalone Command Line Interface & Console for VTOL Avionics
-    Version: v4.4.2
+    Version: v4.5.0
     
     特點:
     - 完全獨立於 FCC 飛控電腦，可在任何終端機 / Pocket Computer 上運行
@@ -19,7 +19,7 @@
       fcc-cli reboot turtles    -- 遠端重啟所有動力烏龜
 --]]
 
-local VERSION = "v4.4.2"
+local VERSION = "v4.5.0"
 local rawArgs = { ... }
 
 -- 1. 初始化數據機
@@ -79,16 +79,25 @@ local function executeCommand(args, out)
 
     if #args == 0 then return true end
     local cmd = string.lower(args[1])
+    local cardinalHeadings = {
+        n = 0, north = 0,
+        e = 90, east = 90,
+        s = 180, south = 180,
+        w = 270, west = 270
+    }
+    local function parseHeading(value)
+        local token = string.lower(tostring(value or ""))
+        if cardinalHeadings[token] ~= nil then return cardinalHeadings[token] end
+        local degrees = tonumber(token)
+        if degrees and degrees == degrees and math.abs(degrees) < 100000 then
+            return (math.floor(degrees + 0.5) % 360 + 360) % 360
+        end
+        return nil
+    end
 
     -- 三維航點: go <x> <y> <z>; 二維航點: go2 <x> <z> [radius]
     if cmd == "go" or cmd == "wp" or cmd == "waypoint" or cmd == "goto" or cmd == "go2" or cmd == "wp2" then
         local direction = string.lower(args[2] or "")
-        local cardinalHeadings = {
-            n = 0, north = 0,
-            e = 90, east = 90,
-            s = 180, south = 180,
-            w = 270, west = 270
-        }
         if cmd ~= "go2" and cmd ~= "wp2" and cardinalHeadings[direction] then
             local heading = cardinalHeadings[direction]
             sendFccCmd({ cmd = "SET_HEADING", hdg = heading })
@@ -150,6 +159,19 @@ local function executeCommand(args, out)
     elseif cmd == "hold" or cmd == "hold_alt" or cmd == "hover" then
         sendFccCmd({ cmd = "HOLD_ALT" })
         out.print("[OK] Altitude Hold (HOLD_ALT) mode commanded.")
+        return true
+
+    -- 船頭方位校準：在 go 指令穩定後，輸入船頭實際方向
+    elseif cmd == "calhead" or cmd == "calheading" or (cmd == "calibrate" and args[2] ~= nil) then
+        local secondArg = string.lower(tostring(args[2] or ""))
+        local headingArg = (secondArg == "heading" or secondArg == "bow") and args[3] or args[2]
+        local heading = parseHeading(headingArg)
+        if not heading then
+            out.printError("Usage: calibrate <n|e|s|w|0-359> (e.g. go n, then calibrate s)")
+            return true
+        end
+        sendFccCmd({ cmd = "CALIBRATE_HEADING", hdg = heading })
+        out.print(string.format("[OK] Bow calibration sent: current physical heading is %03d*; offset will be saved on the FCC.", heading))
         return true
 
     -- 起飛校準: calib
@@ -320,6 +342,7 @@ local function executeCommand(args, out)
         out.print(" cancel           - Cancel waypoint navigation")
         out.print(" alt <alt>        - Set target altitude (e.g. alt 200, alt +50)")
         out.print(" hold / calib     - Hold altitude / Liftoff auto calibration")
+        out.print(" calibrate n/e/s/w - Save actual bow direction after go n/e/s/w (also accepts degrees)")
         out.print(" lock / stop      - Lock current altitude / Stop engines (IDLE)")
         out.print(" hdg <0-359>      - Hold heading; fwd +/-4, turn +/-2.5 max")
         out.print(" update turtles   - One-click OTA firmware update all turtles")
@@ -431,6 +454,8 @@ local function renderTelemetryDashboard()
     topWin.write(string.format("%03d*", math.floor(nav.yaw or 0)))
     topWin.setTextColor(nav.headingHold and colors.green or colors.gray)
     topWin.write(string.format(" [Hold:%s, Tgt:%03d*]", nav.headingHold and "ON" or "OFF", math.floor(nav.targetHeading or 0)))
+    topWin.setTextColor(colors.lightBlue)
+    topWin.write(string.format(" [Cal:%+04.0f*]", nav.headingOffset or 0))
     topWin.setTextColor(colors.yellow)
     topWin.write(string.format(" | Spd: %4.1fm/s", nav.speed or 0))
 

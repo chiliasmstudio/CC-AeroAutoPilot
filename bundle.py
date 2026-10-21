@@ -398,6 +398,7 @@ local function handleFccCommand(side, ch, replyCh, msg, dist)
         elseif cmd == "SET_TURN" then FlightCore.setTurnThrottle(msg.val or 0)
         elseif cmd == "STOP_HORIZ" then FlightCore.stopHorizontalThrust()
         elseif cmd == "SET_HEADING" then FlightCore.setTargetHeading(msg.hdg or 0)
+        elseif cmd == "CALIBRATE_HEADING" then FlightCore.calibrateHeading(msg.hdg)
         elseif cmd == "ADJ_HEADING" then FlightCore.adjustTargetHeading(msg.delta or 0)
         elseif cmd == "TOGGLE_HEADING" then FlightCore.toggleHeadingHold()
         elseif cmd == "SYNC_HEADING" then FlightCore.syncHeading()
@@ -435,6 +436,7 @@ local function broadcastTelemetry()
             y = FlightCore.nav.y,
             z = FlightCore.nav.z,
             yaw = FlightCore.nav.yaw,
+            headingOffset = FlightCore.nav.headingOffset or 0,
             pitch = FlightCore.nav.pitch,
             roll = FlightCore.nav.roll,
             speed = FlightCore.nav.speed,

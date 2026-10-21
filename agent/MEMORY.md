@@ -20,10 +20,11 @@
 - CCPE 位置／航向超過 0.5 秒未更新時，或 GPS 位置超過 1.5 秒未更新時，水平輸出立即歸零。維持導航目標，恢復定位後續行。
 - `go x y z` 同時設定高度；`go2 x z [radius]` 保持既有高度，預設半徑 12 格。
 - `go n/e/s/w` 取消航點並原地鎖定北/東/南/西方位（0/90/180/270°），清掉前進與殘留轉向指令；需先處於 `HOLD_ALT`。
+- 船頭軸偏移可在 `go n/e/s/w` 穩定後用 `calibrate n/e/s/w` 校正；偏移持久化在 `.fcc_heading_offset`，校準時將目標暫設為輸入的實際方位，避免立即反向轉動。接著需重新發送 `go n/e/s/w` 驗證。
 - CLI 手動巡航推力上限為 ±4，轉向上限為 ±2.5。
 
 ## 維護與部署
 
-- 修改電腦端行為時依 `agent.md` 遞增 Computer Suite 版本；本導航屬功能增加，使用 minor 升版，再執行 `python bundle.py --bump-computer minor`。
+- 修改電腦端行為時依 `agent.md` 遞增 Computer Suite 版本；功能增加使用 minor 升版，再執行 `python bundle.py --bump-computer minor`。
 - `run.lua`、`fcc.lua` 與 FCC 顯示／命令用戶端均需更新。若只更新 FCC 大腦而客戶端仍是舊版，遙測與命令文字可能不一致。
 - 建置區塊平衡檢查通過仍不能替代遊戲內試飛；先低速、短距離確認座標軸、航向正負方向及各角色接線。

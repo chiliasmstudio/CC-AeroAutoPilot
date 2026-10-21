@@ -3,7 +3,7 @@
 > **目前電腦端韌體保留懸停並重新啟用受限導航**：航點導航需要有效位置與航向資料，並要求先啟用高度保持；感測器失效或資料過期時，水平推力歸零。垂直升力控制與水平導航分離。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Computer Suite: v4.4.2](https://img.shields.io/badge/Computer_Suite-v4.4.2-blue.svg)](https://github.com/chiliasmstudio/CC-AeroAutoPilot/releases/latest)
+[![Computer Suite: v4.5.0](https://img.shields.io/badge/Computer_Suite-v4.5.0-blue.svg)](https://github.com/chiliasmstudio/CC-AeroAutoPilot/releases/latest)
 [![Turtle Firmware: v4.0.12](https://img.shields.io/badge/Turtle_Firmware-v4.0.12-green.svg)](https://github.com/chiliasmstudio/CC-AeroAutoPilot/releases/latest)
 
 > [!NOTE]
@@ -28,6 +28,7 @@
    - 保留高度保持、懸停校準與緊急停止；重新啟用需定位及航向感測器的航點導航。
    - 導航只控制標記為 `FWD`、`BWD`、`LEFT`、`RIGHT` 的烏龜，永不改動四象限升力輸出。
    - 導航限速並以速度回授減速；誤差超過 3° 且轉向過慢時提高自動轉向功率，最高 12/15；誤差超過 2° 時維持至少 1.5 輸出，避免稀疏 PWM 脈衝，轉速上升或接近目標時再減力。
+   - 船頭方位可用 `go n` 後執行 `calibrate s` 等命令校準；偏移儲存在 FCC 電腦，重啟後保留。校準後重新輸入 `go n` 測試。
 3. 🚢 **全向推進發動機叢集 (Full-Axis Propulsion & Cluster Redundancy)**：
    - **升降動力 (4-Quad Lift)**：`FL` (左前), `FR` (右前), `BL` (左後), `BR` (右後) 差動升力與四象限姿態自穩。
    - 巡航與側推節點只接受導航／手動方向控制器的受限輸出；電腦本體六面紅石輸出保持為零。

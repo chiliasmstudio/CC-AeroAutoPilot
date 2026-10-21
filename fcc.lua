@@ -1,7 +1,7 @@
 --[[
     Create: Avionics & CC: Tweaked
     Standalone Flight Control Computer (FCC - 分散式純飛控大腦)
-    Version: v4.4.2
+    Version: v4.5.0
     NAV PROFILE: hover controls remain independent; waypoint control is speed-limited and requires fresh position/heading fixes.
     
     特點:
@@ -12,7 +12,7 @@
     - 徹底根除 "Too long without yielding"
 --]]
 
-local VERSION = "v4.4.2"
+local VERSION = "v4.5.0"
 
 -- ========================================================
 -- PART 1: 飛控與動力控制核心 (FLIGHT & PROPULSION CORE)
@@ -94,6 +94,8 @@ FlightCore.nav = {
     y = nil,
     z = nil,
     yaw = 0.0,            -- 當前航向角 (0~359°, 0=北, 90=東, 180=南, 270=西)
+    rawYaw = 0.0,         -- 感測器原始航向；headingOffset 會轉成船頭實際方位
+    headingOffset = 0.0,  -- 感測器船體軸到船頭方向的校準偏移
     yawRate = 0.0,        -- 航向角速度 (度/秒，順時針為正)
     previousYaw = nil,
     previousYawAt = nil,
@@ -124,6 +126,30 @@ FlightCore.nav = {
     positionReady = false,
     headingReady = false
 }
+
+local HEADING_CALIBRATION_FILE = ".fcc_heading_offset"
+
+local function normalizeSignedHeading(degrees)
+    return ((degrees + 180) % 360) - 180
+end
+
+local function readHeadingOffset()
+    if not fs or type(fs.exists) ~= "function" or type(fs.open) ~= "function" then return 0 end
+    local okExists, exists = pcall(fs.exists, HEADING_CALIBRATION_FILE)
+    if not okExists or not exists then return 0 end
+
+    local okOpen, file = pcall(fs.open, HEADING_CALIBRATION_FILE, "r")
+    if not okOpen or not file then return 0 end
+    local okRead, contents = pcall(function() return file.readAll() end)
+    pcall(function() file.close() end)
+    if not okRead then return 0 end
+
+    local offset = tonumber(contents)
+    if not offset or offset ~= offset or math.abs(offset) > 100000 then return 0 end
+    return normalizeSignedHeading(offset)
+end
+
+FlightCore.nav.headingOffset = readHeadingOffset()
 
 -- 高度控制專用 PID 控制器 (v3.8.4 經典基準: Kp=0.5, Ki=0.02, Kd=0.6, 嚴格輸出限幅 [-1.5, +1.8])
 FlightCore.altPID = PID.new(0.50, 0.02, 0.60, -1.50, 1.80)
@@ -805,7 +831,8 @@ function FlightCore.updateNavigationSensors()
             if okAngles and angles then
                 local yaw = tonumber(angles.yaw or angles[3])
                 if yaw and yaw == yaw and math.abs(yaw) <= 100000 then
-                    nav.yaw = wrapHeading(yaw)
+                    nav.rawYaw = wrapHeading(yaw)
+                    nav.yaw = wrapHeading(nav.rawYaw + (nav.headingOffset or 0))
                     nav.lastHeadingAt = now
                 end
             end
@@ -831,10 +858,12 @@ function FlightCore.updateNavigationSensors()
             if ok then
                 if type(heading) == "number" then
                     -- Create: Avionics measures atan2(worldX, worldZ); convert to north/clockwise.
-                    nav.yaw = wrapHeading(180 - heading)
+                    nav.rawYaw = wrapHeading(180 - heading)
+                    nav.yaw = wrapHeading(nav.rawYaw + (nav.headingOffset or 0))
                     nav.lastHeadingAt = now
                 elseif type(radians) == "number" then
-                    nav.yaw = wrapHeading(180 - math.deg(radians))
+                    nav.rawYaw = wrapHeading(180 - math.deg(radians))
+                    nav.yaw = wrapHeading(nav.rawYaw + (nav.headingOffset or 0))
                     nav.lastHeadingAt = now
                 end
             end
@@ -1120,6 +1149,58 @@ function FlightCore.setTargetHeading(hdg)
     return true
 end
 
+function FlightCore.calibrateHeading(actualHeading)
+    actualHeading = tonumber(actualHeading)
+    if not actualHeading or actualHeading ~= actualHeading or math.abs(actualHeading) > 100000 then
+        return false, "Invalid heading"
+    end
+
+    local nav = FlightCore.nav
+    local now = os.epoch("utc") / 1000
+    if FlightCore.state.mode ~= "HOLD_ALT" then
+        return false, "Engage HOLD_ALT and point with go n/e/s/w first"
+    end
+    if not nav.lastHeadingAt or now - nav.lastHeadingAt > 0.5 then
+        return false, "Fresh heading sensor data is required"
+    end
+    if nav.wpActive or nav.braking then
+        return false, "Cancel waypoint navigation before heading calibration"
+    end
+
+    local actual = wrapHeading(math.floor(actualHeading + 0.5))
+    local correction = signedAngle(actual - nav.yaw)
+    local newOffset = normalizeSignedHeading((nav.headingOffset or 0) + correction)
+    if not fs or type(fs.open) ~= "function" then
+        return false, "Computer filesystem is unavailable; calibration was not saved"
+    end
+
+    local okOpen, file = pcall(fs.open, HEADING_CALIBRATION_FILE, "w")
+    if not okOpen or not file then
+        return false, "Could not open calibration file; calibration was not saved"
+    end
+    local okWrite = pcall(function() file.write(string.format("%.6f", newOffset)) end)
+    local okClose = pcall(function() file.close() end)
+    if not okWrite or not okClose then
+        return false, "Could not save calibration file"
+    end
+
+    nav.headingOffset = newOffset
+    nav.yaw = actual
+    nav.targetHeading = actual
+    nav.headingHold = true
+    nav.turnPowerLimit = 3.0
+    nav.turnSlowSince = nil
+    nav.lastTurnPowerAdjustAt = 0
+    nav.yawRate = 0
+    nav.previousYaw = actual
+    nav.previousYawAt = now
+    FlightCore.state.fwdThrottle = 0
+    FlightCore.state.turnThrottle = 0
+    FlightCore.state.strafeThrottle = 0
+    FlightCore.state.statusMsg = string.format("BOW CALIBRATED: %03d* OFFSET %+04.0f* SAVED", actual, newOffset)
+    return true, newOffset
+end
+
 function FlightCore.adjustTargetHeading(delta)
     FlightCore.setTargetHeading(FlightCore.nav.targetHeading + delta)
 end
@@ -1351,6 +1432,7 @@ local function handleFccCommand(side, ch, replyCh, msg, dist)
         elseif cmd == "SET_TURN" then FlightCore.setTurnThrottle(msg.val or 0)
         elseif cmd == "STOP_HORIZ" then FlightCore.stopHorizontalThrust()
         elseif cmd == "SET_HEADING" then FlightCore.setTargetHeading(msg.hdg or 0)
+        elseif cmd == "CALIBRATE_HEADING" then FlightCore.calibrateHeading(msg.hdg)
         elseif cmd == "ADJ_HEADING" then FlightCore.adjustTargetHeading(msg.delta or 0)
         elseif cmd == "TOGGLE_HEADING" then FlightCore.toggleHeadingHold()
         elseif cmd == "SYNC_HEADING" then FlightCore.syncHeading()
@@ -1388,6 +1470,7 @@ local function broadcastTelemetry()
             y = FlightCore.nav.y,
             z = FlightCore.nav.z,
             yaw = FlightCore.nav.yaw,
+            headingOffset = FlightCore.nav.headingOffset or 0,
             pitch = FlightCore.nav.pitch,
             roll = FlightCore.nav.roll,
             speed = FlightCore.nav.speed,
