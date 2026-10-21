@@ -1,7 +1,7 @@
 --[[
     Create: Avionics & CC: Tweaked
     Unified Multi-Engine Avionics Flight Computer (多軸模組化統一飛控大腦)
-    Version: v4.4.1 Modular Bundle
+    Version: v4.4.2 Modular Bundle
     NAV PROFILE: hover controls remain independent; waypoint control is speed-limited and requires fresh position/heading fixes.
     
     螢幕尺寸自適應分類 (Dual Screen Size Mode):
@@ -17,7 +17,7 @@
       run.lua normal       (強制使用 CC 原生螢幕/終端機驅動)
 --]]
 
-local VERSION = "v4.4.1"
+local VERSION = "v4.4.2"
 local args = {...}
 local requestedDriver = args[1] and string.lower(args[1]) or "auto"
 
@@ -924,7 +924,7 @@ function FlightCore.updateNavigationControl()
 
     local function adaptiveTurn(headingError)
         local errorMagnitude = math.abs(headingError)
-        if errorMagnitude <= 5 then
+        if errorMagnitude <= 2 then
             nav.turnSlowSince = nil
             return 0
         end
@@ -932,11 +932,12 @@ function FlightCore.updateNavigationControl()
         local now = os.epoch("utc") / 1000
         local direction = headingError > 0 and 1 or -1
         local yawRateTowardTarget = (nav.yawRate or 0) * direction
-        local expectedRate = clamp(errorMagnitude * 0.35, 6, 25)
+        local expectedRate = clamp(errorMagnitude * 0.35, 4, 25)
         local limit = clamp(nav.turnPowerLimit or 3.0, 3.0, 12.0)
+        local responseTooSlow = yawRateTowardTarget >= -3
+            and yawRateTowardTarget < expectedRate * 0.55
 
-        if errorMagnitude > 15 and yawRateTowardTarget >= -3
-            and yawRateTowardTarget < expectedRate * 0.55 then
+        if errorMagnitude > 3 and responseTooSlow then
             nav.turnSlowSince = nav.turnSlowSince or now
             if now - nav.turnSlowSince >= 0.4 and now - (nav.lastTurnPowerAdjustAt or 0) >= 0.35 then
                 limit = math.min(12.0, limit + 1.5)
@@ -955,7 +956,13 @@ function FlightCore.updateNavigationControl()
 
         local requested = errorMagnitude * 0.07 - yawRateTowardTarget * 0.035
         requested = clamp(requested, 0, limit)
-        if requested < 0.7 and errorMagnitude > 10 then requested = 0.7 end
+        if errorMagnitude > 3 and responseTooSlow then
+            -- Hold a steady usable signal while the measured yaw response is weak.
+            -- This also avoids sparse Sigma-Delta pulses from sub-1.0 commands.
+            requested = limit
+        elseif requested < 1.5 then
+            requested = 1.5
+        end
         return direction * requested
     end
 
