@@ -34,6 +34,14 @@ jobs:
         run: |
           python bundle.py
 
+      - name: Install pinned Fengari Lua runtime for checks
+        run: npm install --prefix "$RUNNER_TEMP/fengari" --no-save --ignore-scripts fengari@0.1.5
+
+      - name: Parse generated Lua and run OC2 behavior tests
+        env:
+          NODE_PATH: ${{ runner.temp }}/fengari/node_modules
+        run: node tests/run_fengari.cjs
+
       - name: Extract Versions and Build Date Tag
         id: vars
         run: |
@@ -76,11 +84,13 @@ jobs:
           boot install cli      # 安裝 獨立命令列終端
           boot install display  # 安裝 駕駛艙螢幕系統
           boot install turtle   # 安裝 動力烏龜韌體並重啟
+          boot install oc2-bridge --fcc 42 --address 1 --peer 2 --baud 9600
 
           # 直接從 GitHub Release 下載最新版運行:
           boot cli              # 啟動 FCC-CLI 命令終端
           boot fcc              # 啟動 FCC 飛控大腦
           boot display          # 啟動 駕駛艙螢幕
+          boot oc2-bridge --fcc 42 --address 1 --peer 2 --baud 9600
           ```
 
           ### 📦 本次發布包含附件 (Release Assets)
@@ -88,6 +98,7 @@ jobs:
           - **`fcc.lua`**：分散式獨立飛控大腦 (Flight Control Computer) — 0% 畫面開銷，20Hz 極速 PD-V 飛控。
           - **`fcc-cli.lua`**：飛控命令列與即時儀表終端 (FCC-CLI) — 支援 `go x z` 導航、高度/航向控制、遠端 OTA 更新與重啟烏龜。
           - **`display.lua`**：分散式駕駛艙螢幕系統 (Cockpit Display System) — 專職 DirectGPU / Tom's / Normal 儀表渲染。
+          - **`oc2-bridge.lua`**：額外 CC 電腦上的 OC2 串列橋接器；需 OC2 Network Connector、`oc2_serial_interface` 與有線 CC modem。
           - **`run.lua`**：單機一體化飛控大腦程式 (整合 FCC + 螢幕顯示)。
           - **`turtle_startup.lua`**：動力推進烏龜韌體程式 (放置於 FL/FR/BL/BR/FWD 烏龜中)。
 
@@ -102,7 +113,7 @@ jobs:
         run: |
           TAG="${{ steps.vars.outputs.tag_name }}"
           TITLE="${{ steps.vars.outputs.release_title }}"
-          FILES="run.lua fcc.lua display.lua fcc-cli.lua turtle_startup.lua boot.lua"
+          FILES="run.lua fcc.lua display.lua fcc-cli.lua oc2-bridge.lua turtle_startup.lua boot.lua"
 
           echo "Publishing release: $TAG with title: $TITLE"
           if gh release view "$TAG" > /dev/null 2>&1; then

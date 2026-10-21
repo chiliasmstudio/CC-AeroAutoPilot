@@ -7,6 +7,7 @@ bundle.py — VTOL Avionics Flight Computer Bundler & Validator
   1. run.lua     (單機一體化飛控大腦)
   2. fcc.lua     (分散式獨立飛控大腦 FCC - 0% 畫面開銷，20Hz 純計算)
   3. display.lua (分散式駕駛艙螢幕系統 CDS - 專職螢幕渲染與觸控)
+  4. oc2-bridge.lua (OC2 串列卡與 CC 有線 modem 的獨立橋接器)
 並進行語法與區塊平衡自動校驗。
 
 使用方式:
@@ -27,6 +28,7 @@ OUTPUT_DISPLAY_LUA = os.path.join(PROJECT_DIR, "display.lua")
 OUTPUT_CLI_LUA = os.path.join(PROJECT_DIR, "fcc-cli.lua")
 OUTPUT_BOOT_LUA = os.path.join(PROJECT_DIR, "boot.lua")
 OUTPUT_TURTLE_LUA = os.path.join(PROJECT_DIR, "turtle_startup.lua")
+OUTPUT_OC2_BRIDGE_LUA = os.path.join(PROJECT_DIR, "oc2-bridge.lua")
 VERSION_XML_FILE = os.path.join(PROJECT_DIR, "version.xml")
 
 import xml.etree.ElementTree as ET
@@ -201,6 +203,18 @@ def bundle():
     driver_direct_code = read_file(os.path.join(DRIVERS_DIR, "directgpu.lua"))
     driver_tom_code = read_file(os.path.join(DRIVERS_DIR, "tom.lua"))
     driver_normal_code = read_file(os.path.join(DRIVERS_DIR, "normal.lua"))
+    oc2_wire_code = read_file(os.path.join(MODULES_DIR, "oc2_wire.lua"))
+    oc2_protocol_code = read_file(os.path.join(MODULES_DIR, "oc2_protocol.lua"))
+    oc2_bridge_code = read_file(os.path.join(MODULES_DIR, "oc2_bridge.lua"))
+
+    def module_body(source, module_name):
+        body, count = re.subn(r"\nreturn M\s*$", "", source.strip(), count=1)
+        if count != 1:
+            raise ValueError(f"{module_name} must end with `return M`")
+        return body
+
+    oc2_wire_body = module_body(oc2_wire_code, "oc2_wire.lua")
+    oc2_protocol_body = module_body(oc2_protocol_code, "oc2_protocol.lua")
 
     # 提取 FONT_5X7 結構
     font_match = re.search(r"local FONT_5X7 = \{[\s\S]*?\n\}", font_code)
@@ -395,6 +409,7 @@ parallel.waitForAny(flightLoop, renderLoop, eventLoop)
     - 20Hz 高頻穩定 PD-V 垂直升力與高度控制，永不卡頓
     - 支援 Channel 100/101 四軸升力與標記水平推進烏龜同步
     - 支援 Channel 102 遙測狀態廣播 (10Hz) 與 Channel 103 駕駛艙螢幕指令接收
+    - OC-Aero v1 新增 Channel 104/105 請求、狀態摘要、去重 ACK 與過期防護
     - 徹底根除 "Too long without yielding"
 --]]
 
@@ -409,31 +424,71 @@ local VERSION = "{VERSION}"
 -- ========================================================
 -- PART 2: FCC 遙測廣播與駕駛艙指令通訊協議 (FCC TELEMETRY & COMMANDS)
 -- ========================================================
+local Oc2Protocol = OC2Protocol.new(os.getComputerID(), FlightCore)
+local latestOc2Snapshot = {}
+
+local function executeFccCommand(msg)
+    return OC2Protocol.dispatchLegacy(FlightCore, msg)
+end
+
 local function handleFccCommand(side, ch, replyCh, msg, dist)
     if ch == 103 and type(msg) == "table" and msg.cmd then
-        local cmd = msg.cmd
-        if cmd == "HOLD_ALT" then FlightCore.holdAltitude()
-        elseif cmd == "CALIB" then FlightCore.startCalibration()
-        elseif cmd == "STOP" then FlightCore.stopEngines()
-        elseif cmd == "LOCK_ALT" then FlightCore.lockCurrentAlt()
-        elseif cmd == "ADJ_ALT" then FlightCore.adjustTargetAlt(msg.delta or 0)
-        elseif cmd == "SET_ALT" then FlightCore.setTargetAlt(msg.alt or 0)
-        elseif cmd == "ADJ_BASE" then FlightCore.adjustBaseThrottle(msg.delta or 0)
-        elseif cmd == "ADJ_FWD" then FlightCore.adjustForwardThrottle(msg.delta or 0)
-        elseif cmd == "SET_FWD" then FlightCore.setForwardThrottle(msg.val or 0)
-        elseif cmd == "ADJ_TURN" then FlightCore.adjustTurnThrottle(msg.delta or 0)
-        elseif cmd == "SET_TURN" then FlightCore.setTurnThrottle(msg.val or 0)
-        elseif cmd == "STOP_HORIZ" then FlightCore.stopHorizontalThrust()
-        elseif cmd == "SET_HEADING" then FlightCore.setTargetHeading(msg.hdg or 0)
-        elseif cmd == "CALIBRATE_HEADING" then FlightCore.calibrateHeading(msg.hdg)
-        elseif cmd == "ADJ_HEADING" then FlightCore.adjustTargetHeading(msg.delta or 0)
-        elseif cmd == "TOGGLE_HEADING" then FlightCore.toggleHeadingHold()
-        elseif cmd == "SYNC_HEADING" then FlightCore.syncHeading()
-        elseif cmd == "SET_WAYPOINT" then FlightCore.setWaypoint(msg.x, msg.z, msg.radius, msg.y)
-        elseif cmd == "CANCEL_WAYPOINT" then FlightCore.cancelWaypoint()
-        elseif cmd == "RESCAN_HW" then FlightCore.scanQuadTurtles()
-        end
+        pcall(executeFccCommand, msg)
     end
+end
+
+local function handleOc2Request(replyCh, request)
+    if replyCh ~= 105 then return end
+    local ok, reply = pcall(function()
+        return Oc2Protocol.handle(request, os.epoch("utc"), latestOc2Snapshot)
+    end)
+    if not ok then
+        if type(request) ~= "table" or type(request.client) ~= "string"
+            or type(request.id) ~= "number" or request.target ~= os.getComputerID() then return end
+        reply = {
+            protocol = "oc-aero/1", type = "reply", channel = 105,
+            client = request.client, id = request.id, source = os.getComputerID(),
+            ok = false, error = "COMMAND_FAILED"
+        }
+    end
+    if type(reply) ~= "table" then return end
+
+    local encodedOk, encoded = pcall(textutils.serializeJSON, reply)
+    if not encodedOk or type(encoded) ~= "string" or #encoded > 4096 then
+        if type(request) ~= "table" or type(request.client) ~= "string" or type(request.id) ~= "number" then return end
+        reply = {
+            protocol = "oc-aero/1", type = "reply", channel = 105,
+            client = request.client, id = request.id, source = os.getComputerID(),
+            ok = false, error = "RESPONSE_TOO_LARGE"
+        }
+    end
+    for _, m in ipairs(FlightCore.modems) do
+        pcall(function() m.transmit(105, 104, reply) end)
+    end
+end
+
+local function snapshotForOc2(teleMsg)
+    local sourceNav = teleMsg.nav or {}
+    local sourceOutputs = teleMsg.outputs or {}
+    local nav, outputs = {}, {}
+    for _, key in ipairs({ "fixReady", "headingReady", "positionReady", "wpActive" }) do nav[key] = sourceNav[key] end
+    if sourceNav.positionReady then
+        for _, key in ipairs({ "x", "y", "z", "speed" }) do nav[key] = sourceNav[key] end
+    end
+    if sourceNav.headingReady then
+        nav.yaw = sourceNav.yaw
+        if sourceNav.headingHold or sourceNav.wpActive then nav.targetHeading = sourceNav.targetHeading end
+    end
+    for _, key in ipairs({ "FL", "FR", "BL", "BR", "FWD", "BWD", "LEFT", "RIGHT" }) do
+        outputs[key] = sourceOutputs[key]
+    end
+    return {
+        mode = teleMsg.mode,
+        currentAlt = (FlightCore.altiSensor or sourceNav.positionReady) and teleMsg.currentAlt or nil,
+        targetAlt = teleMsg.targetAlt, baseThrottle = teleMsg.baseThrottle,
+        vspeed = (FlightCore.altiSensor or sourceNav.positionReady) and teleMsg.vspeed or nil,
+        nav = nav, outputs = outputs, hw = teleMsg.hw
+    }
 end
 
 local function broadcastTelemetry()
@@ -499,6 +554,8 @@ local function broadcastTelemetry()
         timestamp = os.epoch("utc")
     }
 
+    latestOc2Snapshot = snapshotForOc2(teleMsg)
+
     for _, m in ipairs(FlightCore.modems) do
         pcall(function() m.transmit(102, 103, teleMsg) end)
     end
@@ -511,6 +568,7 @@ FlightCore.scanQuadTurtles()
 for _, m in ipairs(FlightCore.modems) do
     pcall(function() m.open(101) end)
     pcall(function() m.open(103) end)
+    pcall(function() m.open(104) end)
 end
 
 local teleTick = 0
@@ -535,12 +593,15 @@ local function eventLoop()
                 FlightCore.handleModemMessage(side, ch, replyCh, msg, dist)
             elseif ch == 103 then
                 handleFccCommand(side, ch, replyCh, msg, dist)
+            elseif ch == 104 then
+                handleOc2Request(replyCh, msg)
             end
         elseif event == "peripheral" or event == "peripheral_detach" then
             pcall(function() FlightCore.scanQuadTurtles() end)
             for _, m in ipairs(FlightCore.modems) do
                 pcall(function() m.open(101) end)
                 pcall(function() m.open(103) end)
+                pcall(function() m.open(104) end)
             end
         elseif event == "terminate" then
             FlightCore.stopEngines()
@@ -580,7 +641,7 @@ local function uiLoop()
         print(string.format(" Lift   : FL:%.1f FR:%.1f BL:%.1f BR:%.1f", FlightCore.virtualOutputs.FL or 0, FlightCore.virtualOutputs.FR or 0, FlightCore.virtualOutputs.BL or 0, FlightCore.virtualOutputs.BR or 0))
         print(string.format(" Cruis  : FWD:%.1f BWD:%.1f L:%.1f R:%.1f", FlightCore.virtualOutputs.FWD or 0, FlightCore.virtualOutputs.BWD or 0, FlightCore.virtualOutputs.LEFT or 0, FlightCore.virtualOutputs.RIGHT or 0))
         print(string.format(" Turtles: FL(%d) FR(%d) BL(%d) BR(%d) FWD(%d)", qFL.online, qFR.online, qBL.online, qBR.online, qFWD.online))
-        print(" Net Ch : 100(Turtles) 102(Tele) 103(Cmd)")
+        print(" Net Ch : 100(Turtles) 102(Tele) 103(Cmd) 104/105(OC2)")
         print("========================================")
         print(" FCC Core Running (0% CPU, No Render)")
         print(" Press Ctrl+T to Terminate.")
@@ -594,6 +655,7 @@ parallel.waitForAny(flightLoop, eventLoop, uiLoop)
     bundled_fcc = (
         fcc_header + "\n" +
         flight_core_body + "\n" +
+        "local OC2Protocol = (function()\n" + oc2_protocol_body + "\nend)()\n" +
         fcc_orchestrator
     )
 
@@ -601,6 +663,24 @@ parallel.waitForAny(flightLoop, eventLoop, uiLoop)
         f.write(bundled_fcc)
     print(f"✅ Compiled {os.path.basename(OUTPUT_FCC_LUA)} ({len(bundled_fcc.splitlines())} lines)")
     validate_syntax(OUTPUT_FCC_LUA)
+
+    # ========================================================
+    # 3.1 生成獨立 OC2 串列／有線 Modem 橋接器
+    # ========================================================
+    bridge_header = f"""--[[
+    CC-AeroAutoPilot OC2 Serial Bridge
+    Version: {VERSION}
+    Dedicated CC computer: wired modem + OC2 Network Connector serial peripheral.
+    Example: oc2-bridge --fcc 42 --address 1 --peer 2 --baud 9600
+--]]
+
+local OC2Wire = (function()
+""" + oc2_wire_body + "\nend)()\n\nlocal OC2Protocol = (function()\n" + oc2_protocol_body + "\nend)()\n\nlocal OC2Bridge = (function()\n" + oc2_bridge_code.strip() + "\nend)()\n\nlocal exitCode = OC2Bridge.run({...})\n" + 'if exitCode and exitCode ~= 0 then error("OC2 bridge failed with status " .. tostring(exitCode), 0) end\n'
+
+    with open(OUTPUT_OC2_BRIDGE_LUA, "w", encoding="utf-8") as f:
+        f.write(bridge_header)
+    print(f"✅ Compiled {os.path.basename(OUTPUT_OC2_BRIDGE_LUA)} ({len(bridge_header.splitlines())} lines)")
+    validate_syntax(OUTPUT_OC2_BRIDGE_LUA)
 
     # ========================================================
     # 4. 生成 display.lua (分散式駕駛艙螢幕系統)
@@ -974,7 +1054,7 @@ parallel.waitForAny(renderLoop, eventLoop)
         f.write(bundled_display)
     print(f"✅ Compiled {os.path.basename(OUTPUT_DISPLAY_LUA)} ({len(bundled_display.splitlines())} lines)")
 
-    # 4. 同步版本號至 Standalone 程式 (fcc-cli.lua, boot.lua, turtle_startup.lua)
+    # 4. 同步版本號至 Standalone 程式
     update_file_version(OUTPUT_CLI_LUA, COMP_VER, "computer")
     print(f"🔄 Synchronized {os.path.basename(OUTPUT_CLI_LUA)} -> {COMP_VER}")
     
@@ -984,6 +1064,9 @@ parallel.waitForAny(renderLoop, eventLoop)
     update_file_version(OUTPUT_TURTLE_LUA, TURT_VER, "turtle")
     print(f"🔄 Synchronized {os.path.basename(OUTPUT_TURTLE_LUA)} -> {TURT_VER}")
 
+    update_file_version(OUTPUT_OC2_BRIDGE_LUA, COMP_VER, "computer")
+    print(f"🔄 Synchronized {os.path.basename(OUTPUT_OC2_BRIDGE_LUA)} -> {COMP_VER}")
+
     # 5. 語法檢查所有發布檔案
     print("\n🔍 Validating syntax across all release assets...")
     for label, path in [
@@ -991,6 +1074,7 @@ parallel.waitForAny(renderLoop, eventLoop)
         ("fcc.lua (FCC Brain)", OUTPUT_FCC_LUA),
         ("display.lua (CDS Display)", OUTPUT_DISPLAY_LUA),
         ("fcc-cli.lua (Command Console)", OUTPUT_CLI_LUA),
+        ("oc2-bridge.lua (OC2 Serial Bridge)", OUTPUT_OC2_BRIDGE_LUA),
         ("turtle_startup.lua (Turtle Node)", OUTPUT_TURTLE_LUA),
         ("boot.lua (Universal Launcher)", OUTPUT_BOOT_LUA)
     ]:
@@ -999,7 +1083,7 @@ parallel.waitForAny(renderLoop, eventLoop)
 
     print("\n" + "=" * 60)
     print("✨ Build & Version Synchronization Complete!")
-    print(f"   🖥️  Computer Suite : {COMP_VER} (run.lua, fcc.lua, display.lua, fcc-cli.lua, boot.lua)")
+    print(f"   🖥️  Computer Suite : {COMP_VER} (run.lua, fcc.lua, display.lua, fcc-cli.lua, oc2-bridge.lua, boot.lua)")
     print(f"   🐢 Turtle Firmware: {TURT_VER} (turtle_startup.lua)")
     print("=" * 60)
 

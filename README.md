@@ -3,7 +3,7 @@
 > **目前電腦端韌體保留懸停並重新啟用受限導航**：航點導航需要有效位置與航向資料，並要求先啟用高度保持；感測器失效或資料過期時，水平推力歸零。垂直升力控制與水平導航分離。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Computer Suite: v4.5.1](https://img.shields.io/badge/Computer_Suite-v4.5.1-blue.svg)](https://github.com/chiliasmstudio/CC-AeroAutoPilot/releases/latest)
+[![Computer Suite: v4.6.0](https://img.shields.io/badge/Computer_Suite-v4.6.0-blue.svg)](https://github.com/chiliasmstudio/CC-AeroAutoPilot/releases/latest)
 [![Turtle Firmware: v4.0.12](https://img.shields.io/badge/Turtle_Firmware-v4.0.12-green.svg)](https://github.com/chiliasmstudio/CC-AeroAutoPilot/releases/latest)
 
 > [!NOTE]
@@ -216,6 +216,7 @@ python bundle.py
 - **`fcc.lua`**：分散式獨立飛控大腦 (FCC)。
 - **`display.lua`**：分散式駕駛艙螢幕系統 (CDS)。
 - **`fcc-cli.lua`**：獨立命令列終端與儀表 (FCC-CLI)。
+- **`oc2-bridge.lua`**：OC2 Network Connector raw serial 與 CC 有線 modem 104/105 橋接器。
 - **`turtle_startup.lua`**：發動機烏龜通用韌體。
 - **`boot.lua`**：通用 Release 自動下載與安裝啟動器。
 
@@ -226,3 +227,18 @@ python bundle.py
 ## 📄 授權條款 (License)
 
 本專案採用 [MIT License](LICENSE) 開源授權。任何人皆可自由使用、修改、分發與商業應用，惟須保留原著作權與授權聲明。
+
+### OC2 串列 CLI（額外 CC 電腦）
+
+OC2 Network Connector 的串列線接到一台額外 CC 電腦；該電腦須同時連接 `oc2_serial_interface` 與**有線 CC modem 網路**。Bridge 只接受有線 modem，不使用無線 modem。預設 CC bridge address 為 `1`、OC2 對端 address 為 `2`、baud 為 `9600`；多個 serial 或 modem 周邊時需加 `--serial <周邊名>` 或 `--modem <周邊名>`。
+
+OC2 serial card 設為 address `2`，其 CLI 對端設為 `1`（OC2 用戶端預設值）；CC bridge 啟動時會設定 `oc2_serial_interface` address `1` 和 baud `9600`。
+
+```text
+boot oc2-bridge --fcc 42 --address 1 --peer 2 --baud 9600
+boot install oc2-bridge --fcc 42 --address 1 --peer 2 --baud 9600
+```
+
+將 `42` 換成 FCC 電腦 ID。安裝模式會保留參數於啟動包裝器，並另存 `oc2-bridge.lua`。OC2 CLI 透過 CC 通道 104/105 查詢狀態及傳送白名單指令；原有 100–103 通道維持不變。Bridge 失聯不會接管 FCC，也不會自動停止或重送命令。通道 ID 只提供路由與去重，不是身份驗證；請將同一有線 CC modem 網路視為可信網路。
+
+離線行為測試可用 Lua 執行 `lua tests/run.lua`。Release 建置會用固定版 Fengari 解析全部生成 Lua 資產並執行相同測試：`node tests/run_fengari.cjs`。

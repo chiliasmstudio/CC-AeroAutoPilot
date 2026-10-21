@@ -12,6 +12,7 @@ COMPUTER_FILES = {
     "display.lua",
     "fcc-cli.lua",
     "boot.lua",
+    "oc2-bridge.lua",
 }
 TURTLE_FILES = {"turtle_startup.lua"}
 

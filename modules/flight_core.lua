@@ -1054,9 +1054,16 @@ end
 
 function FlightCore.lockCurrentAlt()
     if FlightCore.altiSensor then
-        local currentAlt = FlightCore.altiSensor.getHeight() or 0
+        local ok, currentAlt = pcall(function() return FlightCore.altiSensor.getHeight() end)
+        if not ok or type(currentAlt) ~= "number" or currentAlt ~= currentAlt or math.abs(currentAlt) == math.huge then
+            FlightCore.state.statusMsg = "ERR: Altitude sensor read failed"
+            return false, "Altitude sensor read failed"
+        end
         FlightCore.setTargetAlt(currentAlt)
+        return true
     end
+    FlightCore.state.statusMsg = "ERR: No Altitude Sensor!"
+    return false, "No altitude sensor"
 end
 
 function FlightCore.adjustBaseThrottle(delta)
@@ -1103,9 +1110,13 @@ function FlightCore.startCalibration()
     end
     if not FlightCore.altiSensor then
         FlightCore.state.statusMsg = "ERR: No Altitude Sensor!"
-        return
+        return false, "No altitude sensor"
     end
-    local curAlt = FlightCore.altiSensor.getHeight() or 0
+    local ok, curAlt = pcall(function() return FlightCore.altiSensor.getHeight() end)
+    if not ok or type(curAlt) ~= "number" or curAlt ~= curAlt or math.abs(curAlt) == math.huge then
+        FlightCore.state.statusMsg = "ERR: Altitude sensor read failed"
+        return false, "Altitude sensor read failed"
+    end
     FlightCore.state.mode = "CALIBRATING"
     FlightCore.state.calibPhase = "GROUND_SEARCH"
     FlightCore.state.calibStartAlt = curAlt
@@ -1115,6 +1126,7 @@ function FlightCore.startCalibration()
     FlightCore.state.stableTimer = 0
     FlightCore.state.statusMsg = "Calibrating: Searching Liftoff..."
     FlightCore.altPID:reset()
+    return true
 end
 
 function FlightCore.setTargetHeading(hdg)

@@ -17,7 +17,7 @@
 
 任何會改變可執行韌體行為的修改，都必須在同一個提交中遞增對應的版本號，不能只更新程式或只依賴發布時再升版：
 
-1. 修改電腦端程式（`modules/`、`bundle.py`、`run.lua`、`fcc.lua`、`display.lua`、`fcc-cli.lua` 或 `boot.lua`）時，執行 `python bundle.py --bump-computer patch`；若屬於功能或不相容變更，依 SemVer 慣例改用 `minor` 或 `major`。
+1. 修改電腦端程式（`modules/`、`bundle.py`、`run.lua`、`fcc.lua`、`display.lua`、`fcc-cli.lua`、`oc2-bridge.lua` 或 `boot.lua`）時，執行 `python bundle.py --bump-computer patch`；若屬於功能或不相容變更，依 SemVer 慣例改用 `minor` 或 `major`。
 2. 修改烏龜韌體 `turtle_startup.lua` 時，執行 `python bundle.py --bump-turtle patch`。兩端都修改時執行 `python bundle.py --bump patch`。
 3. 以上命令會更新 `version.xml` 並重新打包；檢查 `version.xml`、產生檔版本標頭與差異後，將版本檔和所有產物一併提交。純文件修改不需遞增韌體版本。
 4. `.github/workflows/version-check.yml` 會在 Pull Request 和推送至 `main` 時檢查：若對應韌體程式有變更，`version.xml` 的該端版本必須高於基底提交，否則 CI 失敗。此檢查是防止漏升版的強制閘門。
@@ -443,3 +443,20 @@ $$\text{PWM}_i = \text{round}(T_i) \quad (0 \le \text{PWM}_i \le 15)$$
 
 ---
 *文檔更新時間：2026-09-24 | 飛控核心版本：VTOL Avionics v3.8.2 Modular*
+
+## OC2 串列 CLI 橋接器
+
+OC-Aero v1 將 OC2 暫作唯讀狀態查詢與受限飛控 CLI；FCC 仍是唯一飛控核心。OC2 不取得 PID、感測器或引擎輸出控制權。協定原始碼位於 `modules/oc2_wire.lua`、`modules/oc2_protocol.lua`、`modules/oc2_bridge.lua`；`bundle.py` 將它們內嵌成發布資產 `oc2-bridge.lua`，並將協定 handler 內嵌到 `fcc.lua`。請修改原始碼後重新打包，不要直接編輯生成檔。
+
+部署拓撲：OC2 Serial Interface Card address `2` — 串列線 — 額外 CC 電腦的 `oc2_serial_interface` address `1` — **有線 modem 網路** — FCC。Bridge 只選擇 `isWireless() == false` 的 CC modem；多個 serial/modem 周邊需用 `--serial` / `--modem` 明確選擇。FCC ID 必須指定，禁止廣播。例：
+
+```text
+boot oc2-bridge --fcc 42 --address 1 --peer 2 --baud 9600
+boot install oc2-bridge --fcc 42 --address 1 --peer 2 --baud 9600
+```
+
+安裝命令會將 bridge 保存為 `oc2-bridge.lua`，並建立保留參數的 `startup.lua` 包裝器。Bridge 使用 CC 有線通道 104/105，只轉送 OC-Aero JSON，不轉送舊通道 103 或引擎通道 100；不重送請求，串列或 modem 斷線時清空等待佇列，也不會自動執行 `STOP`。client、id、target 是路由與防誤配資料，不是身份驗證；此版本假設有線 CC modem 網路由可信節點組成。
+
+FCC 命令共用 dispatcher，舊 103 CLI/CDS 行為保留；104 嚴格檢查命令白名單、參數型別／範圍、UTC 過期時間，並以 `(client,id)` 快取 30 秒 ACK（最多 256 筆），重複封包不會重做相對高度或油門調整。狀態只使用 FCC 既有 10Hz 遙測樣本，不額外讀取感測器；硬體只回摘要，JSON 上限 4096 bytes。Bridge 先驗證串列 raw frame checksum／地址，再重組 OA1 分片，最後解析完整 UTF-8 JSON。
+
+離線測試位於 `tests/`；標準 Lua 可執行 `lua tests/run.lua`。Release workflow 另用固定版 Fengari 對全部生成 Lua 檔做真正的 Lua parser 載入，再執行 `tests/run.lua`；`bundle.py` 的區塊平衡輸出不取代這兩項檢查。

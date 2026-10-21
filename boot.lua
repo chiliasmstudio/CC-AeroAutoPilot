@@ -1,6 +1,6 @@
 --[[
     boot.lua — CC-AeroAutoPilot Universal Release Launcher & Auto-Updater
-    Version: v4.5.1
+    Version: v4.6.0
     ====================================================================
     自動從 GitHub Releases 下載最新版本並執行或安裝至本機磁碟。
 
@@ -10,11 +10,13 @@
       boot.lua install fcc      (直接安裝 分散式飛控大腦 fcc.lua 為開機自啟 startup.lua)
       boot.lua install cli      (直接安裝 獨立命令終端 fcc-cli.lua 為開機自啟 startup.lua)
       boot.lua install display  (直接安裝 駕駛艙螢幕 display.lua 為開機自啟 startup.lua)
+      boot.lua install oc2-bridge --fcc 42 [--serial name] (安裝 OC2 串列橋接器)
       boot.lua install turtle   (直接安裝 動力烏龜韌體 startup.lua 並重啟)
       boot.lua cli              (直接從 Release 下載並執行 fcc-cli.lua)
       boot.lua fcc              (直接從 Release 下載並執行 fcc.lua)
       boot.lua display          (直接從 Release 下載並執行 display.lua)
       boot.lua run              (直接從 Release 下載並執行 run.lua)
+      boot.lua oc2-bridge --fcc 42 [--serial name] (執行 OC2 串列橋接器)
 --]]
 
 local rawArgs = { ... }
@@ -42,6 +44,8 @@ for _, arg in ipairs(rawArgs) do
         targetType = "fcc"
     elseif lArg == "display" or lArg == "display.lua" or lArg == "screen" then
         targetType = "display"
+    elseif lArg == "oc2-bridge" or lArg == "oc2_bridge" or lArg == "bridge" or lArg == "oc2-bridge.lua" then
+        targetType = "oc2-bridge"
     elseif lArg == "run" or lArg == "run.lua" or lArg == "all" then
         targetType = "run"
     elseif lArg == "turtle" or lArg == "turtle_startup.lua" or lArg == "node" then
@@ -81,13 +85,15 @@ if not targetType then
         print("  [3] Cockpit Display   (駕駛艙螢幕 - DirectGPU / 儀表板)")
         print("  [4] All-In-One Run    (單機一體化全功能飛控)")
         print("  [5] Turtle Node       (動力烏龜韌體 - 安裝後自動重啟)")
+        print("  [6] OC2 Serial Bridge (額外 CC 電腦；有線 modem + OC2 串列周邊)")
         print("----------------------------------------")
-        write(" Enter Component [1-5] (Default 1): ")
+        write(" Enter Component [1-6] (Default 1): ")
         local sub = read():gsub("^%s*(.-)%s*$", "%1")
         if sub == "2" or sub == "cli" then targetType = "cli"
         elseif sub == "3" or sub == "display" then targetType = "display"
         elseif sub == "4" or sub == "run" then targetType = "run"
         elseif sub == "5" or sub == "turtle" then targetType = "turtle"
+        elseif sub == "6" or sub == "oc2-bridge" or sub == "bridge" then targetType = "oc2-bridge"
         else targetType = "fcc" end
     else
         print("\n--- Run Latest Component from Release ---")
@@ -95,13 +101,38 @@ if not targetType then
         print("  [2] FCC Flight Core   (飛控大腦 - 20Hz 純計算後台)")
         print("  [3] Cockpit Display   (駕駛艙螢幕 - DirectGPU / 儀表板)")
         print("  [4] All-In-One Run    (單機一體化全功能飛控)")
+        print("  [5] OC2 Serial Bridge (額外 CC 電腦；有線 modem + OC2 串列周邊)")
         print("----------------------------------------")
-        write(" Enter Component [1-4] (Default 1): ")
+        write(" Enter Component [1-5] (Default 1): ")
         local sub = read():gsub("^%s*(.-)%s*$", "%1")
         if sub == "2" or sub == "fcc" then targetType = "fcc"
         elseif sub == "3" or sub == "display" then targetType = "display"
         elseif sub == "4" or sub == "run" then targetType = "run"
+        elseif sub == "5" or sub == "oc2-bridge" or sub == "bridge" then targetType = "oc2-bridge"
         else targetType = "cli" end
+    end
+end
+
+if targetType == "oc2-bridge" then
+    local hasFcc, hasHelp = false, false
+    for i, value in ipairs(forwardArgs) do
+        if value == "--fcc" and forwardArgs[i + 1] and forwardArgs[i + 1]:sub(1, 1) ~= "-" then hasFcc = true end
+        if value == "--help" or value == "-h" then hasHelp = true end
+    end
+    if hasHelp then
+        isInstall = false
+    elseif not hasFcc then
+        for i = #forwardArgs, 1, -1 do
+            if forwardArgs[i] == "--fcc" then table.remove(forwardArgs, i) end
+        end
+        write(" FCC computer ID (required): ")
+        local fccId = read():gsub("^%s*(.-)%s*$", "%1")
+        if fccId == "" then
+            printError("OC2 bridge needs the FCC computer ID.")
+            return
+        end
+        table.insert(forwardArgs, "--fcc")
+        table.insert(forwardArgs, fccId)
     end
 end
 
@@ -111,7 +142,8 @@ local assetMap = {
     fcc     = { asset = "fcc.lua",            saveAs = "fcc.lua" },
     display = { asset = "display.lua",        saveAs = "display.lua" },
     turtle  = { asset = "turtle_startup.lua", saveAs = "startup.lua" },
-    cli     = { asset = "fcc-cli.lua",        saveAs = "fcc-cli.lua" }
+    cli     = { asset = "fcc-cli.lua",        saveAs = "fcc-cli.lua" },
+    ["oc2-bridge"] = { asset = "oc2-bridge.lua", saveAs = "oc2-bridge.lua" }
 }
 
 local targetConfig = assetMap[targetType] or assetMap.cli
@@ -197,10 +229,28 @@ if isInstall or targetType == "turtle" then
         end
     end
 
+    -- Bridge needs its FCC/serial settings after reboot, so install a small
+    -- startup wrapper which preserves the explicit command-line arguments.
+    local startupCode = code
+    if targetType == "oc2-bridge" then
+        local hasFcc = false
+        for i, value in ipairs(forwardArgs) do
+            if value == "--fcc" and forwardArgs[i + 1] then hasFcc = true end
+        end
+        if not hasFcc then
+            printError("Installing the bridge requires --fcc <id>; example: boot install oc2-bridge --fcc 42 --address 1 --peer 2 --baud 9600")
+            return
+        end
+        local quotedArgs = {}
+        for _, value in ipairs(forwardArgs) do quotedArgs[#quotedArgs + 1] = string.format("%q", value) end
+        startupCode = "shell.run(" .. string.format("%q", SAVE_FILENAME)
+            .. (#quotedArgs > 0 and ", " .. table.concat(quotedArgs, ", ") or "") .. ")\n"
+    end
+
     -- 儲存為開機自啟 startup.lua
     local fStart = fs.open("startup.lua", "w")
     if fStart then
-        fStart.write(code)
+        fStart.write(startupCode)
         fStart.close()
         print(string.format("[OK] Successfully installed '%s' as 'startup.lua'!", ASSET_NAME))
     else
