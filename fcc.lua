@@ -1,7 +1,7 @@
 --[[
     Create: Avionics & CC: Tweaked
     Standalone Flight Control Computer (FCC - 分散式純飛控大腦)
-    Version: v4.4.0
+    Version: v4.4.1
     NAV PROFILE: hover controls remain independent; waypoint control is speed-limited and requires fresh position/heading fixes.
     
     特點:
@@ -12,7 +12,7 @@
     - 徹底根除 "Too long without yielding"
 --]]
 
-local VERSION = "v4.4.0"
+local VERSION = "v4.4.1"
 
 -- ========================================================
 -- PART 1: 飛控與動力控制核心 (FLIGHT & PROPULSION CORE)
@@ -1135,6 +1135,9 @@ end
 
 function FlightCore.updateFlightLogic()
     FlightCore.pwmTick = (FlightCore.pwmTick + 1) % 10
+    -- Keep navigation telemetry live while idle; the early return below must
+    -- still leave every engine output at zero.
+    FlightCore.updateNavigationSensors()
 
     if FlightCore.state.mode == "IDLE" then
         FlightCore.engineOutputs = { FL = 0, FR = 0, BL = 0, BR = 0, FWD = 0, BWD = 0, LEFT = 0, RIGHT = 0 }
@@ -1205,7 +1208,6 @@ function FlightCore.updateFlightLogic()
     FlightCore.nav.y = currentAlt
     FlightCore.nav.pitch = currPitch
     FlightCore.nav.roll = currRoll
-    FlightCore.updateNavigationSensors()
 
     -- ============================================================
     -- [A] 高度維持與垂直升力控制核心 (基於 v3.8.4 經典架構)

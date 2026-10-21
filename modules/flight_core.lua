@@ -1120,6 +1120,9 @@ end
 
 function FlightCore.updateFlightLogic()
     FlightCore.pwmTick = (FlightCore.pwmTick + 1) % 10
+    -- Keep navigation telemetry live while idle; the early return below must
+    -- still leave every engine output at zero.
+    FlightCore.updateNavigationSensors()
 
     if FlightCore.state.mode == "IDLE" then
         FlightCore.engineOutputs = { FL = 0, FR = 0, BL = 0, BR = 0, FWD = 0, BWD = 0, LEFT = 0, RIGHT = 0 }
@@ -1190,7 +1193,6 @@ function FlightCore.updateFlightLogic()
     FlightCore.nav.y = currentAlt
     FlightCore.nav.pitch = currPitch
     FlightCore.nav.roll = currRoll
-    FlightCore.updateNavigationSensors()
 
     -- ============================================================
     -- [A] 高度維持與垂直升力控制核心 (基於 v3.8.4 經典架構)

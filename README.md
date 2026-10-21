@@ -3,7 +3,7 @@
 > **目前電腦端韌體保留懸停並重新啟用受限導航**：航點導航需要有效位置與航向資料，並要求先啟用高度保持；感測器失效或資料過期時，水平推力歸零。垂直升力控制與水平導航分離。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Computer Suite: v4.4.0](https://img.shields.io/badge/Computer_Suite-v4.4.0-blue.svg)](https://github.com/chiliasmstudio/CC-AeroAutoPilot/releases/latest)
+[![Computer Suite: v4.4.1](https://img.shields.io/badge/Computer_Suite-v4.4.1-blue.svg)](https://github.com/chiliasmstudio/CC-AeroAutoPilot/releases/latest)
 [![Turtle Firmware: v4.0.12](https://img.shields.io/badge/Turtle_Firmware-v4.0.12-green.svg)](https://github.com/chiliasmstudio/CC-AeroAutoPilot/releases/latest)
 
 > [!NOTE]
