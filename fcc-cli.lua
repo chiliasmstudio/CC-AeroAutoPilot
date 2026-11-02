@@ -1,6 +1,6 @@
 --[[
     fcc-cli.lua — Standalone Command Line Interface & Console for VTOL Avionics
-    Version: v4.6.0
+    Version: v4.6.1
     
     特點:
     - 完全獨立於 FCC 飛控電腦，可在任何終端機 / Pocket Computer 上運行
@@ -19,7 +19,7 @@
       fcc-cli reboot turtles    -- 遠端重啟所有動力烏龜
 --]]
 
-local VERSION = "v4.6.0"
+local VERSION = "v4.6.1"
 local rawArgs = { ... }
 
 -- 1. 初始化數據機
@@ -333,22 +333,14 @@ local function executeCommand(args, out)
         return true
 
     -- 說明文件: help
-    elseif cmd == "help" or cmd == "?" or cmd == "man" then
-        out.print("=== Available Commands ===")
-        out.print(" sys / hw         - Display installed systems & hardware inventory")
-        out.print(" rescan           - Trigger hardware & sensor rescan on FCC")
-        out.print(" go <x> <y> <z> / go2 <x> <z> [radius] - Navigate to waypoint")
-        out.print(" go n|e|s|w      - Point in place to a cardinal heading (HOLD_ALT required)")
-        out.print(" cancel           - Cancel waypoint navigation")
-        out.print(" alt <alt>        - Set target altitude (e.g. alt 200, alt +50)")
-        out.print(" hold / calib     - Hold altitude / Liftoff auto calibration")
-        out.print(" calibrate n/e/s/w - Save actual bow direction after go n/e/s/w (also accepts degrees)")
-        out.print(" lock / stop      - Lock current altitude / Stop engines (IDLE)")
-        out.print(" hdg <0-359>      - Hold heading; fwd +/-4, turn +/-2.5 max")
-        out.print(" update turtles   - One-click OTA firmware update all turtles")
-        out.print(" reboot turtles   - Remote reboot all engine turtles")
-        out.print(" clear            - Clear command console window")
-        out.print(" exit / quit      - Exit FCC-CLI console")
+    elseif cmd == "h" or cmd == "help" or cmd == "?" or cmd == "man" then
+        out.print("=== Help (h) ===")
+        out.print("Flight: hold | calib (liftoff) | lock | stop")
+        out.print("Heading: go n/e/s/w | hdg <0-359> | calhead <dir>")
+        out.print("Calibrate: go n -> wait -> calhead <actual bow direction>")
+        out.print("Waypoint: go <x> <y> <z> | go2 <x> <z> [radius] | cancel")
+        out.print("Tools: sys/hw | rescan | clear | exit")
+        out.print("Fleet: update turtles | reboot turtles")
         return true
 
     -- 清除命令視窗: clear
@@ -556,12 +548,16 @@ end
 local function commandConsoleLoop()
     local winOut = {
         print = function(s)
+            local oldTerm = term.redirect(cmdWin)
             cmdWin.setTextColor(colors.white)
-            cmdWin.write(tostring(s) .. "\n")
+            print(tostring(s))
+            term.redirect(oldTerm)
         end,
         printError = function(s)
+            local oldTerm = term.redirect(cmdWin)
             cmdWin.setTextColor(colors.red)
-            cmdWin.write(tostring(s) .. "\n")
+            print(tostring(s))
+            term.redirect(oldTerm)
         end,
         setTextColor = function(c)
             cmdWin.setTextColor(c)
@@ -575,7 +571,9 @@ local function commandConsoleLoop()
     cmdWin.clear()
     cmdWin.setCursorPos(1, 1)
     cmdWin.setTextColor(colors.lightGray)
-    cmdWin.write("Type 'help' for flight controls, 'go x y z', 'update turtles', 'exit'\n")
+    local helpTerm = term.redirect(cmdWin)
+    print("Type 'h' for help. Try 'go n' or 'go <x> <y> <z>'.")
+    term.redirect(helpTerm)
 
     local history = {}
     while true do

@@ -3,7 +3,7 @@
 > **目前電腦端韌體保留懸停並重新啟用受限導航**：航點導航需要有效位置與航向資料，並要求先啟用高度保持；感測器失效或資料過期時，水平推力歸零。垂直升力控制與水平導航分離。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Computer Suite: v4.6.0](https://img.shields.io/badge/Computer_Suite-v4.6.0-blue.svg)](https://github.com/chiliasmstudio/CC-AeroAutoPilot/releases/latest)
+[![Computer Suite: v4.6.1](https://img.shields.io/badge/Computer_Suite-v4.6.1-blue.svg)](https://github.com/chiliasmstudio/CC-AeroAutoPilot/releases/latest)
 [![Turtle Firmware: v4.0.12](https://img.shields.io/badge/Turtle_Firmware-v4.0.12-green.svg)](https://github.com/chiliasmstudio/CC-AeroAutoPilot/releases/latest)
 
 > [!NOTE]
@@ -28,7 +28,7 @@
    - 保留高度保持、懸停校準與緊急停止；重新啟用需定位及航向感測器的航點導航。
    - 導航只控制標記為 `FWD`、`BWD`、`LEFT`、`RIGHT` 的烏龜，永不改動四象限升力輸出。
    - 導航限速並以速度回授減速；誤差超過 3° 且轉向過慢時提高自動轉向功率，最高 12/15；誤差超過 2° 時維持至少 1.5 輸出，避免稀疏 PWM 脈衝，轉速上升或接近目標時再減力。
-   - 船頭方位可用 `go n` 後執行 `calibrate s` 等命令校準；偏移儲存在 FCC 電腦，重啟後保留。校準後重新輸入 `go n` 測試。
+   - 若船頭與航向感測軸不一致，可在穩定懸停時用 `go n` 指令轉向、再用 `calhead s` 回報船頭實際方位；偏移儲存在 FCC 電腦，重啟後保留。校準後重新輸入 `go n` 驗證。
 3. 🚢 **全向推進發動機叢集 (Full-Axis Propulsion & Cluster Redundancy)**：
    - **升降動力 (4-Quad Lift)**：`FL` (左前), `FR` (右前), `BL` (左後), `BR` (右後) 差動升力與四象限姿態自穩。
    - 巡航與側推節點只接受導航／手動方向控制器的受限輸出；電腦本體六面紅石輸出保持為零。
@@ -166,6 +166,7 @@ boot run              # 啟動 一體化飛控
 
 ```text
 === 核心飛控指令表 ===
+h / help / ?        - 顯示指令摘要
 go <x> <y> <z>      - 導航至三維座標；Y 設為目標高度
 go2 <x> <z> [r]     - 導航至水平座標；預設到點半徑 12 格
 go <n|e|s|w>        - 原地鎖定北/東/南/西方位；需先進入 hold
@@ -173,6 +174,8 @@ cancel              - 取消航點並停止水平推力
 alt <alt>            - 設定目標高度 (例如: alt 200 或相對高度 alt +50, alt -20)
 hold                 - 鎖定當前高度 (啟動 PD-V 高度維持模式)
 calib                - 啟動原處起飛自動校準 (尋找懸停平衡推力)
+calhead <dir>        - 校準船頭方位；dir 可為 n/e/s/w 或 0–359
+calibrate heading <dir> - calhead 的完整寫法
 lock                 - 快速鎖定當前高度
 stop                 - 緊急停機 (所有引擎推力立即歸零)
 base <val>           - 調整懸停基準推力
@@ -185,7 +188,20 @@ clear                - 清空下方命令列視窗
 exit                 - 退出終端
 ```
 
-先執行 `hold` 穩定飛行再使用 `go2`；`go x y z` 會保留目標並設定高度，仍須先執行 `hold` 或 `calib` 才會啟動水平導航。輸入 `go n`、`go e`、`go s` 或 `go w` 會取消目前航點並鎖定對應方位，不給前進推力；需處於 `HOLD_ALT` 才會輸出轉向。FCC 必須讀到有效位置與航向；未取得定位時會停推並顯示等待狀態。
+先執行 `hold` 穩定飛行再使用航點導航；`go x y z` 會設定世界座標目標與高度，`go2 x z` 則沿用目前高度。若目前在地面且尚未進入懸停，可先用 `calib` 執行起飛／懸停基準校準，穩定後再使用 `hold`。`calib` 是升力校準，與船頭方向的 `calhead` 不同。
+
+### 校準船頭方位並啟用自動導航
+
+飛控需要把感測器航向轉換成**世界地圖方位**。若感測器軸線和船頭不一致，請在更換感測器安裝方向或船體結構後重新校準。命令可用短寫 `calhead <方向>`，也可用完整寫法 `calibrate heading <方向>`；`calibrate <方向>` 同樣接受。
+
+1. 輸入 `sys` 檢查硬體；確認 FCC 收到有效航向與位置。位置來源為船體上的 CCPE/AIC 位置資料或可用的 GPS。導航表可提供航向，但不能代替位置來源。儀表上的位置仍顯示搜尋中時，先修復定位，不要開始航點導航。
+2. 讓飛船進入穩定的 `HOLD_ALT`。若已有航點在執行，先輸入 `cancel`。校準命令要求高度保持模式、最新航向讀數在 0.5 秒內，且沒有正在煞停的航點。
+3. 輸入 `go n`，等待船體轉向穩定。`go n/e/s/w` 只下達原地轉向目標、不會起飛或給前進推力；只有在 `HOLD_ALT` 時才會輸出轉向。
+4. 參考世界地圖、地形或已知方位確認**船頭實際朝向**，再回報實際方位。例如輸入 `go n` 後，地圖上船頭實際指向南方，就輸入 `calhead s`（等同 `calibrate heading s`）。方向對照為北 `n` = 000°、東 `e` = 090°、南 `s` = 180°、西 `w` = 270°；也可輸入 `calhead 135` 這類角度。
+5. FCC 會把感測器與船頭的角度偏移存入 FCC 電腦上的 `.fcc_heading_offset`，重啟後仍保留。校準完成時會保持當下實際方位；再輸入 `go n` 測試，確認船頭能依世界方位轉向北。畫面顯示的 `go n` 回覆是目標命令，不足以單獨證明物理船頭已朝北。
+6. 確認位置與航向讀數持續更新後，輸入附近的測試航點，例如 `go2 <世界X> <世界Z>`；或用 `go <世界X> <目標高度Y> <世界Z>` 指定高度。留意儀表的 `NAV`、航向誤差與速度，確認正常後再下較遠的航點。若位置或航向資料失效／過期，水平導航會暫停並將水平推力歸零。
+
+輸入 `h`、`help` 或 `?` 可查看精簡指令列表。`calhead` 是船頭方位校準的短命令；`calib` 則是升力起飛校準，兩者用途不同。
 
 ---
 
