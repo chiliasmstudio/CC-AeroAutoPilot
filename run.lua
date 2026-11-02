@@ -1,7 +1,7 @@
 --[[
     Create: Avionics & CC: Tweaked
     Unified Multi-Engine Avionics Flight Computer (多軸模組化統一飛控大腦)
-    Version: v4.6.1 Modular Bundle
+    Version: v4.6.2 Modular Bundle
     NAV PROFILE: hover controls remain independent; waypoint control is speed-limited and requires fresh position/heading fixes.
     
     螢幕尺寸自適應分類 (Dual Screen Size Mode):
@@ -17,7 +17,7 @@
       run.lua normal       (強制使用 CC 原生螢幕/終端機驅動)
 --]]
 
-local VERSION = "v4.6.1"
+local VERSION = "v4.6.2"
 local args = {...}
 local requestedDriver = args[1] and string.lower(args[1]) or "auto"
 

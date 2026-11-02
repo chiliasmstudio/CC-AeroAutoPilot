@@ -208,9 +208,11 @@ def bundle():
     oc2_bridge_code = read_file(os.path.join(MODULES_DIR, "oc2_bridge.lua"))
 
     def module_body(source, module_name):
-        body, count = re.subn(r"\nreturn M\s*$", "", source.strip(), count=1)
-        if count != 1:
+        body = source.strip()
+        if not re.search(r"\nreturn M\s*$", body):
             raise ValueError(f"{module_name} must end with `return M`")
+        # Keep `return M`: these modules are embedded in IIFEs below, and the
+        # wrapper's result is the module table used by FCC/bridge callers.
         return body
 
     oc2_wire_body = module_body(oc2_wire_code, "oc2_wire.lua")
@@ -424,11 +426,11 @@ local VERSION = "{VERSION}"
 -- ========================================================
 -- PART 2: FCC 遙測廣播與駕駛艙指令通訊協議 (FCC TELEMETRY & COMMANDS)
 -- ========================================================
-local Oc2Protocol = OC2Protocol.new(os.getComputerID(), FlightCore)
+local oc2ProtocolClient = OC2Protocol.new(os.getComputerID(), FlightCore)
 local latestOc2Snapshot = {}
 
 local function executeFccCommand(msg)
-    return OC2Protocol.dispatchLegacy(FlightCore, msg)
+    return oc2ProtocolClient.dispatchLegacy(FlightCore, msg)
 end
 
 local function handleFccCommand(side, ch, replyCh, msg, dist)
@@ -440,7 +442,7 @@ end
 local function handleOc2Request(replyCh, request)
     if replyCh ~= 105 then return end
     local ok, reply = pcall(function()
-        return Oc2Protocol.handle(request, os.epoch("utc"), latestOc2Snapshot)
+        return oc2ProtocolClient.handle(request, os.epoch("utc"), latestOc2Snapshot)
     end)
     if not ok then
         if type(request) ~= "table" or type(request.client) ~= "string"

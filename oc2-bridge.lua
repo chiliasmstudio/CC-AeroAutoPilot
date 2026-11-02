@@ -1,6 +1,6 @@
 --[[
     CC-AeroAutoPilot OC2 Serial Bridge
-    Version: v4.6.1
+    Version: v4.6.2
     Dedicated CC computer: wired modem + OC2 Network Connector serial peripheral.
     Example: oc2-bridge --fcc 42 --address 1 --peer 2 --baud 9600
 --]]
@@ -179,6 +179,7 @@ function M.new(now)
     return api
 end
 
+return M
 end)()
 
 local OC2Protocol = (function()
@@ -577,6 +578,7 @@ function M.new(fccId, core)
     return api
 end
 
+return M
 end)()
 
 local OC2Bridge = (function()

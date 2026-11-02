@@ -1,7 +1,7 @@
 --[[
     Create: Avionics & CC: Tweaked
     Standalone Flight Control Computer (FCC - 分散式純飛控大腦)
-    Version: v4.6.1
+    Version: v4.6.2
     NAV PROFILE: hover controls remain independent; waypoint control is speed-limited and requires fresh position/heading fixes.
     
     特點:
@@ -13,7 +13,7 @@
     - 徹底根除 "Too long without yielding"
 --]]
 
-local VERSION = "v4.6.1"
+local VERSION = "v4.6.2"
 
 -- ========================================================
 -- PART 1: 飛控與動力控制核心 (FLIGHT & PROPULSION CORE)
@@ -1821,16 +1821,17 @@ function M.new(fccId, core)
     return api
 end
 
+return M
 end)()
 
 -- ========================================================
 -- PART 2: FCC 遙測廣播與駕駛艙指令通訊協議 (FCC TELEMETRY & COMMANDS)
 -- ========================================================
-local Oc2Protocol = OC2Protocol.new(os.getComputerID(), FlightCore)
+local oc2ProtocolClient = OC2Protocol.new(os.getComputerID(), FlightCore)
 local latestOc2Snapshot = {}
 
 local function executeFccCommand(msg)
-    return OC2Protocol.dispatchLegacy(FlightCore, msg)
+    return oc2ProtocolClient.dispatchLegacy(FlightCore, msg)
 end
 
 local function handleFccCommand(side, ch, replyCh, msg, dist)
@@ -1842,7 +1843,7 @@ end
 local function handleOc2Request(replyCh, request)
     if replyCh ~= 105 then return end
     local ok, reply = pcall(function()
-        return Oc2Protocol.handle(request, os.epoch("utc"), latestOc2Snapshot)
+        return oc2ProtocolClient.handle(request, os.epoch("utc"), latestOc2Snapshot)
     end)
     if not ok then
         if type(request) ~= "table" or type(request.client) ~= "string"
