@@ -1,7 +1,7 @@
 --[[
     Create: Avionics & CC: Tweaked
     Unified Multi-Engine Avionics Flight Computer (多軸模組化統一飛控大腦)
-    Version: v4.6.2 Modular Bundle
+    Version: v4.6.3 Modular Bundle
     NAV PROFILE: hover controls remain independent; waypoint control is speed-limited and requires fresh position/heading fixes.
     
     螢幕尺寸自適應分類 (Dual Screen Size Mode):
@@ -17,7 +17,7 @@
       run.lua normal       (強制使用 CC 原生螢幕/終端機驅動)
 --]]
 
-local VERSION = "v4.6.2"
+local VERSION = "v4.6.3"
 local args = {...}
 local requestedDriver = args[1] and string.lower(args[1]) or "auto"
 
@@ -3595,6 +3595,15 @@ end,
             elseif type(p1) == "number" and type(p2) == "number" then
                 targetScreen = self.screens[1]
                 clickX, clickY = p1, p2
+            end
+
+        elseif event == "tm_monitor_mouse_click" then
+            -- Tom's bitmap monitor reports pixel coordinates as (x, y, button),
+            -- without a peripheral name. Its pixel origin is zero-based while
+            -- this driver's rendered hit boxes use one-based coordinates.
+            if type(p1) == "number" and type(p2) == "number" and (p3 == nil or p3 == 1) then
+                targetScreen = self.screens[1]
+                clickX, clickY = p1 + 1, p2 + 1
             end
 
         elseif event == "monitor_touch" then

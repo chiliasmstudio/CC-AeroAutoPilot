@@ -329,6 +329,15 @@ local Driver = {
                 clickX, clickY = p1, p2
             end
 
+        elseif event == "tm_monitor_mouse_click" then
+            -- Tom's bitmap monitor reports pixel coordinates as (x, y, button),
+            -- without a peripheral name. Its pixel origin is zero-based while
+            -- this driver's rendered hit boxes use one-based coordinates.
+            if type(p1) == "number" and type(p2) == "number" and (p3 == nil or p3 == 1) then
+                targetScreen = self.screens[1]
+                clickX, clickY = p1 + 1, p2 + 1
+            end
+
         elseif event == "monitor_touch" then
             for _, scr in ipairs(self.screens) do
                 if scr.id == p1 then targetScreen = scr; break end

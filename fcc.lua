@@ -1,7 +1,7 @@
 --[[
     Create: Avionics & CC: Tweaked
     Standalone Flight Control Computer (FCC - 分散式純飛控大腦)
-    Version: v4.6.2
+    Version: v4.6.3
     NAV PROFILE: hover controls remain independent; waypoint control is speed-limited and requires fresh position/heading fixes.
     
     特點:
@@ -13,7 +13,7 @@
     - 徹底根除 "Too long without yielding"
 --]]
 
-local VERSION = "v4.6.2"
+local VERSION = "v4.6.3"
 
 -- ========================================================
 -- PART 1: 飛控與動力控制核心 (FLIGHT & PROPULSION CORE)
