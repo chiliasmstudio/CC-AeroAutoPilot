@@ -1,7 +1,7 @@
 --[[
     Create: Avionics & CC: Tweaked
     Standalone Cockpit Display System (CDS / Glass Cockpit)
-    Version: v4.6.3
+    Version: v4.6.4
     
     特點:
     - 專門負責駕駛艙螢幕繪圖渲染與觸控按鈕交互
@@ -11,7 +11,7 @@
     - 即使渲染再繁重，也 100% 不會拖慢飛船飛控運算
 --]]
 
-local VERSION = "v4.6.3"
+local VERSION = "v4.6.4"
 local args = {...}
 local requestedDriver = args[1] and string.lower(args[1]) or "auto"
 
@@ -2450,15 +2450,6 @@ end,
             elseif type(p1) == "number" and type(p2) == "number" then
                 targetScreen = self.screens[1]
                 clickX, clickY = p1, p2
-            end
-
-        elseif event == "tm_monitor_mouse_click" then
-            -- Tom's bitmap monitor reports pixel coordinates as (x, y, button),
-            -- without a peripheral name. Its pixel origin is zero-based while
-            -- this driver's rendered hit boxes use one-based coordinates.
-            if type(p1) == "number" and type(p2) == "number" and (p3 == nil or p3 == 1) then
-                targetScreen = self.screens[1]
-                clickX, clickY = p1 + 1, p2 + 1
             end
 
         elseif event == "monitor_touch" then

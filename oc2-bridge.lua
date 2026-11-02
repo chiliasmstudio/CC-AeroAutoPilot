@@ -1,6 +1,6 @@
 --[[
     CC-AeroAutoPilot OC2 Serial Bridge
-    Version: v4.6.3
+    Version: v4.6.4
     Dedicated CC computer: wired modem + OC2 Network Connector serial peripheral.
     Example: oc2-bridge --fcc 42 --address 1 --peer 2 --baud 9600
 --]]

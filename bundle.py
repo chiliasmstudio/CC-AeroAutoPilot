@@ -430,12 +430,15 @@ local oc2ProtocolClient = OC2Protocol.new(os.getComputerID(), FlightCore)
 local latestOc2Snapshot = {}
 
 local function executeFccCommand(msg)
-    return oc2ProtocolClient.dispatchLegacy(FlightCore, msg)
+    return OC2Protocol.dispatchLegacy(FlightCore, msg)
 end
 
 local function handleFccCommand(side, ch, replyCh, msg, dist)
     if ch == 103 and type(msg) == "table" and msg.cmd then
-        pcall(executeFccCommand, msg)
+        local ok, accepted, reason = pcall(executeFccCommand, msg)
+        if not ok or not accepted then
+            FlightCore.state.statusMsg = "CMD ERROR: " .. tostring(ok and (reason or "REJECTED") or accepted)
+        end
     end
 end
 

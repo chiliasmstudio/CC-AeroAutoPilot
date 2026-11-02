@@ -1,7 +1,7 @@
 --[[
     Create: Avionics & CC: Tweaked
     Standalone Flight Control Computer (FCC - 分散式純飛控大腦)
-    Version: v4.6.3
+    Version: v4.6.4
     NAV PROFILE: hover controls remain independent; waypoint control is speed-limited and requires fresh position/heading fixes.
     
     特點:
@@ -13,7 +13,7 @@
     - 徹底根除 "Too long without yielding"
 --]]
 
-local VERSION = "v4.6.3"
+local VERSION = "v4.6.4"
 
 -- ========================================================
 -- PART 1: 飛控與動力控制核心 (FLIGHT & PROPULSION CORE)
@@ -1831,12 +1831,15 @@ local oc2ProtocolClient = OC2Protocol.new(os.getComputerID(), FlightCore)
 local latestOc2Snapshot = {}
 
 local function executeFccCommand(msg)
-    return oc2ProtocolClient.dispatchLegacy(FlightCore, msg)
+    return OC2Protocol.dispatchLegacy(FlightCore, msg)
 end
 
 local function handleFccCommand(side, ch, replyCh, msg, dist)
     if ch == 103 and type(msg) == "table" and msg.cmd then
-        pcall(executeFccCommand, msg)
+        local ok, accepted, reason = pcall(executeFccCommand, msg)
+        if not ok or not accepted then
+            FlightCore.state.statusMsg = "CMD ERROR: " .. tostring(ok and (reason or "REJECTED") or accepted)
+        end
     end
 end
 
